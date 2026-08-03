@@ -25,17 +25,26 @@ enum GamepadEdge {
 class LinuxJoystickReader {
   LinuxJoystickReader({
     this.devicePath,
+    /// Hat / D-pad deadzone (axis 6/7). Stick uses [stickDeadzone].
     this.axisDeadzone = 16000,
+    /// Left stick needs a larger deadzone — near-center noise during video
+    /// playback was spamming channel zap (1↔2 flicker) and starving B.
+    this.stickDeadzone = 22000,
     /// Longer initial delay so a short Deck D-pad tap is only one step
     /// (Steam often also injects a keyboard arrow for the same press).
     this.repeatInitial = const Duration(milliseconds: 400),
     this.repeatPeriod = const Duration(milliseconds: 200),
+    /// Auto-repeat only for hat/D-pad (list scroll). Stick is one-shot per tilt
+    /// so a resting stick during video never floods channel-up/down.
+    this.repeatStick = false,
   });
 
   final String? devicePath;
   final int axisDeadzone;
+  final int stickDeadzone;
   final Duration repeatInitial;
   final Duration repeatPeriod;
+  final bool repeatStick;
 
   RandomAccessFile? _file;
   bool _running = false;
@@ -168,7 +177,11 @@ class LinuxJoystickReader {
     }
 
     if (kind == jsEventAxis) {
-      final sign = _signForAxis(value);
+      final isStick = number == 0 || number == 1;
+      final isHat = number == 6 || number == 7;
+      if (!isStick && !isHat) return;
+
+      final sign = _signForAxis(value, stick: isStick);
       final prev = _axisSign[number] ?? 0;
       if (sign == prev) return;
       _axisSign[number] = sign;
@@ -176,17 +189,17 @@ class LinuxJoystickReader {
 
       if (number == 0 || number == 6) {
         if (sign < 0) {
-          _setHeldDir(GamepadEdge.left);
+          _setHeldDir(GamepadEdge.left, allowRepeat: isHat || repeatStick);
         } else if (sign > 0) {
-          _setHeldDir(GamepadEdge.right);
+          _setHeldDir(GamepadEdge.right, allowRepeat: isHat || repeatStick);
         } else {
           _clearHeldIfAxis(xAxis: true);
         }
       } else if (number == 1 || number == 7) {
         if (sign < 0) {
-          _setHeldDir(GamepadEdge.up);
+          _setHeldDir(GamepadEdge.up, allowRepeat: isHat || repeatStick);
         } else if (sign > 0) {
-          _setHeldDir(GamepadEdge.down);
+          _setHeldDir(GamepadEdge.down, allowRepeat: isHat || repeatStick);
         } else {
           _clearHeldIfAxis(xAxis: false);
         }
@@ -194,17 +207,20 @@ class LinuxJoystickReader {
     }
   }
 
-  int _signForAxis(int value) {
-    if (value > axisDeadzone) return 1;
-    if (value < -axisDeadzone) return -1;
+  int _signForAxis(int value, {required bool stick}) {
+    final dz = stick ? stickDeadzone : axisDeadzone;
+    if (value > dz) return 1;
+    if (value < -dz) return -1;
     return 0;
   }
 
-  void _setHeldDir(GamepadEdge dir) {
+  void _setHeldDir(GamepadEdge dir, {required bool allowRepeat}) {
     if (_heldDir == dir) return;
     _heldDir = dir;
     _emit(dir);
     _repeatTimer?.cancel();
+    _repeatTimer = null;
+    if (!allowRepeat) return;
     _repeatTimer = Timer(repeatInitial, () {
       _repeatTimer = Timer.periodic(repeatPeriod, (_) {
         if (_heldDir != null) _emit(_heldDir!);
@@ -226,20 +242,24 @@ class LinuxJoystickReader {
         _repeatTimer?.cancel();
         _repeatTimer = null;
       } else if (xAxis) {
-        final y =
-            (_axisSign[1] ?? 0) != 0 ? _axisSign[1]! : (_axisSign[7] ?? 0);
+        final yStick = _axisSign[1] ?? 0;
+        final yHat = _axisSign[7] ?? 0;
+        final y = yStick != 0 ? yStick : yHat;
+        final yIsHat = yStick == 0 && yHat != 0;
         if (y < 0) {
-          _setHeldDir(GamepadEdge.up);
+          _setHeldDir(GamepadEdge.up, allowRepeat: yIsHat || repeatStick);
         } else if (y > 0) {
-          _setHeldDir(GamepadEdge.down);
+          _setHeldDir(GamepadEdge.down, allowRepeat: yIsHat || repeatStick);
         }
       } else {
-        final x =
-            (_axisSign[0] ?? 0) != 0 ? _axisSign[0]! : (_axisSign[6] ?? 0);
+        final xStick = _axisSign[0] ?? 0;
+        final xHat = _axisSign[6] ?? 0;
+        final x = xStick != 0 ? xStick : xHat;
+        final xIsHat = xStick == 0 && xHat != 0;
         if (x < 0) {
-          _setHeldDir(GamepadEdge.left);
+          _setHeldDir(GamepadEdge.left, allowRepeat: xIsHat || repeatStick);
         } else if (x > 0) {
-          _setHeldDir(GamepadEdge.right);
+          _setHeldDir(GamepadEdge.right, allowRepeat: xIsHat || repeatStick);
         }
       }
     }

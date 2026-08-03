@@ -19,22 +19,38 @@ class PlayerPage extends StatefulWidget {
 
 class _PlayerPageState extends State<PlayerPage> {
   bool _showHud = true;
+  bool _exiting = false;
+  DateTime? _lastZapAt;
+  SdtvPlayerState? _lastState;
   final FocusNode _rootFocus = FocusNode(debugLabel: 'player-root');
+
+  /// One channel step per physical gesture — stick noise must not 1↔2 spam.
+  static const _zapCooldown = Duration(milliseconds: 450);
 
   @override
   void initState() {
     super.initState();
     widget.session.player.addListener(_onTick);
     widget.session.addListener(_onTick);
-    // Steal focus from the browse list under this route so keyboard / Steam
-    // Input key events hit *this* Shortcuts/Actions tree, not the page below.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _rootFocus.requestFocus();
-    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _claimFocus());
+  }
+
+  void _claimFocus() {
+    if (!mounted || _exiting) return;
+    _rootFocus.requestFocus();
   }
 
   void _onTick() {
-    if (mounted) setState(() {});
+    if (!mounted || _exiting) return;
+    final st = widget.session.player.state;
+    // When bipbop actually starts, the video surface can steal focus / lag
+    // the tree — re-claim input once on the buffering→playing transition.
+    if (_lastState != SdtvPlayerState.playing &&
+        st == SdtvPlayerState.playing) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _claimFocus());
+    }
+    _lastState = st;
+    setState(() {});
   }
 
   @override
@@ -46,30 +62,48 @@ class _PlayerPageState extends State<PlayerPage> {
   }
 
   void _exit() {
-    if (!mounted) return;
+    if (_exiting || !mounted) return;
+    _exiting = true;
+    // Pop immediately — do not await mpv stop here (browse stops after pop).
     Navigator.of(context).pop();
   }
 
   Future<void> _togglePlay() async {
+    if (_exiting) return;
     final player = widget.session.player;
     final state = player.state;
     final url = player.currentUrl ?? '';
-    if (state == SdtvPlayerState.playing) {
-      await player.pause();
-    } else if (state == SdtvPlayerState.paused ||
-        state == SdtvPlayerState.idle ||
-        state == SdtvPlayerState.error) {
-      if (state == SdtvPlayerState.error && url.isNotEmpty) {
-        await player.open(Uri.parse(url));
-      } else {
-        await player.play();
+    try {
+      if (state == SdtvPlayerState.playing ||
+          state == SdtvPlayerState.buffering) {
+        await player.pause();
+      } else if (state == SdtvPlayerState.paused ||
+          state == SdtvPlayerState.idle ||
+          state == SdtvPlayerState.error) {
+        if (state == SdtvPlayerState.error && url.isNotEmpty) {
+          await player.open(Uri.parse(url));
+        } else {
+          await player.play();
+        }
       }
+    } catch (e, st) {
+      debugPrint('sdtv player toggle: $e\n$st');
     }
-    if (mounted) setState(() => _showHud = true);
+    if (mounted && !_exiting) {
+      setState(() => _showHud = true);
+      _claimFocus();
+    }
   }
 
   void _channel(int delta) {
-    widget.session.playAdjacent(delta);
+    if (_exiting) return;
+    final now = DateTime.now();
+    if (_lastZapAt != null && now.difference(_lastZapAt!) < _zapCooldown) {
+      return;
+    }
+    _lastZapAt = now;
+    // Fire-and-forget; demo zap is sync name change.
+    unawaited(widget.session.playAdjacent(delta));
     if (mounted) setState(() => _showHud = true);
   }
 
@@ -88,7 +122,7 @@ class _PlayerPageState extends State<PlayerPage> {
       onBack: _exit,
       onMenu: _exit,
       onConfirm: () {
-        unawaited(_togglePlay()); // ignore: unawaited_futures
+        unawaited(_togglePlay());
       },
       extraActions: {
         SdtvChannelUpIntent: CallbackAction<SdtvChannelUpIntent>(
@@ -115,55 +149,76 @@ class _PlayerPageState extends State<PlayerPage> {
             return null;
           },
         ),
-        // D-pad / stick: channel zap (do not move geometric focus — nothing to focus).
+        // D-pad / stick: channel zap (not geometric focus).
         DirectionalFocusIntent: CallbackAction<DirectionalFocusIntent>(
           onInvoke: (intent) {
             if (intent.direction == TraversalDirection.up) {
               _channel(-1);
             } else if (intent.direction == TraversalDirection.down) {
               _channel(1);
+            } else {
+              setState(() => _showHud = true);
             }
-            // Left/right: show HUD only (reserved for future volume/seek).
-            setState(() => _showHud = true);
             return null;
           },
         ),
       },
       extraShortcuts: {
-        // Explicit channel keys in case Steam maps bumpers oddly.
         const SingleActivator(LogicalKeyboardKey.channelUp):
             const SdtvChannelUpIntent(),
         const SingleActivator(LogicalKeyboardKey.channelDown):
             const SdtvChannelDownIntent(),
+        // Escape / B often arrive as keys once video owns the window.
+        const SingleActivator(LogicalKeyboardKey.escape):
+            const SdtvBackIntent(),
+        const SingleActivator(LogicalKeyboardKey.gameButtonB):
+            const SdtvBackIntent(),
       },
       child: Focus(
         focusNode: _rootFocus,
         autofocus: true,
         canRequestFocus: true,
+        skipTraversal: true,
+        onKeyEvent: (node, event) {
+          // Last-resort B/Escape if Actions short-circuit under video load.
+          if (event is KeyDownEvent) {
+            final k = event.logicalKey;
+            if (k == LogicalKeyboardKey.escape ||
+                k == LogicalKeyboardKey.gameButtonB ||
+                k == LogicalKeyboardKey.goBack) {
+              _exit();
+              return KeyEventResult.handled;
+            }
+          }
+          return KeyEventResult.ignored;
+        },
         child: Scaffold(
           backgroundColor: Colors.black,
           body: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () {
-              _rootFocus.requestFocus();
+              _claimFocus();
               setState(() => _showHud = !_showHud);
             },
             child: Stack(
               fit: StackFit.expand,
               children: [
-                // Video surface — not focusable; pad input stays on root Focus.
+                // Video must not take pointer or focus — that is when B dies
+                // after bipbop starts (buffering was fine).
                 if (vc != null)
                   ExcludeFocus(
-                    child: Video(
-                      controller: vc,
-                      controls: NoVideoControls,
-                      fill: Colors.black,
+                    child: IgnorePointer(
+                      child: Video(
+                        controller: vc,
+                        controls: NoVideoControls,
+                        fill: Colors.black,
+                        // Wakelock/etc. fine; keep surface passive for input.
+                      ),
                     ),
                   )
                 else
                   const ColoredBox(color: Colors.black),
 
-                // Buffering / error / opening chrome
                 if (state == SdtvPlayerState.opening ||
                     state == SdtvPlayerState.buffering)
                   const Center(
@@ -208,7 +263,6 @@ class _PlayerPageState extends State<PlayerPage> {
                     ),
                   ),
 
-                // HUD
                 if (_showHud) ...[
                   Positioned(
                     left: 24,
@@ -248,7 +302,7 @@ class _PlayerPageState extends State<PlayerPage> {
                         if (widget.session.useDemo)
                           Text(
                             canZap
-                                ? 'Demo stream · channel name zaps in-category'
+                                ? 'Demo · same test stream · name zaps only'
                                 : 'Demo stream · only channel in this category',
                             style: theme.textTheme.bodySmall?.copyWith(
                               color: Colors.white54,
@@ -256,8 +310,8 @@ class _PlayerPageState extends State<PlayerPage> {
                           ),
                         Text(
                           canZap
-                              ? 'A pause/play · ↑↓ / LB RB channel · B back'
-                              : 'A pause/play · B back',
+                              ? 'A pause · D-pad/LB RB channel · B back'
+                              : 'A pause · B back',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             color: Colors.white70,
                             shadows: const [
