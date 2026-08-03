@@ -124,6 +124,18 @@ class _PlayerPageState extends State<PlayerPage> {
       onConfirm: () {
         unawaited(_togglePlay());
       },
+      // Direct pad path (same reliability as B). Actions break once video plays.
+      onDirection: (dir) {
+        if (dir == TraversalDirection.up) {
+          _channel(-1);
+        } else if (dir == TraversalDirection.down) {
+          _channel(1);
+        } else {
+          if (mounted) setState(() => _showHud = true);
+        }
+      },
+      onPageUp: () => _channel(-1),
+      onPageDown: () => _channel(1),
       extraActions: {
         SdtvChannelUpIntent: CallbackAction<SdtvChannelUpIntent>(
           onInvoke: (_) {
@@ -149,14 +161,13 @@ class _PlayerPageState extends State<PlayerPage> {
             return null;
           },
         ),
-        // D-pad / stick: channel zap (not geometric focus).
         DirectionalFocusIntent: CallbackAction<DirectionalFocusIntent>(
           onInvoke: (intent) {
             if (intent.direction == TraversalDirection.up) {
               _channel(-1);
             } else if (intent.direction == TraversalDirection.down) {
               _channel(1);
-            } else {
+            } else if (mounted) {
               setState(() => _showHud = true);
             }
             return null;
@@ -168,7 +179,6 @@ class _PlayerPageState extends State<PlayerPage> {
             const SdtvChannelUpIntent(),
         const SingleActivator(LogicalKeyboardKey.channelDown):
             const SdtvChannelDownIntent(),
-        // Escape / B often arrive as keys once video owns the window.
         const SingleActivator(LogicalKeyboardKey.escape):
             const SdtvBackIntent(),
         const SingleActivator(LogicalKeyboardKey.gameButtonB):
@@ -180,13 +190,27 @@ class _PlayerPageState extends State<PlayerPage> {
         canRequestFocus: true,
         skipTraversal: true,
         onKeyEvent: (node, event) {
-          // Last-resort B/Escape if Actions short-circuit under video load.
+          // Keyboard / Steam-injected keys once the video surface is active.
           if (event is KeyDownEvent) {
             final k = event.logicalKey;
             if (k == LogicalKeyboardKey.escape ||
                 k == LogicalKeyboardKey.gameButtonB ||
                 k == LogicalKeyboardKey.goBack) {
               _exit();
+              return KeyEventResult.handled;
+            }
+            if (k == LogicalKeyboardKey.arrowUp ||
+                k == LogicalKeyboardKey.channelDown ||
+                k == LogicalKeyboardKey.pageUp ||
+                k == LogicalKeyboardKey.gameButtonLeft1) {
+              _channel(-1);
+              return KeyEventResult.handled;
+            }
+            if (k == LogicalKeyboardKey.arrowDown ||
+                k == LogicalKeyboardKey.channelUp ||
+                k == LogicalKeyboardKey.pageDown ||
+                k == LogicalKeyboardKey.gameButtonRight1) {
+              _channel(1);
               return KeyEventResult.handled;
             }
           }

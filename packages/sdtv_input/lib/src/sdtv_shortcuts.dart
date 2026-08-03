@@ -137,6 +137,9 @@ class SdtvInputScope extends StatelessWidget {
     this.onConfirm,
     this.onBack,
     this.onMenu,
+    this.onDirection,
+    this.onPageUp,
+    this.onPageDown,
     this.extraShortcuts = const {},
     this.extraActions = const {},
     this.enableGamepad,
@@ -146,6 +149,9 @@ class SdtvInputScope extends StatelessWidget {
   final VoidCallback? onConfirm;
   final VoidCallback? onBack;
   final VoidCallback? onMenu;
+  final void Function(TraversalDirection direction)? onDirection;
+  final VoidCallback? onPageUp;
+  final VoidCallback? onPageDown;
   final Map<ShortcutActivator, Intent> extraShortcuts;
   final Map<Type, Action<Intent>> extraActions;
   final bool? enableGamepad;
@@ -157,6 +163,9 @@ class SdtvInputScope extends StatelessWidget {
       onConfirm: onConfirm,
       onBack: onBack,
       onMenu: onMenu,
+      onDirection: onDirection,
+      onPageUp: onPageUp,
+      onPageDown: onPageDown,
       child: Shortcuts(
         shortcuts: {
           ...sdtvNavigationShortcuts(),

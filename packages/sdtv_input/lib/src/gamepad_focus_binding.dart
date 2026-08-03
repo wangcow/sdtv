@@ -127,6 +127,22 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
       return;
     }
 
+    final cbs = SdtvInputCallbacks.maybeOf(context);
+
+    // Bumpers — same direct path as B (Actions fails under playing video).
+    if (edge == GamepadEdge.pageUp) {
+      if (cbs?.onPageUp != null) {
+        cbs!.onPageUp!();
+        return;
+      }
+    }
+    if (edge == GamepadEdge.pageDown) {
+      if (cbs?.onPageDown != null) {
+        cbs!.onPageDown!();
+        return;
+      }
+    }
+
     // Debounce directions: Steam Deck often sends js D-pad *and* a keyboard
     // arrow for one physical press — without this, forms skip every other field.
     final isDir = edge == GamepadEdge.up ||
@@ -139,10 +155,27 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
         return;
       }
       _lastDirAt = now;
+
+      if (cbs?.onDirection != null) {
+        final TraversalDirection dir;
+        switch (edge) {
+          case GamepadEdge.up:
+            dir = TraversalDirection.up;
+          case GamepadEdge.down:
+            dir = TraversalDirection.down;
+          case GamepadEdge.left:
+            dir = TraversalDirection.left;
+          case GamepadEdge.right:
+            dir = TraversalDirection.right;
+          default:
+            return;
+        }
+        cbs!.onDirection!(dir);
+        return;
+      }
     }
 
-    // Always route directions through Actions so pages can override
-    // (login linear ring, browse 2-column). Do not use geometric focus here.
+    // Fallback: Actions (login/browse keyboard + pad when no direct callbacks).
     final Intent intent;
     switch (edge) {
       case GamepadEdge.up:
@@ -187,11 +220,10 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
             Actions.maybeInvoke(context, const SdtvConfirmIntent());
         if (viaIntent != null) return;
 
-        SdtvInputCallbacks.maybeOf(context)?.onConfirm?.call();
+        cbs?.onConfirm?.call();
         return;
       }
 
-      // Prefer scope Actions (page overrides live here).
       final handled = Actions.maybeInvoke(context, intent);
       if (handled == null && SdtvTextFocusRegistry.primaryIsTextField) {
         _traverse(
