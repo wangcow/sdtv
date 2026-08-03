@@ -187,13 +187,25 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   @override
   Future<void> play() async {
     if (_disposed || _url == null) return;
-    await _player.play();
+    // Optimistic UI — do not block pad handling on mpv.
+    _setState(SdtvPlayerState.playing);
+    try {
+      await _player.play().timeout(const Duration(milliseconds: 800));
+    } catch (e) {
+      debugPrint('sdtv_player play: $e');
+    }
   }
 
   @override
   Future<void> pause() async {
     if (_disposed) return;
-    await _player.pause();
+    // Optimistic pause so A feels instant even when the UI isolate is busy.
+    _setState(SdtvPlayerState.paused);
+    try {
+      await _player.pause().timeout(const Duration(milliseconds: 800));
+    } catch (e) {
+      debugPrint('sdtv_player pause: $e');
+    }
   }
 
   @override

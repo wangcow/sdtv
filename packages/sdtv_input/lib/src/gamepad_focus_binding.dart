@@ -2,18 +2,17 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
-import 'actions.dart';
 import 'input_callbacks.dart';
 import 'joystick_hub.dart';
 import 'linux_joystick.dart';
 import 'pad_router.dart';
 
-/// Single process joystick → [SdtvPadRouter] (and optional legacy fallback).
+/// Single process joystick + global keyboard → [SdtvPadRouter].
 ///
-/// Mount **once** at the app root. Pages register handlers via [SdtvInputScope]
-/// / [SdtvPadRouter] — do not nest this binding under the video player.
+/// Mount **once** at the app root.
 class SdtvGamepadBinding extends StatefulWidget {
   const SdtvGamepadBinding({
     super.key,
@@ -35,13 +34,16 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
   bool _acquired = false;
   DateTime? _lastDirAt;
   DateTime? _lastConfirmAt;
-  static const _dirCooldown = Duration(milliseconds: 180);
-  static const _confirmCooldown = Duration(milliseconds: 280);
+  DateTime? _lastBackAt;
+  static const _dirCooldown = Duration(milliseconds: 160);
+  static const _confirmCooldown = Duration(milliseconds: 220);
+  static const _backCooldown = Duration(milliseconds: 220);
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    HardwareKeyboard.instance.addHandler(_onKey);
     if (widget.enabled) _scheduleStart();
   }
 
@@ -78,8 +80,8 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
       await SdtvJoystickHub.instance.acquire(_onEdge);
       _acquired = true;
       debugPrint(
-        'sdtv_input: root pad binding open '
-        '(listeners=${SdtvJoystickHub.instance.listenerCount} '
+        'sdtv_input: root pad open '
+        '(path=${SdtvJoystickHub.instance.openPath} '
         'layers=${SdtvPadRouter.instance.depth})',
       );
     } catch (e, st) {
@@ -93,10 +95,55 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
     await SdtvJoystickHub.instance.release(_onEdge);
   }
 
-  void _onEdge(GamepadEdge edge) {
-    if (!mounted) return;
+  /// Steam often injects keyboard for face buttons. Handle globally so we do
+  /// not depend on focus once the video surface is active.
+  bool _onKey(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+    if (SdtvPadRouter.instance.depth == 0) return false;
 
-    // Debounce D-pad only (not B/A/bumpers).
+    final k = event.logicalKey;
+    final typing = SdtvTextFocusRegistry.primaryIsTextField;
+
+    // Never steal Space (or printable typing) from OSK / password fields.
+    if (typing && k == LogicalKeyboardKey.space) return false;
+
+    GamepadEdge? edge;
+    if (k == LogicalKeyboardKey.escape ||
+        k == LogicalKeyboardKey.gameButtonB ||
+        k == LogicalKeyboardKey.goBack ||
+        k == LogicalKeyboardKey.browserBack) {
+      edge = GamepadEdge.back;
+    } else if (k == LogicalKeyboardKey.enter ||
+        k == LogicalKeyboardKey.gameButtonA ||
+        k == LogicalKeyboardKey.select ||
+        (!typing && k == LogicalKeyboardKey.space)) {
+      edge = GamepadEdge.confirm;
+    } else if (k == LogicalKeyboardKey.arrowUp) {
+      edge = GamepadEdge.up;
+    } else if (k == LogicalKeyboardKey.arrowDown) {
+      edge = GamepadEdge.down;
+    } else if (k == LogicalKeyboardKey.arrowLeft) {
+      edge = GamepadEdge.left;
+    } else if (k == LogicalKeyboardKey.arrowRight) {
+      edge = GamepadEdge.right;
+    } else if (k == LogicalKeyboardKey.pageUp ||
+        k == LogicalKeyboardKey.gameButtonLeft1) {
+      edge = GamepadEdge.pageUp;
+    } else if (k == LogicalKeyboardKey.pageDown ||
+        k == LogicalKeyboardKey.gameButtonRight1) {
+      edge = GamepadEdge.pageDown;
+    } else if (k == LogicalKeyboardKey.gameButtonStart ||
+        k == LogicalKeyboardKey.gameButtonY ||
+        k == LogicalKeyboardKey.contextMenu) {
+      edge = GamepadEdge.menu;
+    }
+
+    if (edge == null) return false;
+    _onEdge(edge);
+    return true; // consume — avoid double-handling via Shortcuts
+  }
+
+  void _onEdge(GamepadEdge edge) {
     final isDir = edge == GamepadEdge.up ||
         edge == GamepadEdge.down ||
         edge == GamepadEdge.left ||
@@ -118,15 +165,22 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
       _lastConfirmAt = now;
     }
 
-    // Primary path: stack of page layers (no InheritedWidget / no nested bind).
+    if (edge == GamepadEdge.back || edge == GamepadEdge.menu) {
+      final now = DateTime.now();
+      if (_lastBackAt != null && now.difference(_lastBackAt!) < _backCooldown) {
+        return;
+      }
+      _lastBackAt = now;
+    }
+
     if (SdtvPadRouter.instance.dispatch(edge)) {
       return;
     }
 
-    // Fallback for tests / scopes that only use InheritedWidget callbacks.
+    // Fallback InheritedWidget path (tests / no layer).
+    if (!mounted) return;
     final cbs = SdtvInputCallbacks.maybeOf(context);
     if (cbs == null) return;
-
     switch (edge) {
       case GamepadEdge.back:
         cbs.onBack?.call();
@@ -151,6 +205,7 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onKey);
     WidgetsBinding.instance.removeObserver(this);
     unawaited(_release());
     super.dispose();

@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:sdtv_input/sdtv_input.dart';
 import 'package:sdtv_player/sdtv_player.dart';
 
@@ -20,32 +19,36 @@ class PlayerPage extends StatefulWidget {
 class _PlayerPageState extends State<PlayerPage> {
   bool _showHud = true;
   DateTime? _lastZapAt;
-  SdtvPlayerState? _lastState;
-  final FocusNode _rootFocus = FocusNode(debugLabel: 'player-root');
 
-  static const _zapCooldown = Duration(milliseconds: 350);
+  /// Keep the same [Video] widget instance across HUD rebuilds so media_kit
+  /// does not thrash the platform view on every setState (that was starving
+  /// input once bipbop frames started).
+  Widget? _stableVideo;
+
+  static const _zapCooldown = Duration(milliseconds: 280);
 
   @override
   void initState() {
     super.initState();
     widget.session.player.addListener(_onTick);
     widget.session.addListener(_onTick);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _claimFocus());
-  }
-
-  void _claimFocus() {
-    if (!mounted) return;
-    _rootFocus.requestFocus();
+    final vc = widget.session.player.videoController;
+    if (vc != null) {
+      _stableVideo = ExcludeFocus(
+        child: IgnorePointer(
+          child: Video(
+            controller: vc,
+            controls: NoVideoControls,
+            fill: Colors.black,
+          ),
+        ),
+      );
+    }
   }
 
   void _onTick() {
     if (!mounted) return;
-    final st = widget.session.player.state;
-    if (_lastState != SdtvPlayerState.playing &&
-        st == SdtvPlayerState.playing) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _claimFocus());
-    }
-    _lastState = st;
+    // HUD-only rebuild; video layer is a stable instance.
     setState(() {});
   }
 
@@ -53,11 +56,9 @@ class _PlayerPageState extends State<PlayerPage> {
   void dispose() {
     widget.session.player.removeListener(_onTick);
     widget.session.removeListener(_onTick);
-    _rootFocus.dispose();
     super.dispose();
   }
 
-  /// Never latch a sticky "exiting" flag — that made B permanently dead.
   void _exit() {
     if (!mounted) return;
     final nav = Navigator.of(context);
@@ -66,31 +67,18 @@ class _PlayerPageState extends State<PlayerPage> {
     }
   }
 
-  Future<void> _togglePlay() async {
-    if (!mounted) return;
+  void _togglePlay() {
     final player = widget.session.player;
     final state = player.state;
-    final url = player.currentUrl ?? '';
-    try {
-      if (state == SdtvPlayerState.playing ||
-          state == SdtvPlayerState.buffering) {
-        await player.pause();
-      } else if (state == SdtvPlayerState.paused ||
-          state == SdtvPlayerState.idle ||
-          state == SdtvPlayerState.error) {
-        if (state == SdtvPlayerState.error && url.isNotEmpty) {
-          await player.open(Uri.parse(url));
-        } else {
-          await player.play();
-        }
-      }
-    } catch (e, st) {
-      debugPrint('sdtv player toggle: $e\n$st');
+    // Fire-and-forget — awaiting pause on a busy UI isolate felt like "A dead".
+    if (state == SdtvPlayerState.playing ||
+        state == SdtvPlayerState.buffering ||
+        state == SdtvPlayerState.opening) {
+      unawaited(player.pause());
+    } else {
+      unawaited(player.play());
     }
-    if (mounted) {
-      setState(() => _showHud = true);
-      _claimFocus();
-    }
+    if (mounted) setState(() => _showHud = true);
   }
 
   void _channel(int delta) {
@@ -110,16 +98,14 @@ class _PlayerPageState extends State<PlayerPage> {
     final ch = widget.session.nowPlaying;
     final player = widget.session.player;
     final state = player.state;
-    final vc = player.videoController;
     final err = player.lastError;
     final inCat = widget.session.channelsInCategory;
     final canZap = inCat.length > 1;
 
-    // Pushes a pad layer above browse — root SdtvGamepadBinding dispatches here.
     return SdtvInputScope(
       onBack: _exit,
       onMenu: _exit,
-      onConfirm: () => unawaited(_togglePlay()),
+      onConfirm: _togglePlay,
       onDirection: (dir) {
         if (dir == TraversalDirection.up) {
           _channel(-1);
@@ -131,195 +117,118 @@ class _PlayerPageState extends State<PlayerPage> {
       },
       onPageUp: () => _channel(-1),
       onPageDown: () => _channel(1),
-      extraActions: {
-        SdtvPageUpIntent: CallbackAction<SdtvPageUpIntent>(
-          onInvoke: (_) {
-            _channel(-1);
-            return null;
-          },
-        ),
-        SdtvPageDownIntent: CallbackAction<SdtvPageDownIntent>(
-          onInvoke: (_) {
-            _channel(1);
-            return null;
-          },
-        ),
-        DirectionalFocusIntent: CallbackAction<DirectionalFocusIntent>(
-          onInvoke: (intent) {
-            if (intent.direction == TraversalDirection.up) {
-              _channel(-1);
-            } else if (intent.direction == TraversalDirection.down) {
-              _channel(1);
-            }
-            return null;
-          },
-        ),
-      },
-      child: Focus(
-        focusNode: _rootFocus,
-        autofocus: true,
-        canRequestFocus: true,
-        skipTraversal: true,
-        onKeyEvent: (node, event) {
-          if (event is! KeyDownEvent) return KeyEventResult.ignored;
-          final k = event.logicalKey;
-          if (k == LogicalKeyboardKey.escape ||
-              k == LogicalKeyboardKey.gameButtonB ||
-              k == LogicalKeyboardKey.goBack) {
-            _exit();
-            return KeyEventResult.handled;
-          }
-          if (k == LogicalKeyboardKey.arrowUp ||
-              k == LogicalKeyboardKey.pageUp ||
-              k == LogicalKeyboardKey.gameButtonLeft1) {
-            _channel(-1);
-            return KeyEventResult.handled;
-          }
-          if (k == LogicalKeyboardKey.arrowDown ||
-              k == LogicalKeyboardKey.pageDown ||
-              k == LogicalKeyboardKey.gameButtonRight1) {
-            _channel(1);
-            return KeyEventResult.handled;
-          }
-          if (k == LogicalKeyboardKey.enter ||
-              k == LogicalKeyboardKey.space ||
-              k == LogicalKeyboardKey.gameButtonA) {
-            unawaited(_togglePlay());
-            return KeyEventResult.handled;
-          }
-          return KeyEventResult.ignored;
-        },
-        child: Scaffold(
-          backgroundColor: Colors.black,
-          body: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () {
-              _claimFocus();
-              setState(() => _showHud = !_showHud);
-            },
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                if (vc != null)
-                  ExcludeFocus(
-                    child: IgnorePointer(
-                      child: Video(
-                        controller: vc,
-                        controls: NoVideoControls,
-                        fill: Colors.black,
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            _stableVideo ?? const ColoredBox(color: Colors.black),
+
+            if (state == SdtvPlayerState.opening ||
+                state == SdtvPlayerState.buffering)
+              const Center(
+                child: SizedBox(
+                  width: 48,
+                  height: 48,
+                  child: CircularProgressIndicator(strokeWidth: 3),
+                ),
+              ),
+            if (state == SdtvPlayerState.error)
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(32),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.error_outline,
+                          color: Colors.white70, size: 48),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Playback error',
+                        style: theme.textTheme.titleLarge
+                            ?.copyWith(color: Colors.white),
+                      ),
+                      if (err != null) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          err,
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodyMedium
+                              ?.copyWith(color: Colors.white54),
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                      Text(
+                        'A retry · B back',
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: Colors.white38),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+            if (_showHud) ...[
+              Positioned(
+                left: 24,
+                right: 24,
+                top: MediaQuery.paddingOf(context).top + 16,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        ch?.name ?? 'No channel',
+                        style: theme.textTheme.headlineSmall?.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          shadows: const [
+                            Shadow(blurRadius: 8, color: Colors.black),
+                          ],
+                        ),
                       ),
                     ),
-                  )
-                else
-                  const ColoredBox(color: Colors.black),
-
-                if (state == SdtvPlayerState.opening ||
-                    state == SdtvPlayerState.buffering)
-                  const Center(
-                    child: SizedBox(
-                      width: 48,
-                      height: 48,
-                      child: CircularProgressIndicator(strokeWidth: 3),
+                    Text(
+                      state.name.toUpperCase(),
+                      style: theme.textTheme.labelLarge?.copyWith(
+                        color: Colors.white70,
+                        letterSpacing: 1.2,
+                      ),
                     ),
-                  ),
-                if (state == SdtvPlayerState.error)
-                  Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(32),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.error_outline,
-                              color: Colors.white70, size: 48),
-                          const SizedBox(height: 12),
-                          Text(
-                            'Playback error',
-                            style: theme.textTheme.titleLarge
-                                ?.copyWith(color: Colors.white),
-                          ),
-                          if (err != null) ...[
-                            const SizedBox(height: 8),
-                            Text(
-                              err,
-                              textAlign: TextAlign.center,
-                              style: theme.textTheme.bodyMedium
-                                  ?.copyWith(color: Colors.white54),
-                            ),
-                          ],
-                          const SizedBox(height: 16),
-                          Text(
-                            'A retry · B back',
-                            style: theme.textTheme.bodySmall
-                                ?.copyWith(color: Colors.white38),
-                          ),
+                  ],
+                ),
+              ),
+              Positioned(
+                left: 24,
+                right: 24,
+                bottom: MediaQuery.paddingOf(context).bottom + 20,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (widget.session.useDemo)
+                      Text(
+                        canZap
+                            ? 'Demo · same test stream · name zaps only'
+                            : 'Demo stream · only channel in this category',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: Colors.white54,
+                        ),
+                      ),
+                    Text(
+                      canZap
+                          ? 'A pause · D-pad/LB RB channel · B back'
+                          : 'A pause · B back',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: Colors.white70,
+                        shadows: const [
+                          Shadow(blurRadius: 6, color: Colors.black),
                         ],
                       ),
                     ),
-                  ),
-
-                if (_showHud) ...[
-                  Positioned(
-                    left: 24,
-                    right: 24,
-                    top: MediaQuery.paddingOf(context).top + 16,
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            ch?.name ?? 'No channel',
-                            style: theme.textTheme.headlineSmall?.copyWith(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700,
-                              shadows: const [
-                                Shadow(blurRadius: 8, color: Colors.black),
-                              ],
-                            ),
-                          ),
-                        ),
-                        Text(
-                          state.name.toUpperCase(),
-                          style: theme.textTheme.labelLarge?.copyWith(
-                            color: Colors.white70,
-                            letterSpacing: 1.2,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Positioned(
-                    left: 24,
-                    right: 24,
-                    bottom: MediaQuery.paddingOf(context).bottom + 20,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (widget.session.useDemo)
-                          Text(
-                            canZap
-                                ? 'Demo · same test stream · name zaps only'
-                                : 'Demo stream · only channel in this category',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: Colors.white54,
-                            ),
-                          ),
-                        Text(
-                          canZap
-                              ? 'A pause · D-pad/LB RB channel · B back'
-                              : 'A pause · B back',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: Colors.white70,
-                            shadows: const [
-                              Shadow(blurRadius: 6, color: Colors.black),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
+                  ],
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );
