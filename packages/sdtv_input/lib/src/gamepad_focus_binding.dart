@@ -30,7 +30,7 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
   Timer? _startTimer;
   bool _acquired = false;
   DateTime? _lastDirAt;
-  static const _dirCooldown = Duration(milliseconds: 160);
+  static const _dirCooldown = Duration(milliseconds: 250);
 
   @override
   void initState() {

@@ -4,8 +4,13 @@ import 'package:sdtv_core/sdtv_core.dart';
 import 'package:sdtv_input/sdtv_input.dart';
 
 import '../state/session_controller.dart';
-import 'widgets/focus_text_field.dart';
 
+/// Login / home. Selection is an **integer index**, not Flutter focus geometry.
+///
+/// Steam Deck Game Mode often emits joystick D-pad *and* a keyboard arrow for
+/// one physical press. Focus-based traversal double-stepped and skipped fields.
+/// Here D-pad only changes [_selected]; text fields take focus only when
+/// selected so the OSK can type.
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key, required this.session});
 
@@ -16,66 +21,82 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
+  static const _itemCount = 5; // demo, url, user, pass, connect
+
   final _url = TextEditingController();
   final _user = TextEditingController();
   final _pass = TextEditingController();
 
-  final _demoFocus = FocusNode(debugLabel: 'demo');
   final _urlFocus = FocusNode(debugLabel: 'url');
   final _userFocus = FocusNode(debugLabel: 'user');
   final _passFocus = FocusNode(debugLabel: 'pass');
-  final _connectFocus = FocusNode(debugLabel: 'connect');
 
-  late final List<FocusNode> _ring;
-  int _index = 0;
-
-  /// Deck/Steam often emit *both* js D-pad and keyboard arrows for one press.
-  DateTime? _lastNavAt;
-  static const _navCooldown = Duration(milliseconds: 180);
-
+  int _selected = 0;
   bool _busy = false;
   String? _localError;
 
-  @override
-  void initState() {
-    super.initState();
-    _ring = [_demoFocus, _urlFocus, _userFocus, _passFocus, _connectFocus];
-    for (var i = 0; i < _ring.length; i++) {
-      final idx = i;
-      _ring[i].addListener(() {
-        if (_ring[idx].hasFocus && _index != idx) {
-          setState(() => _index = idx);
-        }
-      });
-    }
-  }
+  /// Ignore duplicate nav from js + keyboard arrow within this window.
+  DateTime? _lastNav;
+  static const _cooldown = Duration(milliseconds: 220);
 
   @override
   void dispose() {
     _url.dispose();
     _user.dispose();
     _pass.dispose();
-    for (final n in _ring) {
-      n.dispose();
-    }
+    _urlFocus.dispose();
+    _userFocus.dispose();
+    _passFocus.dispose();
     super.dispose();
   }
 
-  bool _acceptNav() {
+  bool get _isFieldSelected => _selected >= 1 && _selected <= 3;
+
+  void _nav(int delta) {
     final now = DateTime.now();
-    if (_lastNavAt != null && now.difference(_lastNavAt!) < _navCooldown) {
-      return false;
+    if (_lastNav != null && now.difference(_lastNav!) < _cooldown) {
+      return;
     }
-    _lastNavAt = now;
-    return true;
+    _lastNav = now;
+
+    setState(() {
+      _selected = (_selected + delta).clamp(0, _itemCount - 1);
+    });
+    _syncFieldFocus();
   }
 
-  void _move(int delta) {
-    if (!_acceptNav()) return;
-    if (_ring.isEmpty) return;
-    _index = (_index + delta).clamp(0, _ring.length - 1);
-    _ring[_index].requestFocus();
-    setState(() {});
+  void _syncFieldFocus() {
+    // Only the selected text field should hold keyboard focus (for OSK).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      switch (_selected) {
+        case 1:
+          _urlFocus.requestFocus();
+        case 2:
+          _userFocus.requestFocus();
+        case 3:
+          _passFocus.requestFocus();
+        default:
+          _urlFocus.unfocus();
+          _userFocus.unfocus();
+          _passFocus.unfocus();
+          FocusManager.instance.primaryFocus?.unfocus();
+      }
+    });
+  }
+
+  Future<void> _activate() async {
+    switch (_selected) {
+      case 0:
+        await _demo();
+      case 1:
+      case 2:
+        _nav(1);
+      case 3:
+        await _connect();
+      case 4:
+        await _connect();
+    }
   }
 
   Future<void> _demo() async {
@@ -111,72 +132,58 @@ class _LoginPageState extends State<LoginPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final sessionError = widget.session.errorMessage;
-    final err = _localError ?? sessionError;
+    final err = _localError ?? widget.session.errorMessage;
 
     return SdtvInputScope(
       onConfirm: () {
-        // Activate current ring item.
-        switch (_index) {
-          case 0:
-            if (!_busy) _demo();
-          case 1:
-          case 2:
-            _move(1); // leave field → next
-          case 3:
-            if (!_busy) _connect();
-          case 4:
-            if (!_busy) _connect();
-        }
+        if (!_busy) _activate();
       },
+      // All directions: change selection index only (no Flutter focus walk).
       extraActions: {
         DirectionalFocusIntent: CallbackAction<DirectionalFocusIntent>(
           onInvoke: (intent) {
             final forward = intent.direction == TraversalDirection.down ||
                 intent.direction == TraversalDirection.right;
-            _move(forward ? 1 : -1);
+            _nav(forward ? 1 : -1);
             return null;
           },
         ),
         NextFocusIntent: CallbackAction<NextFocusIntent>(
           onInvoke: (_) {
-            _move(1);
+            _nav(1);
             return null;
           },
         ),
         PreviousFocusIntent: CallbackAction<PreviousFocusIntent>(
           onInvoke: (_) {
-            _move(-1);
+            _nav(-1);
             return null;
           },
         ),
       },
-      // Kill default arrow shortcuts that would *also* fire DirectionalFocus
-      // after our action (Steam often injects arrows for D-pad).
-      extraShortcuts: const {},
       child: Shortcuts(
-        // Replace arrow keys with our ring moves only (no double-fire via
-        // both Shortcuts→DirectionalFocus and gamepad→DirectionalFocus without
-        // sharing cooldown — cooldown is in _move).
         shortcuts: {
+          // Steam injects these for D-pad; route through same _nav + cooldown.
           const SingleActivator(LogicalKeyboardKey.arrowDown):
-              const _LoginMoveIntent(1),
+              const _HomeNavIntent(1),
           const SingleActivator(LogicalKeyboardKey.arrowRight):
-              const _LoginMoveIntent(1),
+              const _HomeNavIntent(1),
           const SingleActivator(LogicalKeyboardKey.arrowUp):
-              const _LoginMoveIntent(-1),
+              const _HomeNavIntent(-1),
           const SingleActivator(LogicalKeyboardKey.arrowLeft):
-              const _LoginMoveIntent(-1),
+              const _HomeNavIntent(-1),
           const SingleActivator(LogicalKeyboardKey.tab):
-              const _LoginMoveIntent(1),
+              const _HomeNavIntent(1),
           const SingleActivator(LogicalKeyboardKey.tab, shift: true):
-              const _LoginMoveIntent(-1),
+              const _HomeNavIntent(-1),
+          const SingleActivator(LogicalKeyboardKey.enter):
+              const SdtvConfirmIntent(),
         },
         child: Actions(
           actions: {
-            _LoginMoveIntent: CallbackAction<_LoginMoveIntent>(
-              onInvoke: (intent) {
-                _move(intent.delta);
+            _HomeNavIntent: CallbackAction<_HomeNavIntent>(
+              onInvoke: (i) {
+                _nav(i.delta);
                 return null;
               },
             ),
@@ -216,12 +223,14 @@ class _LoginPageState extends State<LoginPage> {
                               style: theme.textTheme.bodyMedium,
                             ),
                             const SizedBox(height: 28),
-                            SdtvFocusTile(
+                            _SelectTile(
+                              selected: _selected == 0,
                               label: 'Continue with demo playlist',
                               icon: Icons.play_circle_outline,
-                              focusNode: _demoFocus,
-                              autofocus: true,
-                              onActivate: _busy ? null : _demo,
+                              onTap: () {
+                                setState(() => _selected = 0);
+                                if (!_busy) _demo();
+                              },
                             ),
                             const SizedBox(height: 28),
                             Text(
@@ -232,37 +241,51 @@ class _LoginPageState extends State<LoginPage> {
                               ),
                             ),
                             const SizedBox(height: 12),
-                            // Fields: no arrow handling of their own — parent ring owns nav.
-                            SdtvFocusTextField(
+                            _SelectField(
+                              selected: _selected == 1,
+                              label: 'Server URL (http://host:port)',
                               controller: _url,
                               focusNode: _urlFocus,
-                              label: 'Server URL (http://host:port)',
                               keyboardType: TextInputType.url,
-                              handleArrowKeys: false,
+                              onTap: () {
+                                setState(() => _selected = 1);
+                                _syncFieldFocus();
+                              },
                             ),
                             const SizedBox(height: 12),
-                            SdtvFocusTextField(
+                            _SelectField(
+                              selected: _selected == 2,
+                              label: 'Username',
                               controller: _user,
                               focusNode: _userFocus,
-                              label: 'Username',
-                              handleArrowKeys: false,
+                              onTap: () {
+                                setState(() => _selected = 2);
+                                _syncFieldFocus();
+                              },
                             ),
                             const SizedBox(height: 12),
-                            SdtvFocusTextField(
+                            _SelectField(
+                              selected: _selected == 3,
+                              label: 'Password',
                               controller: _pass,
                               focusNode: _passFocus,
-                              label: 'Password',
                               obscureText: true,
                               textInputAction: TextInputAction.done,
-                              handleArrowKeys: false,
                               onSubmitted: _busy ? null : _connect,
+                              onTap: () {
+                                setState(() => _selected = 3);
+                                _syncFieldFocus();
+                              },
                             ),
                             const SizedBox(height: 20),
-                            SdtvFocusTile(
+                            _SelectTile(
+                              selected: _selected == 4,
                               label: _busy ? 'Connecting…' : 'Connect',
                               icon: Icons.login,
-                              focusNode: _connectFocus,
-                              onActivate: _busy ? null : _connect,
+                              onTap: () {
+                                setState(() => _selected = 4);
+                                if (!_busy) _connect();
+                              },
                             ),
                             if (err != null) ...[
                               const SizedBox(height: 20),
@@ -270,6 +293,15 @@ class _LoginPageState extends State<LoginPage> {
                                 err,
                                 style: theme.textTheme.bodyMedium?.copyWith(
                                   color: theme.colorScheme.error,
+                                ),
+                              ),
+                            ],
+                            if (_isFieldSelected) ...[
+                              const SizedBox(height: 16),
+                              Text(
+                                'Type with OSK · D-pad up/down changes field · A = next / connect',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.outline,
                                 ),
                               ),
                             ],
@@ -297,7 +329,148 @@ class _LoginPageState extends State<LoginPage> {
   }
 }
 
-class _LoginMoveIntent extends Intent {
-  const _LoginMoveIntent(this.delta);
+class _HomeNavIntent extends Intent {
+  const _HomeNavIntent(this.delta);
   final int delta;
+}
+
+/// Visual selection chrome (not Focus-driven).
+class _SelectTile extends StatelessWidget {
+  const _SelectTile({
+    required this.selected,
+    required this.label,
+    required this.onTap,
+    this.icon,
+  });
+
+  final bool selected;
+  final String label;
+  final VoidCallback onTap;
+  final IconData? icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final bg = selected
+        ? theme.colorScheme.primary
+        : theme.colorScheme.surfaceContainerHighest;
+    final fg =
+        selected ? theme.colorScheme.onPrimary : theme.colorScheme.onSurface;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 100),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected
+                ? theme.colorScheme.primaryContainer
+                : Colors.transparent,
+            width: 3,
+          ),
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.45),
+                    blurRadius: 16,
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          children: [
+            if (icon != null) ...[
+              Icon(icon, color: fg, size: 28),
+              const SizedBox(width: 12),
+            ],
+            Expanded(
+              child: Text(
+                label,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: fg,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SelectField extends StatelessWidget {
+  const _SelectField({
+    required this.selected,
+    required this.label,
+    required this.controller,
+    required this.focusNode,
+    required this.onTap,
+    this.obscureText = false,
+    this.keyboardType,
+    this.textInputAction = TextInputAction.next,
+    this.onSubmitted,
+  });
+
+  final bool selected;
+  final String label;
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final VoidCallback onTap;
+  final bool obscureText;
+  final TextInputType? keyboardType;
+  final TextInputAction textInputAction;
+  final VoidCallback? onSubmitted;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 100),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected ? theme.colorScheme.primary : Colors.transparent,
+            width: 3,
+          ),
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.35),
+                    blurRadius: 12,
+                  ),
+                ]
+              : null,
+        ),
+        child: TextField(
+          focusNode: focusNode,
+          controller: controller,
+          obscureText: obscureText,
+          keyboardType: keyboardType,
+          // Don't autofocus — parent assigns focus when selected.
+          style: theme.textTheme.titleMedium,
+          decoration: InputDecoration(
+            labelText: label,
+            filled: true,
+            fillColor: theme.colorScheme.surfaceContainerHighest,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide.none,
+            ),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+          ),
+          textInputAction: textInputAction,
+          // Typing only; D-pad is owned by the page index.
+          onTap: onTap,
+          onSubmitted: (_) => onSubmitted?.call(),
+        ),
+      ),
+    );
+  }
 }
