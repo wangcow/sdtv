@@ -10,12 +10,14 @@ class SdtvFocusTile extends StatefulWidget {
     this.onActivate,
     this.autofocus = false,
     this.icon,
+    this.focusNode,
   });
 
   final String label;
   final VoidCallback? onActivate;
   final bool autofocus;
   final IconData? icon;
+  final FocusNode? focusNode;
 
   @override
   State<SdtvFocusTile> createState() => _SdtvFocusTileState();
@@ -23,12 +25,14 @@ class SdtvFocusTile extends StatefulWidget {
 
 class _SdtvFocusTileState extends State<SdtvFocusTile> {
   late final FocusNode _node;
+  late final bool _ownsNode;
   bool _focused = false;
 
   @override
   void initState() {
     super.initState();
-    _node = FocusNode(debugLabel: widget.label);
+    _ownsNode = widget.focusNode == null;
+    _node = widget.focusNode ?? FocusNode(debugLabel: widget.label);
     _node.addListener(_onFocusChange);
   }
 
@@ -41,7 +45,7 @@ class _SdtvFocusTileState extends State<SdtvFocusTile> {
   @override
   void dispose() {
     _node.removeListener(_onFocusChange);
-    _node.dispose();
+    if (_ownsNode) _node.dispose();
     super.dispose();
   }
 
@@ -55,12 +59,9 @@ class _SdtvFocusTileState extends State<SdtvFocusTile> {
     final bg = _focused
         ? theme.colorScheme.primary
         : theme.colorScheme.surfaceContainerHighest;
-    final fg = _focused
-        ? theme.colorScheme.onPrimary
-        : theme.colorScheme.onSurface;
+    final fg =
+        _focused ? theme.colorScheme.onPrimary : theme.colorScheme.onSurface;
 
-    // Per-tile Actions so gamepad Confirm activates *this* focused tile
-    // instead of only the scope-level callback.
     return Actions(
       actions: <Type, Action<Intent>>{
         ActivateIntent: CallbackAction<ActivateIntent>(

@@ -110,28 +110,8 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
       return;
     }
 
-    // Form fields: always Tab-order traversal for stick/D-pad.
-    if (SdtvTextFocusRegistry.primaryIsTextField) {
-      switch (edge) {
-        case GamepadEdge.down:
-        case GamepadEdge.right:
-        case GamepadEdge.pageDown:
-        case GamepadEdge.confirm:
-          _traverse(forward: true);
-          return;
-        case GamepadEdge.up:
-        case GamepadEdge.left:
-        case GamepadEdge.pageUp:
-          _traverse(forward: false);
-          return;
-        case GamepadEdge.back:
-        case GamepadEdge.menu:
-          break;
-      }
-    }
-
-    final before = FocusManager.instance.primaryFocus;
-
+    // Always route directions through Actions so pages can override
+    // (login linear ring, browse 2-column). Do not use geometric focus here.
     final Intent intent;
     switch (edge) {
       case GamepadEdge.up:
@@ -154,30 +134,26 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
         intent = const SdtvPageDownIntent();
     }
 
-    final focusCtx = FocusManager.instance.primaryFocus?.context ?? context;
     try {
       if (edge == GamepadEdge.confirm) {
-        final cbs = SdtvInputCallbacks.maybeOf(context);
-        // Prefer activating focused control via ActivateIntent / tile actions.
-        final activated = Actions.maybeInvoke(focusCtx, const ActivateIntent());
+        final focusCtx =
+            FocusManager.instance.primaryFocus?.context ?? context;
+        final activated =
+            Actions.maybeInvoke(focusCtx, const ActivateIntent());
         if (activated == null) {
-          Actions.maybeInvoke(focusCtx, intent);
-          cbs?.onConfirm?.call();
+          Actions.maybeInvoke(context, intent);
+          SdtvInputCallbacks.maybeOf(context)?.onConfirm?.call();
         }
         return;
       }
 
-      Actions.maybeInvoke(focusCtx, intent);
-
-      // If directional focus didn't move, Tab-order fallback (forms / lists).
-      final after = FocusManager.instance.primaryFocus;
-      if (identical(before, after) &&
-          (edge == GamepadEdge.down ||
-              edge == GamepadEdge.right ||
-              edge == GamepadEdge.up ||
-              edge == GamepadEdge.left)) {
+      // Prefer scope Actions (page overrides live here).
+      final handled = Actions.maybeInvoke(context, intent);
+      if (handled == null && SdtvTextFocusRegistry.primaryIsTextField) {
         _traverse(
-          forward: edge == GamepadEdge.down || edge == GamepadEdge.right,
+          forward: edge == GamepadEdge.down ||
+              edge == GamepadEdge.right ||
+              edge == GamepadEdge.pageDown,
         );
       }
     } catch (e, st) {
