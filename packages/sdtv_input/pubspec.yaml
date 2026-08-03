@@ -1,0 +1,20 @@
+name: sdtv_input
+description: Controller-first focus and gamepad intents for sdtv.
+version: 0.1.0
+publish_to: none
+repository: https://github.com/wangcow/sdtv
+
+environment:
+  sdk: ^3.8.0
+  flutter: ">=3.22.0"
+
+resolution: workspace
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0

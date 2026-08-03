@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=sdtv
+GenericName=IPTV Player
+Comment=Steam Deck–first IPTV player (bring your own Xtream playlist)
+Exec=sdtv
+Icon=org.wangcow.SDTV
+Terminal=false
+Type=Application
+Categories=AudioVideo;Player;TV;
+Keywords=iptv;xtream;tv;steamdeck;
+StartupNotify=true
