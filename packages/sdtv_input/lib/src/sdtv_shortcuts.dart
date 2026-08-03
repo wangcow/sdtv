@@ -9,14 +9,12 @@ import 'gamepad_focus_binding.dart';
 
 /// True when we should open `/dev/input/js*`.
 ///
-/// **Off by default** so the keyboard playground always paints reliably.
-/// Opt in after UI is confirmed:
-///   `SDTV_ENABLE_GAMEPAD=1 ./tool/run.sh`
+/// On by default for Linux. Disable with `SDTV_ENABLE_GAMEPAD=0`.
 bool sdtvGamepadBindingEnabledByDefault() {
   if (kIsWeb) return false;
   if (Platform.environment.containsKey('FLUTTER_TEST')) return false;
   final flag = Platform.environment['SDTV_ENABLE_GAMEPAD']?.toLowerCase();
-  if (flag != '1' && flag != 'true' && flag != 'yes') return false;
+  if (flag == '0' || flag == 'false' || flag == 'no') return false;
   try {
     return Platform.isLinux;
   } catch (_) {

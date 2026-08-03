@@ -1,0 +1,21 @@
+{
+  "user_info": {
+    "username": "mock_user",
+    "password": "mock_pass",
+    "message": "",
+    "auth": 1,
+    "status": "Active",
+    "exp_date": "1893456000",
+    "is_trial": "0",
+    "active_cons": "1",
+    "created_at": "1609459200",
+    "max_connections": "2"
+  },
+  "server_info": {
+    "url": "mock.sdtv.local",
+    "port": "80",
+    "https_port": "443",
+    "server_protocol": "http",
+    "timezone": "UTC"
+  }
+}

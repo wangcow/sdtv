@@ -1,0 +1,220 @@
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart';
+import 'package:sdtv_core/sdtv_core.dart';
+import 'package:sdtv_player/sdtv_player.dart';
+
+import '../services/mock_client_factory.dart';
+import '../services/settings_store.dart';
+
+enum SessionPhase {
+  boot,
+  login,
+  loading,
+  browse,
+  error,
+}
+
+/// App-wide session: Xtream client, live catalog, stub player.
+class SessionController extends ChangeNotifier {
+  SessionController({
+    required SettingsStore settings,
+    SdtvPlayerController? player,
+  })  : _settings = settings,
+        player = player ?? StubSdtvPlayerController();
+
+  final SettingsStore _settings;
+  final SdtvPlayerController player;
+
+  SessionPhase phase = SessionPhase.boot;
+  String? errorMessage;
+  UserInfo? userInfo;
+  XtreamClient? _client;
+  bool useDemo = true;
+
+  List<MediaCategory> categories = const [];
+  List<LiveChannel> allChannels = const [];
+  String? selectedCategoryId;
+  LiveChannel? nowPlaying;
+
+  List<LiveChannel> get channelsInCategory {
+    final id = selectedCategoryId;
+    if (id == null) return allChannels;
+    return allChannels.where((c) => c.categoryId == id).toList();
+  }
+
+  /// Boot: restore saved session or land on login.
+  Future<void> bootstrap() async {
+    phase = SessionPhase.boot;
+    errorMessage = null;
+    notifyListeners();
+
+    useDemo = _settings.useDemo;
+    if (_settings.hasSavedSession) {
+      try {
+        if (useDemo) {
+          await connectDemo(save: false);
+        } else {
+          final creds = _settings.credentials;
+          if (creds != null) {
+            await connectRemote(creds, save: false);
+          } else {
+            phase = SessionPhase.login;
+            notifyListeners();
+          }
+        }
+        return;
+      } catch (e) {
+        errorMessage = e.toString();
+        phase = SessionPhase.login;
+        notifyListeners();
+        return;
+      }
+    }
+
+    phase = SessionPhase.login;
+    notifyListeners();
+  }
+
+  Future<void> connectDemo({bool save = true}) async {
+    phase = SessionPhase.loading;
+    errorMessage = null;
+    notifyListeners();
+
+    try {
+      final client = await loadMockXtreamClient();
+      await _finishConnect(client, useDemo: true, save: save);
+    } catch (e) {
+      errorMessage = 'Demo load failed: $e';
+      phase = SessionPhase.login;
+      notifyListeners();
+    }
+  }
+
+  Future<void> connectRemote(
+    XtreamCredentials credentials, {
+    bool save = true,
+  }) async {
+    phase = SessionPhase.loading;
+    errorMessage = null;
+    notifyListeners();
+
+    try {
+      // Phase 1 default: mock catalog (no provider ban risk).
+      // Real network: SDTV_ALLOW_LIVE=1 ./tool/run.sh
+      final allowLive = _envFlag('SDTV_ALLOW_LIVE');
+
+      final XtreamClient client;
+      if (allowLive) {
+        client = HttpXtreamClient(credentials: credentials);
+      } else {
+        client = await loadMockXtreamClient(credentials: credentials);
+      }
+      await _finishConnect(
+        client,
+        useDemo: false,
+        save: save,
+        credentials: credentials,
+      );
+    } on XtreamException catch (e) {
+      errorMessage = e.message;
+      phase = SessionPhase.login;
+      notifyListeners();
+    } catch (e) {
+      errorMessage = e.toString();
+      phase = SessionPhase.login;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _finishConnect(
+    XtreamClient client, {
+    required bool useDemo,
+    required bool save,
+    XtreamCredentials? credentials,
+  }) async {
+    final info = await client.authenticate();
+    final cats = await client.getLiveCategories();
+    final streams = await client.getLiveStreams();
+
+    _client = client;
+    userInfo = info;
+    categories = cats;
+    allChannels = streams;
+    selectedCategoryId = cats.isNotEmpty ? cats.first.categoryId : null;
+    this.useDemo = useDemo;
+
+    if (save) {
+      await _settings.saveSession(
+        useDemo: useDemo,
+        credentials: credentials,
+      );
+    }
+
+    phase = SessionPhase.browse;
+    notifyListeners();
+  }
+
+  void selectCategory(String categoryId) {
+    selectedCategoryId = categoryId;
+    notifyListeners();
+  }
+
+  Future<void> playChannel(LiveChannel channel) async {
+    final client = _client;
+    if (client == null) return;
+    nowPlaying = channel;
+    final url = client.livePlayUrl(channel.streamId);
+    await player.open(url);
+    notifyListeners();
+  }
+
+  Future<void> playAdjacent(int delta) async {
+    final list = channelsInCategory;
+    if (list.isEmpty || nowPlaying == null) return;
+    final idx = list.indexWhere((c) => c.streamId == nowPlaying!.streamId);
+    if (idx < 0) return;
+    final next = (idx + delta) % list.length;
+    final i = next < 0 ? list.length - 1 : next;
+    await playChannel(list[i]);
+  }
+
+  Future<void> stopPlayback() async {
+    await player.stop();
+    nowPlaying = null;
+    notifyListeners();
+  }
+
+  Future<void> signOut() async {
+    await stopPlayback();
+    if (_client is HttpXtreamClient) {
+      (_client as HttpXtreamClient).close();
+    }
+    _client = null;
+    userInfo = null;
+    categories = const [];
+    allChannels = const [];
+    selectedCategoryId = null;
+    await _settings.clearSession();
+    phase = SessionPhase.login;
+    notifyListeners();
+  }
+
+  bool _envFlag(String name) {
+    final compile = String.fromEnvironment(name, defaultValue: '');
+    if (compile == '1' || compile.toLowerCase() == 'true') return true;
+    if (kIsWeb) return false;
+    final v = Platform.environment[name]?.toLowerCase();
+    return v == '1' || v == 'true' || v == 'yes';
+  }
+
+  @override
+  void dispose() {
+    if (_client is HttpXtreamClient) {
+      (_client as HttpXtreamClient).close();
+    }
+    // Player dispose is async; fire-and-forget.
+    player.dispose();
+    super.dispose();
+  }
+}

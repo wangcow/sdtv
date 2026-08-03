@@ -11,7 +11,7 @@ enum SdtvPlayerState {
 }
 
 /// Minimal playback controller API. Stub implementation logs only.
-abstract class SdtvPlayerController {
+abstract class SdtvPlayerController extends Listenable {
   SdtvPlayerState get state;
   String? get currentUrl;
   String? get lastError;
@@ -20,6 +20,7 @@ abstract class SdtvPlayerController {
   Future<void> play();
   Future<void> pause();
   Future<void> stop();
+  @override
   Future<void> dispose();
 }
 

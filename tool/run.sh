@@ -21,10 +21,11 @@ if [[ "${SDTV_CLEAN:-}" == "1" ]]; then
   rm -rf build/linux
 fi
 
-echo "Starting sdtv"
+echo "Starting sdtv (Phase 1 — login + live browse + stub player)"
 echo "  GDK_BACKEND=${GDK_BACKEND:-<default>}"
-echo "  gamepad=${SDTV_ENABLE_GAMEPAD:-0}  (set SDTV_ENABLE_GAMEPAD=1 to enable)"
-echo "  Window title: sdtv — check primary monitor / taskbar"
+echo "  gamepad=${SDTV_ENABLE_GAMEPAD:-on}  (SDTV_ENABLE_GAMEPAD=0 to disable)"
+echo "  live API=${SDTV_ALLOW_LIVE:-0}  (1 = real Xtream; default uses mock catalog)"
+echo "  Window: sdtv — Demo playlist needs no credentials"
 echo "  Keys: arrows · Enter · Esc   Pad: D-pad/stick · A · B"
 echo ""
 
