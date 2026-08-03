@@ -17,74 +17,89 @@ class LiveBrowsePage extends StatelessWidget {
     return 'All';
   }
 
-  /// Dialogs must not open a second joystick reader — disable gamepad there
-  /// and rely on the parent scope + keyboard/mouse for the modal.
-  static Future<void> _confirmSignOut(
+  /// B / Escape often can't be distinguished from ☰ on Deck/Steam (both may
+  /// emit Escape). Open one system menu with About + Sign out so neither is lost.
+  static Future<void> _openSystemMenu(
     BuildContext context,
     SessionController session,
+    String user,
   ) async {
-    final ok = await showDialog<bool>(
+    final action = await showDialog<String>(
       context: context,
       barrierDismissible: true,
       builder: (ctx) => SdtvInputScope(
-        enableGamepad: false,
-        onBack: () => Navigator.of(ctx).pop(false),
+        // Take pad ownership for the modal (hub delivers to top listener only).
+        enableGamepad: true,
+        onBack: () => Navigator.of(ctx).pop('cancel'),
         child: AlertDialog(
-          title: const Text('Sign out?'),
-          content: const Text('Return to login and clear this session?'),
+          title: const Text('Menu'),
+          content: Text(
+            'Signed in as $user'
+            '${session.useDemo ? ' (demo)' : ''}',
+          ),
           actions: [
             SdtvFocusTile(
-              label: 'Cancel',
+              label: 'About',
               autofocus: true,
+              icon: Icons.info_outline,
               onActivate: () {
-                if (ctx.mounted) Navigator.of(ctx).pop(false);
+                if (ctx.mounted) Navigator.of(ctx).pop('about');
               },
             ),
             const SizedBox(height: 8),
             SdtvFocusTile(
               label: 'Sign out',
+              icon: Icons.logout,
               onActivate: () {
-                if (ctx.mounted) Navigator.of(ctx).pop(true);
+                if (ctx.mounted) Navigator.of(ctx).pop('signout');
+              },
+            ),
+            const SizedBox(height: 8),
+            SdtvFocusTile(
+              label: 'Cancel',
+              icon: Icons.close,
+              onActivate: () {
+                if (ctx.mounted) Navigator.of(ctx).pop('cancel');
               },
             ),
           ],
         ),
       ),
     );
-    if (ok == true) {
+
+    if (!context.mounted) return;
+    if (action == 'about') {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => SdtvInputScope(
+          enableGamepad: true,
+          onBack: () => Navigator.of(ctx).pop(),
+          onConfirm: () => Navigator.of(ctx).pop(),
+          child: AlertDialog(
+            title: const Text('About sdtv'),
+            content: Text(
+              'Live TV browse (Phase 1).\n'
+              'Demo/mock catalog — no real streams until SDTV_ALLOW_LIVE=1.\n\n'
+              'Signed in as $user'
+              '${session.useDemo ? ' (demo)' : ''}\n\n'
+              'Product of the Wangcow Corporation\n'
+              'Apache License 2.0',
+            ),
+            actions: [
+              SdtvFocusTile(
+                label: 'Close',
+                autofocus: true,
+                onActivate: () {
+                  if (ctx.mounted) Navigator.of(ctx).pop();
+                },
+              ),
+            ],
+          ),
+        ),
+      );
+    } else if (action == 'signout') {
       await session.signOut();
     }
-  }
-
-  static void _showAbout(BuildContext context, String user, bool useDemo) {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => SdtvInputScope(
-        enableGamepad: false,
-        onBack: () => Navigator.of(ctx).pop(),
-        onConfirm: () => Navigator.of(ctx).pop(),
-        child: AlertDialog(
-          title: const Text('About sdtv'),
-          content: Text(
-            'Live TV browse (Phase 1).\n'
-            'Demo/mock catalog — no real streams until SDTV_ALLOW_LIVE=1.\n\n'
-            'Signed in as $user'
-            '${useDemo ? ' (demo)' : ''}\n\n'
-            'Product of the Wangcow Corporation\n'
-            'Apache License 2.0',
-          ),
-          actions: [
-            SdtvFocusTile(
-              label: 'Close',
-              autofocus: true,
-              onActivate: () {
-                if (ctx.mounted) Navigator.of(ctx).pop();
-              },
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   @override
@@ -96,8 +111,9 @@ class LiveBrowsePage extends StatelessWidget {
     final user = session.userInfo?.username ?? 'user';
 
     return SdtvInputScope(
-      onBack: () => _confirmSignOut(context, session),
-      onMenu: () => _showAbout(context, user, session.useDemo),
+      // Both B and ☰ land here if Steam remaps Options→Escape.
+      onBack: () => _openSystemMenu(context, session, user),
+      onMenu: () => _openSystemMenu(context, session, user),
       child: Scaffold(
         body: SafeArea(
           child: Column(
@@ -235,7 +251,7 @@ class LiveBrowsePage extends StatelessWidget {
                   children: [
                     Expanded(
                       child: Text(
-                        'A play · B sign out · ☰/Y about',
+                        'A play · B/☰ menu (About · Sign out)',
                         style: theme.textTheme.bodySmall,
                         overflow: TextOverflow.ellipsis,
                       ),

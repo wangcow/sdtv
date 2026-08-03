@@ -5,12 +5,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 import 'actions.dart';
+import 'input_callbacks.dart';
 import 'joystick_hub.dart';
 import 'linux_joystick.dart';
 
-/// Binds the shared [SdtvJoystickHub] to Flutter [Actions].
-///
-/// Starts after the first frame. Nested scopes share one device open.
+/// Binds the shared [SdtvJoystickHub] to focus / app callbacks.
 class SdtvGamepadBinding extends StatefulWidget {
   const SdtvGamepadBinding({
     super.key,
@@ -75,34 +74,6 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
     await SdtvJoystickHub.instance.release(_onEdge);
   }
 
-  /// True when focus is on a text field (or its EditableText child).
-  bool _primaryIsTextInput() {
-    final node = FocusManager.instance.primaryFocus;
-    if (node == null) return false;
-
-    // Common: focus node is attached directly to EditableText.
-    final ctx = node.context;
-    if (ctx != null) {
-      if (ctx.widget is EditableText) return true;
-      if (ctx.findAncestorWidgetOfExactType<EditableText>() != null) {
-        return true;
-      }
-    }
-
-    // TextField often uses a parent FocusNode whose descendants include EditableText.
-    bool walk(FocusNode n) {
-      for (final child in n.children) {
-        final c = child.context;
-        if (c?.widget is EditableText) return true;
-        if (walk(child)) return true;
-      }
-      return false;
-    }
-
-    return walk(node);
-  }
-
-  /// Move focus like Tab / Shift+Tab (works better than DirectionalFocus in forms).
   void _traverse({required bool forward}) {
     final node = FocusManager.instance.primaryFocus;
     if (node == null) return;
@@ -113,54 +84,53 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
     }
   }
 
+  void _callApp(GamepadEdge edge) {
+    final cbs = SdtvInputCallbacks.maybeOf(context);
+    if (edge == GamepadEdge.back) {
+      debugPrint('sdtv_input: BACK → onBack=${cbs?.onBack != null}');
+      cbs?.onBack?.call();
+      return;
+    }
+    if (edge == GamepadEdge.menu) {
+      debugPrint('sdtv_input: MENU → onMenu=${cbs?.onMenu != null}');
+      cbs?.onMenu?.call();
+      return;
+    }
+    if (edge == GamepadEdge.confirm) {
+      cbs?.onConfirm?.call();
+    }
+  }
+
   void _onEdge(GamepadEdge edge) {
     if (!mounted) return;
 
-    // App-level intents must run on this scope (parent Actions), not the focused
-    // tile — otherwise Menu can fail to find a handler and feel like a no-op,
-    // or Steam remaps ☰ to Escape which only hits Back.
+    // App chrome: call InheritedWidget callbacks directly (most reliable).
     if (edge == GamepadEdge.menu || edge == GamepadEdge.back) {
-      final intent = edge == GamepadEdge.menu
-          ? const SdtvMenuIntent()
-          : const SdtvBackIntent();
-      try {
-        final handled = Actions.maybeInvoke<Intent>(context, intent);
-        debugPrint('sdtv_input: $edge invoke handled=$handled');
-      } catch (e, st) {
-        debugPrint('sdtv_input: $edge failed: $e\n$st');
-      }
+      _callApp(edge);
       return;
     }
 
-    // Text fields: D-pad/stick = Tab traversal (not caret).
-    if (_primaryIsTextInput()) {
+    // Form fields: always Tab-order traversal for stick/D-pad.
+    if (SdtvTextFocusRegistry.primaryIsTextField) {
       switch (edge) {
         case GamepadEdge.down:
         case GamepadEdge.right:
-          _traverse(forward: true);
-          return;
-        case GamepadEdge.up:
-        case GamepadEdge.left:
-          _traverse(forward: false);
-          return;
+        case GamepadEdge.pageDown:
         case GamepadEdge.confirm:
           _traverse(forward: true);
           return;
+        case GamepadEdge.up:
+        case GamepadEdge.left:
         case GamepadEdge.pageUp:
           _traverse(forward: false);
           return;
-        case GamepadEdge.pageDown:
-          _traverse(forward: true);
-          return;
         case GamepadEdge.back:
         case GamepadEdge.menu:
-        case GamepadEdge.up:
-        case GamepadEdge.down:
-        case GamepadEdge.left:
-        case GamepadEdge.right:
           break;
       }
     }
+
+    final before = FocusManager.instance.primaryFocus;
 
     final Intent intent;
     switch (edge) {
@@ -186,12 +156,22 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
 
     final focusCtx = FocusManager.instance.primaryFocus?.context ?? context;
     try {
-      final handled = Actions.maybeInvoke(focusCtx, intent);
-      if (handled == null && edge == GamepadEdge.confirm) {
-        Actions.maybeInvoke(focusCtx, const ActivateIntent());
+      if (edge == GamepadEdge.confirm) {
+        final cbs = SdtvInputCallbacks.maybeOf(context);
+        // Prefer activating focused control via ActivateIntent / tile actions.
+        final activated = Actions.maybeInvoke(focusCtx, const ActivateIntent());
+        if (activated == null) {
+          Actions.maybeInvoke(focusCtx, intent);
+          cbs?.onConfirm?.call();
+        }
+        return;
       }
-      // If directional focus didn't move (e.g. form fields), fall back to Tab order.
-      if (handled == null &&
+
+      Actions.maybeInvoke(focusCtx, intent);
+
+      // If directional focus didn't move, Tab-order fallback (forms / lists).
+      final after = FocusManager.instance.primaryFocus;
+      if (identical(before, after) &&
           (edge == GamepadEdge.down ||
               edge == GamepadEdge.right ||
               edge == GamepadEdge.up ||
