@@ -17,7 +17,14 @@ class SdtvJoystickHub {
 
   String? get openPath => _reader?.openPath;
 
+  /// True once a `/dev/input/js*` device is open (nested scopes can skip startDelay).
+  bool get isOpen => _reader != null && _reader!.isOpen;
+
+  /// Number of stacked page listeners (topmost receives edges).
+  int get listenerCount => _listeners.length;
+
   Future<void> acquire(void Function(GamepadEdge) onEdge) async {
+    // Re-stack: remove then append so this listener becomes topmost immediately.
     _listeners.remove(onEdge);
     _listeners.add(onEdge);
     if (_reader != null) return;

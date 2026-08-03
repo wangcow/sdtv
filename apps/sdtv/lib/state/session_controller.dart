@@ -170,7 +170,11 @@ class SessionController extends ChangeNotifier {
   Future<void> playChannel(LiveChannel channel) async {
     final client = _client;
     if (client == null) return;
+    final previous = nowPlaying;
     nowPlaying = channel;
+    // Update HUD immediately (player page listens to session).
+    notifyListeners();
+
     // Demo/mock playlists use a public test stream (real video, no provider).
     // Live Xtream uses the provider URL when SDTV_ALLOW_LIVE=1.
     final Uri url;
@@ -179,6 +183,18 @@ class SessionController extends ChangeNotifier {
     } else {
       url = client.livePlayUrl(channel.streamId);
     }
+
+    // Demo: every mock channel shares one HLS. Don't restart playback on zap —
+    // just change the on-screen channel name (instant, no re-buffer).
+    if (useDemo &&
+        previous != null &&
+        player.currentUrl == url.toString() &&
+        (player.state == SdtvPlayerState.playing ||
+            player.state == SdtvPlayerState.paused ||
+            player.state == SdtvPlayerState.buffering)) {
+      return;
+    }
+
     await player.open(url);
     notifyListeners();
   }
@@ -186,10 +202,20 @@ class SessionController extends ChangeNotifier {
   Future<void> playAdjacent(int delta) async {
     final list = channelsInCategory;
     if (list.isEmpty || nowPlaying == null) return;
+    if (list.length == 1) {
+      // Single-channel category (News/Sports in mock): nothing to zap.
+      notifyListeners();
+      return;
+    }
     final idx = list.indexWhere((c) => c.streamId == nowPlaying!.streamId);
-    if (idx < 0) return;
+    if (idx < 0) {
+      await playChannel(list[0]);
+      return;
+    }
+    // Dart `%` can be negative; normalize into [0, length).
     final next = (idx + delta) % list.length;
-    final i = next < 0 ? list.length - 1 : next;
+    final i = next < 0 ? next + list.length : next;
+    if (i == idx) return;
     await playChannel(list[i]);
   }
 

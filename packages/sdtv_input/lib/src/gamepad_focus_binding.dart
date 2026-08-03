@@ -52,16 +52,27 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
 
   void _scheduleStart() {
     _startTimer?.cancel();
+    // If the hub is already open (e.g. player pushed over browse), take the
+    // top-of-stack immediately. A 400ms delay here left B/D-pad on the page
+    // underneath — felt like "stuck until I jam buttons".
+    final delay = SdtvJoystickHub.instance.isOpen
+        ? Duration.zero
+        : widget.startDelay;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !widget.enabled) return;
-      _startTimer = Timer(widget.startDelay, () {
+      if (delay == Duration.zero) {
+        unawaited(_acquire());
+        return;
+      }
+      _startTimer = Timer(delay, () {
         if (mounted && widget.enabled) unawaited(_acquire());
       });
     });
   }
 
   Future<void> _acquire() async {
-    if (!Platform.isLinux || _acquired) return;
+    if (!Platform.isLinux) return;
+    // Always re-stack even if we thought we were acquired (route re-show).
     try {
       await SdtvJoystickHub.instance.acquire(_onEdge);
       _acquired = true;
