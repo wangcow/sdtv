@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Build a self-contained Linux release for Steam Deck (bundles brew libmpv + deps).
+# Build a Deck-friendly Linux release: brew libmpv + media codecs only.
 #
-# Homebrew sometimes embeds *absolute* DT_NEEDED paths (e.g. mujs Cellar path).
-# Those ignore LD_LIBRARY_PATH/RPATH on the Deck — we rewrite them to basenames
-# and ensure soname symlinks exist next to each staged library.
+# Do NOT ship brew GTK / X11 / xkbcommon / mesa / fontconfig — those pull
+# Homebrew *data* paths (/home/linuxbrew/.../share/X11/xkb) and crash on Deck
+# with "Failed to create XKB keymap". Use the Deck's system UI stack.
+#
+# Homebrew sometimes embeds absolute DT_NEEDED (e.g. mujs Cellar). Rewrite
+# those to basenames and ensure soname symlinks exist in bundle/lib.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -37,6 +40,25 @@ if [[ ! -d "${LIBDIR}" ]]; then
   exit 1
 fi
 
+# Remove previously staged brew UI/graphics libs so a re-package is clean.
+# Keep Flutter/media_kit plugin .so and libapp.so.
+echo "Pruning stale brew UI/graphics libs from bundle/lib (if any)…"
+(
+  cd "${LIBDIR}"
+  # shellcheck disable=SC2086
+  rm -f \
+    libgtk* libgdk* libglib* libgobject* libgio* libgmodule* \
+    libpango* libcairo* libharfbuzz* libfontconfig* libfreetype* \
+    libepoxy* libatk* libatspi* libdbus* libfribidi* libthai* libdatrie* \
+    libxkbcommon* libX11* libXext* libXrandr* libXi* libXfixes* libXdamage* \
+    libXinerama* libXrender* libXau* libXdmcp* \
+    libxcb* libwayland* libEGL* libGL* libgbm* libgallium* libdrm* \
+    libvulkan* libLLVM* libSPIRV* libsensors* libz3* libpciaccess* \
+    libpulse* libpulsecommon* libpipewire* libasound* \
+    libffi* libpcre* libmount* libblkid* libexpat* libpng* \
+    libedit* libncurses* libelf* libgraphite* 2>/dev/null || true
+)
+
 is_brew_lib() {
   case "$1" in
     /home/linuxbrew/*|/home/*/linuxbrew/*|/var/home/*/linuxbrew/*) return 0 ;;
@@ -44,11 +66,43 @@ is_brew_lib() {
   esac
 }
 
+# Libraries that must come from the Deck/host (UI, input, GPU, session audio).
+# Matching is on the real basename (after readlink).
+is_host_only_lib() {
+  local base="$1"
+  case "${base}" in
+    # GTK / GLib stack (Flutter uses system GTK)
+    libgtk-*|libgdk-*|libgdk_pixbuf-*|libglib-*|libgobject-*|libgio-*|libgmodule-*|\
+    libpango-*|libpangocairo-*|libpangoft2-*|libcairo*|libharfbuzz*|\
+    libfontconfig*|libfreetype*|libepoxy*|libatk-*|libatspi*|libdbus-*|\
+    libfribidi*|libthai*|libdatrie*|libgraphite*)
+      return 0 ;;
+    # X11 / Wayland / xkb — need *system* share/X11/xkb data.
+    # Exception: libXpresent is a tiny X extension often missing on Deck; allow
+    # bundling it (no data files). Same for libXv / libXss if pulled by mpv only.
+    libxkbcommon*|libX11*|libXext*|libXrandr*|libXi*|libXfixes*|libXdamage*|\
+    libXinerama*|libXrender*|libXau*|libXdmcp*|libxcb*|libwayland*)
+      return 0 ;;
+    # GPU / mesa / vulkan — never ship brew mesa to Deck
+    libEGL*|libGL*|libgbm*|libgallium*|libdrm*|libvulkan*|libLLVM*|libSPIRV*|\
+    libsensors*|libz3*|libpciaccess*)
+      return 0 ;;
+    # Session audio servers (Deck PipeWire/Pulse)
+    libpulse*|libpipewire*|libasound*)
+      return 0 ;;
+    # Generic system libs — prefer host. Do NOT host-only libbz2: brew archive
+    # often needs libbz2.so.1.0 which SteamOS may not provide under that soname.
+    libffi*|libpcre*|libmount*|libblkid*|libexpat*|libpng*|\
+    libedit*|libncurses*|libelf*|libz.so*|libz-*)
+      return 0 ;;
+    *)
+      return 1 ;;
+  esac
+}
+
 # Collect absolute paths of brew .so files needed by a binary/library.
-# Handles both "lib => /path" and bare absolute NEEDED entries (mujs).
 collect_brew_deps() {
   local bin="$1"
-  # Prefer a full brew library search path so transitive deps resolve.
   local brew_lib
   brew_lib="$(brew --prefix)/lib"
   LD_LIBRARY_PATH="${brew_lib}:${LD_LIBRARY_PATH:-}" ldd "${bin}" 2>/dev/null | while read -r line; do
@@ -64,12 +118,16 @@ collect_brew_deps() {
     fi
     [[ -z "${path}" ]] && continue
     if is_brew_lib "${path}" && [[ -e "${path}" ]]; then
+      local base
+      base="$(basename "$(readlink -f "${path}")")"
+      if is_host_only_lib "${base}" || is_host_only_lib "$(basename "${path}")"; then
+        continue
+      fi
       echo "${path}"
     fi
   done
 }
 
-# Ensure soname + common short names point at the staged file.
 ensure_soname_links() {
   local dest="$1"
   local base
@@ -82,8 +140,6 @@ ensure_soname_links() {
     ln -sfn "${base}" "${LIBDIR}/${soname}"
   fi
 
-  # Also create unversioned / mid-version names when missing
-  # e.g. libfoo.so.4.0.0 -> libfoo.so.4, libfoo.so
   if [[ "${base}" =~ ^(lib.+\.so)(\.[0-9]+)(\.[0-9]+.*)?$ ]]; then
     local major="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
     local bare="${BASH_REMATCH[1]}"
@@ -98,6 +154,12 @@ copy_one() {
   real="$(readlink -f "${src}")"
   [[ -f "${real}" ]] || return 0
   base="$(basename "${real}")"
+
+  if is_host_only_lib "${base}" || is_host_only_lib "$(basename "${src}")"; then
+    echo "  skip (host): ${base}"
+    return 0
+  fi
+
   dest="${LIBDIR}/${base}"
 
   if [[ ! -e "${dest}" ]]; then
@@ -106,11 +168,8 @@ copy_one() {
     echo "  + ${base}"
   fi
 
-  # Always ensure soname links (even if file already existed)
   ensure_soname_links "${dest}"
 
-  # If the *source* path had a different basename (symlink name / absolute NEEDED),
-  # also stage that name so relative lookups work before patchelf rewrite.
   local src_base
   src_base="$(basename "${src}")"
   if [[ "${src_base}" != "${base}" && ! -e "${LIBDIR}/${src_base}" ]]; then
@@ -118,7 +177,6 @@ copy_one() {
   fi
 }
 
-# Rewrite absolute DT_NEEDED entries to basenames so Deck doesn't look in Cellar.
 rewrite_absolute_needed() {
   local elf="$1"
   [[ -f "${elf}" && ! -L "${elf}" ]] || return 0
@@ -130,18 +188,14 @@ rewrite_absolute_needed() {
       short="$(basename "${need}")"
       echo "  rewrite NEEDED: $(basename "${elf}"): ${need} -> ${short}"
       patchelf --replace-needed "${need}" "${short}" "${elf}"
-      # Ensure the short name exists in the bundle if we have the file.
-      if [[ ! -e "${LIBDIR}/${short}" ]]; then
-        # Try brew path first
-        if [[ -e "${need}" ]]; then
-          copy_one "${need}"
-        fi
+      if [[ ! -e "${LIBDIR}/${short}" && -e "${need}" ]]; then
+        copy_one "${need}"
       fi
     fi
   done < <(patchelf --print-needed "${elf}" 2>/dev/null || true)
 }
 
-echo "Staging Homebrew libraries into bundle/lib …"
+echo "Staging Homebrew *media* libraries into bundle/lib (not GTK/X11/mesa)…"
 
 declare -A SEEN=()
 QUEUE=()
@@ -149,39 +203,42 @@ QUEUE=()
 enqueue() {
   local p="$1"
   [[ -z "${p}" || ! -e "${p}" ]] && return
-  local real
+  local real base
   real="$(readlink -f "${p}")"
   [[ -f "${real}" ]] || return
+  base="$(basename "${real}")"
+  if is_host_only_lib "${base}" || is_host_only_lib "$(basename "${p}")"; then
+    return
+  fi
   [[ -n "${SEEN[$real]:-}" ]] && return
   SEEN[$real]=1
   QUEUE+=("${real}")
-  # Keep original path too for basename linking (mujs absolute NEEDED)
-  if [[ "${p}" != "${real}" ]]; then
-    # stored as real; copy_one handles basename of callers
-    :
-  fi
 }
 
+# Seed ONLY libmpv + known media deps. Do not walk sdtv's GTK deps.
 enqueue "${MPV_PREFIX}/lib/libmpv.so.2"
-# Explicit seeds for known absolute-NEEDED / often-missed deps
 for extra in \
   "$(brew --prefix mujs 2>/dev/null)/lib/libmujs.so" \
   "$(brew --prefix libbluray 2>/dev/null)/lib/libbluray.so" \
   "$(brew --prefix uchardet 2>/dev/null)/lib/libuchardet.so" \
   "$(brew --prefix jpeg-turbo 2>/dev/null)/lib/libjpeg.so" \
-  "$(brew --prefix libxpresent 2>/dev/null)/lib/libXpresent.so"
+  "$(brew --prefix libass 2>/dev/null)/lib/libass.so" \
+  "$(brew --prefix ffmpeg 2>/dev/null)/lib/libavcodec.so" \
+  "$(brew --prefix libplacebo 2>/dev/null)/lib/libplacebo.so" \
+  "$(brew --prefix libxpresent 2>/dev/null)/lib/libXpresent.so" \
+  "$(brew --prefix bzip2 2>/dev/null)/lib/libbz2.so"
 do
   [[ -n "${extra}" && -e "${extra}" ]] && enqueue "${extra}"
 done
 
-for f in "${LIBDIR}"/libmedia_kit*.so "${LIBDIR}"/libapp.so "${BUNDLE}/sdtv"; do
+# media_kit plugins may need libmpv only; still walk their brew deps if any
+for f in "${LIBDIR}"/libmedia_kit*.so; do
   [[ -f "${f}" ]] || continue
   while read -r dep; do
     enqueue "${dep}"
   done < <(collect_brew_deps "${f}")
 done
 
-# BFS: copy each lib and enqueue *its* brew deps
 i=0
 while [[ ${i} -lt ${#QUEUE[@]} ]]; do
   lib="${QUEUE[$i]}"
@@ -192,7 +249,6 @@ while [[ ${i} -lt ${#QUEUE[@]} ]]; do
   done < <(collect_brew_deps "${lib}")
 done
 
-# Ensure short libmpv names exist
 (
   cd "${LIBDIR}"
   REAL="$(ls libmpv.so.*.* 2>/dev/null | head -1 || true)"
@@ -203,12 +259,9 @@ done
     ln -sfn "${REAL}" libmpv.so.2
     ln -sfn libmpv.so.2 libmpv.so
   fi
-  # mujs often has no SONAME — guarantee plain name
   if [[ -f libmujs.so ]] || ls libmujs.so* >/dev/null 2>&1; then
     MUJS_REAL="$(ls -1 libmujs.so* 2>/dev/null | grep -v '^libmujs\.so$' | head -1 || true)"
-    if [[ -z "${MUJS_REAL}" && -f libmujs.so && ! -L libmujs.so ]]; then
-      : # already the real file named libmujs.so
-    elif [[ -n "${MUJS_REAL}" ]]; then
+    if [[ -n "${MUJS_REAL}" ]]; then
       ln -sfn "${MUJS_REAL}" libmujs.so
     fi
   fi
@@ -223,7 +276,6 @@ if [[ -f "${BUNDLE}/sdtv" ]]; then
   rewrite_absolute_needed "${BUNDLE}/sdtv"
 fi
 
-# Second pass: any newly enqueued deps from rewrites
 for so in "${LIBDIR}"/*.so "${LIBDIR}"/*.so.*; do
   [[ -f "${so}" && ! -L "${so}" ]] || continue
   while read -r dep; do
@@ -237,44 +289,68 @@ for so in "${LIBDIR}"/*.so "${LIBDIR}"/*.so.*; do
   done < <(collect_brew_deps "${so}")
 done
 
-# Re-ensure soname links for everything (new copies)
 for so in "${LIBDIR}"/*.so "${LIBDIR}"/*.so.*; do
   [[ -f "${so}" && ! -L "${so}" ]] || continue
   ensure_soname_links "${so}"
 done
 
-echo "Setting RPATH=\$ORIGIN on bundled libs and binary…"
+echo "Setting RPATH=\$ORIGIN on bundled media libs and binary…"
 for so in "${LIBDIR}"/*.so "${LIBDIR}"/*.so.*; do
   [[ -f "${so}" && ! -L "${so}" ]] || continue
+  # Flutter plugin / app libs can keep default; still set $ORIGIN for consistency
   patchelf --set-rpath '$ORIGIN' "${so}" 2>/dev/null || true
 done
 if [[ -f "${BUNDLE}/sdtv" ]]; then
   patchelf --set-rpath '$ORIGIN/lib' "${BUNDLE}/sdtv" 2>/dev/null || true
 fi
 
-# Wrapper: force bundled libs first (Deck has no brew Cellar)
+# Wrapper: media libs first, but force *system* XKB/fontconfig data paths.
+# Never leave LD_LIBRARY_PATH empty of system fallbacks for dlopen of GPU drivers.
 cat > "${BUNDLE}/run-sdtv.sh" <<'EOF'
 #!/bin/sh
 DIR="$(cd "$(dirname "$0")" && pwd)"
-# Bundled libs first — never search build-machine Homebrew paths
-export LD_LIBRARY_PATH="${DIR}/lib"
+
+# Bundled libmpv + codecs first. System dirs after so GTK/X11/mesa come from Deck.
+export LD_LIBRARY_PATH="${DIR}/lib:${LD_LIBRARY_PATH:-}"
+
+# Homebrew libxkbcommon/fontconfig bake Cellar *data* prefixes. Point at Deck OS.
+if [ -d /usr/share/X11/xkb ]; then
+  export XKB_CONFIG_ROOT=/usr/share/X11/xkb
+fi
+if [ -f /etc/fonts/fonts.conf ]; then
+  export FONTCONFIG_FILE=/etc/fonts/fonts.conf
+fi
+# Prefer system schemas if present
+if [ -d /usr/share/glib-2.0/schemas ]; then
+  export GSETTINGS_SCHEMA_DIR=/usr/share/glib-2.0/schemas
+fi
+
 exec "${DIR}/sdtv" "$@"
 EOF
 chmod +x "${BUNDLE}/run-sdtv.sh" "${BUNDLE}/sdtv"
 
-# Homebrew libs often ship mode 555; make everything user-writable so scp/rsync
-# can overwrite a previous install on the Deck without "Permission denied".
 echo "Making bundle user-writable (for re-deploy)…"
 chmod -R u+rwX "${BUNDLE}"
-# Symlinks don't need modes; real .so + binary stay executable
 find "${BUNDLE}" -type f \( -name '*.so' -o -name '*.so.*' -o -name 'sdtv' -o -name 'run-sdtv.sh' \) \
   -exec chmod u+rwx {} +
 
 echo ""
-echo "=== libmpv / mujs / bluray sonames in bundle ==="
-ls -la "${LIBDIR}"/libmpv* "${LIBDIR}"/libmujs* \
-  "${LIBDIR}"/libbluray* "${LIBDIR}"/libuchardet* \
-  "${LIBDIR}"/libjpeg* "${LIBDIR}"/libXpresent* 2>/dev/null || true
+echo "=== libmpv / mujs in bundle ==="
+ls -la "${LIBDIR}"/libmpv* "${LIBDIR}"/libmujs* 2>/dev/null || true
+
+echo ""
+echo "=== must NOT be bundled (host UI/GPU) ==="
+bad=0
+for pat in libgtk libxkbcommon libfontconfig libgallium libLLVM libEGL; do
+  if ls "${LIBDIR}"/${pat}* >/dev/null 2>&1; then
+    echo "UNEXPECTED: ${pat}* still in bundle:"
+    ls "${LIBDIR}"/${pat}* 2>/dev/null || true
+    bad=1
+  fi
+done
+if [[ "${bad}" -eq 0 ]]; then
+  echo "OK: no brew GTK/xkb/fontconfig/mesa in bundle"
+fi
 
 echo ""
 echo "=== absolute NEEDED remaining? ==="
@@ -293,33 +369,21 @@ if [[ "${abs_left}" -eq 0 ]]; then
 fi
 
 echo ""
-echo "=== smoke: ldd with only bundle lib (mpv) ==="
-# Unset brew RPATH influence by using only LD_LIBRARY_PATH
+echo "=== smoke: ldd libmpv with bundle lib first ==="
 smoke_out="$(LD_LIBRARY_PATH="${LIBDIR}" ldd "${LIBDIR}/libmpv.so.2" 2>&1 || true)"
 if echo "${smoke_out}" | grep -E 'not found|linuxbrew'; then
-  echo "WARNING: still missing or still pointing at brew paths:" >&2
+  echo "NOTE: unresolved under bundle-only (host libs OK on Deck):" >&2
   echo "${smoke_out}" | grep -E 'not found|linuxbrew' || true
 else
   echo "OK: no 'not found' / brew paths for libmpv under LD_LIBRARY_PATH=bundle/lib"
 fi
+echo "${smoke_out}" | grep -i mujs || true
 
-echo ""
-echo "=== smoke: mujs resolution ==="
-if echo "${smoke_out}" | grep -q 'libmujs'; then
-  echo "${smoke_out}" | grep 'libmujs'
-else
-  # After rewrite it should show as libmujs.so => .../bundle/lib/libmujs.so
-  LD_LIBRARY_PATH="${LIBDIR}" ldd "${LIBDIR}/libmpv.so.2" 2>&1 | grep -i mujs || echo "(no mujs line — check NEEDED)"
-  patchelf --print-needed "${LIBDIR}/libmpv.so.2" | grep -i mujs || true
-fi
-
-# Single-file tarball: atomic transfer avoids partial scp + permission fights
 DIST="${ROOT}/dist"
 mkdir -p "${DIST}"
 TARBALL="${DIST}/sdtv-deck.tar.gz"
 echo ""
 echo "Creating ${TARBALL} …"
-# Archive contents of bundle as top-level (sdtv, lib/, data/, run-sdtv.sh) — not a nested bundle/
 tar -C "${BUNDLE}" -czf "${TARBALL}" .
 ls -lh "${TARBALL}"
 
@@ -328,21 +392,12 @@ echo "=========================================="
 echo "Bundle ready: ${BUNDLE}"
 echo "Tarball:      ${TARBALL}"
 echo ""
-echo "Deploy to Deck (recommended — wipe old install first):"
-echo ""
-echo "  # On Deck (ssh or Konsole):"
-echo "  rm -rf ~/sdtv"
-echo "  mkdir -p ~/sdtv"
-echo ""
-echo "  # On build machine:"
+echo "On Deck — wipe old install, then:"
+echo "  rm -rf ~/sdtv && mkdir -p ~/sdtv"
+echo "  # from build machine:"
 echo "  scp ${TARBALL} deck@DECK_IP:~/sdtv-deck.tar.gz"
-echo ""
-echo "  # On Deck:"
+echo "  # on Deck:"
 echo "  tar -xzf ~/sdtv-deck.tar.gz -C ~/sdtv"
 echo "  chmod +x ~/sdtv/run-sdtv.sh ~/sdtv/sdtv"
 echo "  cd ~/sdtv && ./run-sdtv.sh"
-echo ""
-echo "Do NOT scp -r over an old install — read-only libs cause Permission denied"
-echo "and leave a half-updated tree (missing libmpv, stale absolute paths)."
-echo "Always use ./run-sdtv.sh, not ./sdtv directly."
 echo "=========================================="
