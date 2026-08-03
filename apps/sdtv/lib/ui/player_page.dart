@@ -16,7 +16,7 @@ class PlayerPage extends StatefulWidget {
   State<PlayerPage> createState() => _PlayerPageState();
 }
 
-class _PlayerPageState extends State<PlayerPage> {
+class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   bool _showHud = true;
   DateTime? _lastZapAt;
 
@@ -25,11 +25,16 @@ class _PlayerPageState extends State<PlayerPage> {
   /// input once bipbop frames started).
   Widget? _stableVideo;
 
+  /// Only show spinner after sustained buffering (avoid stuck/flash overlays).
+  bool _showBufferChrome = false;
+  Timer? _bufferChromeTimer;
+
   static const _zapCooldown = Duration(milliseconds: 280);
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     widget.session.player.addListener(_onTick);
     widget.session.addListener(_onTick);
     final vc = widget.session.player.videoController;
@@ -44,16 +49,53 @@ class _PlayerPageState extends State<PlayerPage> {
         ),
       );
     }
+    _syncBufferChrome(widget.session.player.state);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Deck sleep / return: mpv flags may desync from our UI state.
+    if (state == AppLifecycleState.resumed) {
+      widget.session.player.resyncState();
+      if (mounted) setState(() {});
+    }
   }
 
   void _onTick() {
     if (!mounted) return;
-    // HUD-only rebuild; video layer is a stable instance.
+    _syncBufferChrome(widget.session.player.state);
     setState(() {});
+  }
+
+  void _syncBufferChrome(SdtvPlayerState state) {
+    final want = state == SdtvPlayerState.opening ||
+        state == SdtvPlayerState.buffering;
+    if (!want) {
+      _bufferChromeTimer?.cancel();
+      _bufferChromeTimer = null;
+      _showBufferChrome = false;
+      return;
+    }
+    if (_showBufferChrome) return;
+    // Opening: show soon. Buffering mid-play: delay so brief rebuffers
+    // (and stuck buffering flags with audio still rolling) don't paint forever.
+    final delay = state == SdtvPlayerState.opening
+        ? const Duration(milliseconds: 200)
+        : const Duration(milliseconds: 900);
+    _bufferChromeTimer?.cancel();
+    _bufferChromeTimer = Timer(delay, () {
+      if (!mounted) return;
+      final s = widget.session.player.state;
+      if (s == SdtvPlayerState.opening || s == SdtvPlayerState.buffering) {
+        setState(() => _showBufferChrome = true);
+      }
+    });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _bufferChromeTimer?.cancel();
     widget.session.player.removeListener(_onTick);
     widget.session.removeListener(_onTick);
     super.dispose();
@@ -124,8 +166,7 @@ class _PlayerPageState extends State<PlayerPage> {
           children: [
             _stableVideo ?? const ColoredBox(color: Colors.black),
 
-            if (state == SdtvPlayerState.opening ||
-                state == SdtvPlayerState.buffering)
+            if (_showBufferChrome)
               const Center(
                 child: SizedBox(
                   width: 48,

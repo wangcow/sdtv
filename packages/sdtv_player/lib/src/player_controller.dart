@@ -27,6 +27,10 @@ abstract class SdtvPlayerController extends Listenable {
   Future<void> play();
   Future<void> pause();
   Future<void> stop();
+
+  /// Re-read native player flags into [state] (sleep/resume, stuck spinner).
+  void resyncState() {}
+
   @override
   Future<void> dispose();
 }
@@ -69,7 +73,8 @@ class StubSdtvPlayerController extends ChangeNotifier
 
   @override
   Future<void> pause() async {
-    if (_state == SdtvPlayerState.playing) {
+    if (_state == SdtvPlayerState.playing ||
+        _state == SdtvPlayerState.buffering) {
       _state = SdtvPlayerState.paused;
       notifyListeners();
     }
@@ -81,6 +86,9 @@ class StubSdtvPlayerController extends ChangeNotifier
     _url = null;
     notifyListeners();
   }
+
+  @override
+  void resyncState() {}
 
   @override
   Future<void> dispose() async {
@@ -95,7 +103,6 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   MediaKitSdtvPlayerController() {
     _player = Player(
       configuration: const PlayerConfiguration(
-        // Prefer low latency for live IPTV; still fine for VOD.
         bufferSize: 32 * 1024 * 1024,
         title: 'sdtv',
       ),
@@ -107,26 +114,25 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
       ),
     );
 
-    // Only notify on *state* transitions. media_kit can spam playing/buffering
-    // while frames render — each notify rebuilds the player page and makes
-    // gamepad feel dead (B only works while buffering).
-    _subs.add(_player.stream.playing.listen((playing) {
+    _subs.add(_player.stream.playing.listen((_) {
       if (_disposed) return;
-      final next = _player.state.buffering
-          ? SdtvPlayerState.buffering
-          : playing
-              ? SdtvPlayerState.playing
-              : (_url != null ? SdtvPlayerState.paused : SdtvPlayerState.idle);
-      if (playing) _error = null;
-      _setState(next);
+      _resyncFromNative();
     }));
 
-    _subs.add(_player.stream.buffering.listen((buffering) {
+    _subs.add(_player.stream.buffering.listen((_) {
       if (_disposed) return;
-      if (buffering) {
-        _setState(SdtvPlayerState.buffering);
-      } else if (_player.state.playing) {
-        _setState(SdtvPlayerState.playing);
+      _resyncFromNative();
+    }));
+
+    // Position ticks while audio/video advances — clears stuck "buffering" UI
+    // after long idle / brief rebuffer (bipbop still audible but spinner stuck).
+    _subs.add(_player.stream.position.listen((_) {
+      if (_disposed) return;
+      if (_state == SdtvPlayerState.buffering ||
+          _state == SdtvPlayerState.opening) {
+        if (_player.state.playing) {
+          _setState(SdtvPlayerState.playing);
+        }
       }
     }));
 
@@ -147,6 +153,53 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   String? _url;
   String? _error;
   bool _disposed = false;
+  Timer? _bufferStuckTimer;
+
+  /// Map media_kit/mpv flags → UI state.
+  ///
+  /// **Playing wins over buffering.** HLS often reports buffering=true while
+  /// still outputting audio; treating that as "buffering" left a forever
+  /// spinner after rebuffer / walk-away.
+  void _resyncFromNative() {
+    if (_disposed) return;
+    if (_url == null) {
+      _bufferStuckTimer?.cancel();
+      _setState(SdtvPlayerState.idle);
+      return;
+    }
+
+    final s = _player.state;
+    if (s.playing) {
+      _error = null;
+      _bufferStuckTimer?.cancel();
+      _setState(SdtvPlayerState.playing);
+      return;
+    }
+
+    if (s.buffering) {
+      _setState(SdtvPlayerState.buffering);
+      _armBufferStuckWatch();
+      return;
+    }
+
+    _bufferStuckTimer?.cancel();
+    _setState(SdtvPlayerState.paused);
+  }
+
+  void _armBufferStuckWatch() {
+    _bufferStuckTimer?.cancel();
+    _bufferStuckTimer = Timer(const Duration(seconds: 4), () {
+      if (_disposed) return;
+      if (_state != SdtvPlayerState.buffering) return;
+      // Native may have recovered without a clean buffering=false edge.
+      if (_player.state.playing) {
+        _setState(SdtvPlayerState.playing);
+        return;
+      }
+      // Last resort: re-read flags once more.
+      _resyncFromNative();
+    });
+  }
 
   void _setState(SdtvPlayerState next) {
     if (_state == next) return;
@@ -169,14 +222,18 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   Player get rawPlayer => _player;
 
   @override
+  void resyncState() => _resyncFromNative();
+
+  @override
   Future<void> open(Uri url) async {
     if (_disposed) return;
     _url = url.toString();
     _error = null;
+    _bufferStuckTimer?.cancel();
     _setState(SdtvPlayerState.opening);
     try {
       await _player.open(Media(url.toString()), play: true);
-      // State updates via streams.
+      _resyncFromNative();
     } catch (e, st) {
       _error = e.toString();
       _setState(SdtvPlayerState.error);
@@ -187,31 +244,31 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   @override
   Future<void> play() async {
     if (_disposed || _url == null) return;
-    // Optimistic UI — do not block pad handling on mpv.
     _setState(SdtvPlayerState.playing);
     try {
       await _player.play().timeout(const Duration(milliseconds: 800));
     } catch (e) {
       debugPrint('sdtv_player play: $e');
     }
+    _resyncFromNative();
   }
 
   @override
   Future<void> pause() async {
     if (_disposed) return;
-    // Optimistic pause so A feels instant even when the UI isolate is busy.
     _setState(SdtvPlayerState.paused);
     try {
       await _player.pause().timeout(const Duration(milliseconds: 800));
     } catch (e) {
       debugPrint('sdtv_player pause: $e');
     }
+    _resyncFromNative();
   }
 
   @override
   Future<void> stop() async {
     if (_disposed) return;
-    // Never block UI forever if libmpv stalls on stop (seen on Deck exit).
+    _bufferStuckTimer?.cancel();
     try {
       await _player.stop().timeout(const Duration(milliseconds: 900));
     } catch (e) {
@@ -224,6 +281,7 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   @override
   Future<void> dispose() async {
     _disposed = true;
+    _bufferStuckTimer?.cancel();
     for (final s in _subs) {
       await s.cancel();
     }
