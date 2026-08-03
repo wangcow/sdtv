@@ -15,7 +15,8 @@ class SdtvGamepadBinding extends StatefulWidget {
     super.key,
     required this.child,
     this.enabled = true,
-    this.startDelay = const Duration(milliseconds: 400),
+    /// Kept for API compat; handoff uses double post-frame, not a long delay.
+    this.startDelay = Duration.zero,
   });
 
   final Widget child;
@@ -26,8 +27,8 @@ class SdtvGamepadBinding extends StatefulWidget {
   State<SdtvGamepadBinding> createState() => _SdtvGamepadBindingState();
 }
 
-class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
-  Timer? _startTimer;
+class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
+    with WidgetsBindingObserver {
   bool _acquired = false;
   DateTime? _lastDirAt;
   DateTime? _lastConfirmAt;
@@ -37,6 +38,7 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     if (widget.enabled) _scheduleStart();
   }
 
@@ -50,40 +52,40 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
     }
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && widget.enabled) {
+      // Deck sleep / Steam overlay can drop js; reassert ownership.
+      unawaited(_acquire());
+    }
+  }
+
+  /// Wait until the previous page's dispose/release has run, then take the hub.
+  /// Avoids racing a closing `/dev/input/js*` (dead D-pad until player reopen).
   void _scheduleStart() {
-    _startTimer?.cancel();
-    // If the hub is already open (e.g. player pushed over browse), take the
-    // top-of-stack immediately. A 400ms delay here left B/D-pad on the page
-    // underneath — felt like "stuck until I jam buttons".
-    final delay = SdtvJoystickHub.instance.isOpen
-        ? Duration.zero
-        : widget.startDelay;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !widget.enabled) return;
-      if (delay == Duration.zero) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !widget.enabled) return;
         unawaited(_acquire());
-        return;
-      }
-      _startTimer = Timer(delay, () {
-        if (mounted && widget.enabled) unawaited(_acquire());
       });
     });
   }
 
   Future<void> _acquire() async {
-    if (!Platform.isLinux) return;
-    // Always re-stack even if we thought we were acquired (route re-show).
+    if (!Platform.isLinux || !widget.enabled) return;
     try {
       await SdtvJoystickHub.instance.acquire(_onEdge);
       _acquired = true;
+      debugPrint(
+        'sdtv_input: binding acquired (listeners=${SdtvJoystickHub.instance.listenerCount} open=${SdtvJoystickHub.instance.isOpen})',
+      );
     } catch (e, st) {
       debugPrint('sdtv_input: hub acquire failed: $e\n$st');
     }
   }
 
   Future<void> _release() async {
-    _startTimer?.cancel();
-    _startTimer = null;
     if (!_acquired) return;
     _acquired = false;
     await SdtvJoystickHub.instance.release(_onEdge);
@@ -205,6 +207,8 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    // Sync flag first so a racing schedule doesn't re-acquire after release.
     unawaited(_release());
     super.dispose();
   }
