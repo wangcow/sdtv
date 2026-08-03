@@ -19,13 +19,11 @@ class PlayerPage extends StatefulWidget {
 
 class _PlayerPageState extends State<PlayerPage> {
   bool _showHud = true;
-  bool _exiting = false;
   DateTime? _lastZapAt;
   SdtvPlayerState? _lastState;
   final FocusNode _rootFocus = FocusNode(debugLabel: 'player-root');
 
-  /// One channel step per physical gesture — stick noise must not 1↔2 spam.
-  static const _zapCooldown = Duration(milliseconds: 450);
+  static const _zapCooldown = Duration(milliseconds: 350);
 
   @override
   void initState() {
@@ -36,15 +34,13 @@ class _PlayerPageState extends State<PlayerPage> {
   }
 
   void _claimFocus() {
-    if (!mounted || _exiting) return;
+    if (!mounted) return;
     _rootFocus.requestFocus();
   }
 
   void _onTick() {
-    if (!mounted || _exiting) return;
+    if (!mounted) return;
     final st = widget.session.player.state;
-    // When bipbop actually starts, the video surface can steal focus / lag
-    // the tree — re-claim input once on the buffering→playing transition.
     if (_lastState != SdtvPlayerState.playing &&
         st == SdtvPlayerState.playing) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _claimFocus());
@@ -61,15 +57,17 @@ class _PlayerPageState extends State<PlayerPage> {
     super.dispose();
   }
 
+  /// Never latch a sticky "exiting" flag — that made B permanently dead.
   void _exit() {
-    if (_exiting || !mounted) return;
-    _exiting = true;
-    // Pop immediately — do not await mpv stop here (browse stops after pop).
-    Navigator.of(context).pop();
+    if (!mounted) return;
+    final nav = Navigator.of(context);
+    if (nav.canPop()) {
+      nav.pop();
+    }
   }
 
   Future<void> _togglePlay() async {
-    if (_exiting) return;
+    if (!mounted) return;
     final player = widget.session.player;
     final state = player.state;
     final url = player.currentUrl ?? '';
@@ -89,22 +87,21 @@ class _PlayerPageState extends State<PlayerPage> {
     } catch (e, st) {
       debugPrint('sdtv player toggle: $e\n$st');
     }
-    if (mounted && !_exiting) {
+    if (mounted) {
       setState(() => _showHud = true);
       _claimFocus();
     }
   }
 
   void _channel(int delta) {
-    if (_exiting) return;
+    if (!mounted) return;
     final now = DateTime.now();
     if (_lastZapAt != null && now.difference(_lastZapAt!) < _zapCooldown) {
       return;
     }
     _lastZapAt = now;
-    // Fire-and-forget; demo zap is sync name change.
     unawaited(widget.session.playAdjacent(delta));
-    if (mounted) setState(() => _showHud = true);
+    setState(() => _showHud = true);
   }
 
   @override
@@ -118,37 +115,23 @@ class _PlayerPageState extends State<PlayerPage> {
     final inCat = widget.session.channelsInCategory;
     final canZap = inCat.length > 1;
 
+    // Pushes a pad layer above browse — root SdtvGamepadBinding dispatches here.
     return SdtvInputScope(
       onBack: _exit,
       onMenu: _exit,
-      onConfirm: () {
-        unawaited(_togglePlay());
-      },
-      // Direct pad path (same reliability as B). Actions break once video plays.
+      onConfirm: () => unawaited(_togglePlay()),
       onDirection: (dir) {
         if (dir == TraversalDirection.up) {
           _channel(-1);
         } else if (dir == TraversalDirection.down) {
           _channel(1);
-        } else {
-          if (mounted) setState(() => _showHud = true);
+        } else if (mounted) {
+          setState(() => _showHud = true);
         }
       },
       onPageUp: () => _channel(-1),
       onPageDown: () => _channel(1),
       extraActions: {
-        SdtvChannelUpIntent: CallbackAction<SdtvChannelUpIntent>(
-          onInvoke: (_) {
-            _channel(1);
-            return null;
-          },
-        ),
-        SdtvChannelDownIntent: CallbackAction<SdtvChannelDownIntent>(
-          onInvoke: (_) {
-            _channel(-1);
-            return null;
-          },
-        ),
         SdtvPageUpIntent: CallbackAction<SdtvPageUpIntent>(
           onInvoke: (_) {
             _channel(-1);
@@ -167,22 +150,10 @@ class _PlayerPageState extends State<PlayerPage> {
               _channel(-1);
             } else if (intent.direction == TraversalDirection.down) {
               _channel(1);
-            } else if (mounted) {
-              setState(() => _showHud = true);
             }
             return null;
           },
         ),
-      },
-      extraShortcuts: {
-        const SingleActivator(LogicalKeyboardKey.channelUp):
-            const SdtvChannelUpIntent(),
-        const SingleActivator(LogicalKeyboardKey.channelDown):
-            const SdtvChannelDownIntent(),
-        const SingleActivator(LogicalKeyboardKey.escape):
-            const SdtvBackIntent(),
-        const SingleActivator(LogicalKeyboardKey.gameButtonB):
-            const SdtvBackIntent(),
       },
       child: Focus(
         focusNode: _rootFocus,
@@ -190,29 +161,31 @@ class _PlayerPageState extends State<PlayerPage> {
         canRequestFocus: true,
         skipTraversal: true,
         onKeyEvent: (node, event) {
-          // Keyboard / Steam-injected keys once the video surface is active.
-          if (event is KeyDownEvent) {
-            final k = event.logicalKey;
-            if (k == LogicalKeyboardKey.escape ||
-                k == LogicalKeyboardKey.gameButtonB ||
-                k == LogicalKeyboardKey.goBack) {
-              _exit();
-              return KeyEventResult.handled;
-            }
-            if (k == LogicalKeyboardKey.arrowUp ||
-                k == LogicalKeyboardKey.channelDown ||
-                k == LogicalKeyboardKey.pageUp ||
-                k == LogicalKeyboardKey.gameButtonLeft1) {
-              _channel(-1);
-              return KeyEventResult.handled;
-            }
-            if (k == LogicalKeyboardKey.arrowDown ||
-                k == LogicalKeyboardKey.channelUp ||
-                k == LogicalKeyboardKey.pageDown ||
-                k == LogicalKeyboardKey.gameButtonRight1) {
-              _channel(1);
-              return KeyEventResult.handled;
-            }
+          if (event is! KeyDownEvent) return KeyEventResult.ignored;
+          final k = event.logicalKey;
+          if (k == LogicalKeyboardKey.escape ||
+              k == LogicalKeyboardKey.gameButtonB ||
+              k == LogicalKeyboardKey.goBack) {
+            _exit();
+            return KeyEventResult.handled;
+          }
+          if (k == LogicalKeyboardKey.arrowUp ||
+              k == LogicalKeyboardKey.pageUp ||
+              k == LogicalKeyboardKey.gameButtonLeft1) {
+            _channel(-1);
+            return KeyEventResult.handled;
+          }
+          if (k == LogicalKeyboardKey.arrowDown ||
+              k == LogicalKeyboardKey.pageDown ||
+              k == LogicalKeyboardKey.gameButtonRight1) {
+            _channel(1);
+            return KeyEventResult.handled;
+          }
+          if (k == LogicalKeyboardKey.enter ||
+              k == LogicalKeyboardKey.space ||
+              k == LogicalKeyboardKey.gameButtonA) {
+            unawaited(_togglePlay());
+            return KeyEventResult.handled;
           }
           return KeyEventResult.ignored;
         },
@@ -227,8 +200,6 @@ class _PlayerPageState extends State<PlayerPage> {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                // Video must not take pointer or focus — that is when B dies
-                // after bipbop starts (buffering was fine).
                 if (vc != null)
                   ExcludeFocus(
                     child: IgnorePointer(
@@ -236,7 +207,6 @@ class _PlayerPageState extends State<PlayerPage> {
                         controller: vc,
                         controls: NoVideoControls,
                         fill: Colors.black,
-                        // Wakelock/etc. fine; keep surface passive for input.
                       ),
                     ),
                   )

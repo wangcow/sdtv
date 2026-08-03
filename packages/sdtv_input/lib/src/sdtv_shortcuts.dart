@@ -5,8 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import 'actions.dart';
-import 'gamepad_focus_binding.dart';
 import 'input_callbacks.dart';
+import 'pad_router.dart';
 
 /// True when we should open `/dev/input/js*`.
 ///
@@ -35,7 +35,6 @@ Map<ShortcutActivator, Intent> sdtvNavigationShortcuts() {
     const SingleActivator(LogicalKeyboardKey.arrowRight):
         const DirectionalFocusIntent(TraversalDirection.right),
 
-    // Tab must be NextFocus — Deck OSK Tab is useless otherwise.
     const SingleActivator(LogicalKeyboardKey.tab): const NextFocusIntent(),
     const SingleActivator(LogicalKeyboardKey.tab, shift: true):
         const PreviousFocusIntent(),
@@ -48,8 +47,6 @@ Map<ShortcutActivator, Intent> sdtvNavigationShortcuts() {
     const SingleActivator(LogicalKeyboardKey.gameButtonA):
         const SdtvConfirmIntent(),
 
-    // NOTE: Escape → Back. Some Steam layouts also emit Escape for ☰;
-    // browse page uses a system menu so that is still recoverable.
     const SingleActivator(LogicalKeyboardKey.escape): const SdtvBackIntent(),
     const SingleActivator(LogicalKeyboardKey.goBack): const SdtvBackIntent(),
     const SingleActivator(LogicalKeyboardKey.gameButtonB):
@@ -129,8 +126,12 @@ Map<Type, Action<Intent>> sdtvDefaultActions({
   };
 }
 
-/// Wraps [child] with sdtv shortcuts, actions, callbacks, and gamepad binding.
-class SdtvInputScope extends StatelessWidget {
+/// Registers pad handlers on [SdtvPadRouter] and provides keyboard Shortcuts.
+///
+/// Does **not** open `/dev/input/js*` — mount a single [SdtvGamepadBinding] at
+/// the app root (see [SdtvApp]). Nested scopes only push/pop layers so the
+/// player can sit on top of browse without fighting for the device.
+class SdtvInputScope extends StatefulWidget {
   const SdtvInputScope({
     super.key,
     required this.child,
@@ -142,7 +143,7 @@ class SdtvInputScope extends StatelessWidget {
     this.onPageDown,
     this.extraShortcuts = const {},
     this.extraActions = const {},
-    this.enableGamepad,
+    @Deprecated('Ignored — use app-root SdtvGamepadBinding') this.enableGamepad,
   });
 
   final Widget child;
@@ -157,33 +158,67 @@ class SdtvInputScope extends StatelessWidget {
   final bool? enableGamepad;
 
   @override
+  State<SdtvInputScope> createState() => _SdtvInputScopeState();
+}
+
+class _SdtvInputScopeState extends State<SdtvInputScope> {
+  final SdtvPadLayer _layer = SdtvPadLayer();
+
+  @override
+  void initState() {
+    super.initState();
+    _syncLayer();
+    SdtvPadRouter.instance.push(_layer);
+  }
+
+  @override
+  void didUpdateWidget(SdtvInputScope oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Only refresh callbacks — never re-push. Re-push would steal the top
+    // of the stack from a pushed route (player) whenever browse rebuilds.
+    _syncLayer();
+  }
+
+  @override
+  void dispose() {
+    SdtvPadRouter.instance.pop(_layer);
+    super.dispose();
+  }
+
+  void _syncLayer() {
+    _layer
+      ..onConfirm = widget.onConfirm
+      ..onBack = widget.onBack
+      ..onMenu = widget.onMenu
+      ..onDirection = widget.onDirection
+      ..onPageUp = widget.onPageUp
+      ..onPageDown = widget.onPageDown;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final padOn = enableGamepad ?? sdtvGamepadBindingEnabledByDefault();
     return SdtvInputCallbacks(
-      onConfirm: onConfirm,
-      onBack: onBack,
-      onMenu: onMenu,
-      onDirection: onDirection,
-      onPageUp: onPageUp,
-      onPageDown: onPageDown,
+      onConfirm: widget.onConfirm,
+      onBack: widget.onBack,
+      onMenu: widget.onMenu,
+      onDirection: widget.onDirection,
+      onPageUp: widget.onPageUp,
+      onPageDown: widget.onPageDown,
       child: Shortcuts(
         shortcuts: {
           ...sdtvNavigationShortcuts(),
-          ...extraShortcuts,
+          ...widget.extraShortcuts,
         },
         child: Actions(
           actions: {
             ...sdtvDefaultActions(
-              onConfirm: onConfirm,
-              onBack: onBack,
-              onMenu: onMenu,
+              onConfirm: widget.onConfirm,
+              onBack: widget.onBack,
+              onMenu: widget.onMenu,
             ),
-            ...extraActions,
+            ...widget.extraActions,
           },
-          child: SdtvGamepadBinding(
-            enabled: padOn,
-            child: child,
-          ),
+          child: widget.child,
         ),
       ),
     );
