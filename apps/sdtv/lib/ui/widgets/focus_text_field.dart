@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:sdtv_input/sdtv_input.dart';
 
-/// Focusable text field for couch login (keyboard, OSK, or gamepad).
+/// Focusable text field for couch login (keyboard, Deck OSK, or gamepad).
 class SdtvFocusTextField extends StatefulWidget {
   const SdtvFocusTextField({
     super.key,
@@ -39,7 +39,10 @@ class _SdtvFocusTextFieldState extends State<SdtvFocusTextField> {
     super.initState();
     _ownsFocus = widget.focusNode == null;
     _focus = widget.focusNode ?? FocusNode(debugLabel: widget.label);
-    _focus.addListener(_onFocusChange);
+    _focus
+      ..onKeyEvent = _onKeyEvent
+      ..addListener(_onFocusChange);
+    SdtvTextFocusRegistry.register(_focus);
   }
 
   void _onFocusChange() {
@@ -47,99 +50,104 @@ class _SdtvFocusTextFieldState extends State<SdtvFocusTextField> {
     if (has != _focused) setState(() => _focused = has);
   }
 
-  @override
-  void dispose() {
-    _focus.removeListener(_onFocusChange);
-    if (_ownsFocus) _focus.dispose();
-    super.dispose();
+  KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    final key = event.logicalKey;
+
+    // Deck OSK / hardware Tab
+    if (key == LogicalKeyboardKey.tab) {
+      final shift = HardwareKeyboard.instance.isShiftPressed;
+      if (shift) {
+        node.previousFocus();
+      } else {
+        _goNext(node);
+      }
+      return KeyEventResult.handled;
+    }
+
+    // Arrows leave the field (couch form navigation)
+    if (key == LogicalKeyboardKey.arrowDown ||
+        key == LogicalKeyboardKey.arrowRight) {
+      _goNext(node);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.arrowLeft) {
+      node.previousFocus();
+      return KeyEventResult.handled;
+    }
+
+    return KeyEventResult.ignored;
   }
 
-  void _goNext() {
-    final moved = _focus.nextFocus();
+  void _goNext(FocusNode node) {
+    final moved = node.nextFocus();
     if (!moved) {
       widget.onSubmitted?.call();
     }
   }
 
   @override
+  void dispose() {
+    SdtvTextFocusRegistry.unregister(_focus);
+    _focus.removeListener(_onFocusChange);
+    _focus.onKeyEvent = null;
+    if (_ownsFocus) _focus.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Actions(
-      actions: <Type, Action<Intent>>{
-        // D-pad / arrows while editing: leave field (Tab order).
-        DirectionalFocusIntent: CallbackAction<DirectionalFocusIntent>(
-          onInvoke: (intent) {
-            final forward = intent.direction == TraversalDirection.down ||
-                intent.direction == TraversalDirection.right;
-            if (forward) {
-              _goNext();
-            } else {
-              _focus.previousFocus();
-            }
-            return null;
-          },
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 120),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: _focused ? theme.colorScheme.primary : Colors.transparent,
+          width: 3,
         ),
-        NextFocusIntent: CallbackAction<NextFocusIntent>(
-          onInvoke: (_) {
-            _goNext();
-            return null;
-          },
-        ),
-        PreviousFocusIntent: CallbackAction<PreviousFocusIntent>(
-          onInvoke: (_) {
-            _focus.previousFocus();
-            return null;
-          },
-        ),
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 120),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: _focused ? theme.colorScheme.primary : Colors.transparent,
-            width: 3,
+        boxShadow: _focused
+            ? [
+                BoxShadow(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.35),
+                  blurRadius: 12,
+                ),
+              ]
+            : null,
+      ),
+      child: TextField(
+        focusNode: _focus,
+        controller: widget.controller,
+        obscureText: widget.obscureText,
+        keyboardType: widget.keyboardType,
+        autofocus: widget.autofocus,
+        style: theme.textTheme.titleMedium,
+        decoration: InputDecoration(
+          labelText: widget.label,
+          filled: true,
+          fillColor: theme.colorScheme.surfaceContainerHighest,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide.none,
           ),
-          boxShadow: _focused
-              ? [
-                  BoxShadow(
-                    color: theme.colorScheme.primary.withValues(alpha: 0.35),
-                    blurRadius: 12,
-                  ),
-                ]
-              : null,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
         ),
-        child: TextField(
-          focusNode: _focus,
-          controller: widget.controller,
-          obscureText: widget.obscureText,
-          keyboardType: widget.keyboardType,
-          autofocus: widget.autofocus,
-          style: theme.textTheme.titleMedium,
-          decoration: InputDecoration(
-            labelText: widget.label,
-            filled: true,
-            fillColor: theme.colorScheme.surfaceContainerHighest,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide.none,
-            ),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
-          ),
-          textInputAction: widget.textInputAction,
-          onEditingComplete: _goNext,
-          onSubmitted: (_) {
-            _goNext();
-            widget.onSubmitted?.call();
-          },
-        ),
+        textInputAction: widget.textInputAction,
+        onEditingComplete: () => _goNext(_focus),
+        onSubmitted: (_) {
+          _goNext(_focus);
+          widget.onSubmitted?.call();
+        },
       ),
     );
   }
 }
 
-/// Login form: gamepad + Tab traversal between fields.
+/// Login form scope with ordered focus + Tab.
 class SdtvLoginFormScope extends StatelessWidget {
   const SdtvLoginFormScope({
     super.key,
@@ -156,44 +164,13 @@ class SdtvLoginFormScope extends StatelessWidget {
   Widget build(BuildContext context) {
     return SdtvInputScope(
       onConfirm: () {
-        final primary = FocusManager.instance.primaryFocus;
-        // Don't submit while typing in a field — move to next instead.
-        if (primary?.context?.widget is EditableText) {
-          primary?.nextFocus();
-          return;
-        }
-        // Also detect EditableText under the focused node.
-        final ctx = primary?.context;
-        if (ctx != null &&
-            ctx.findAncestorWidgetOfExactType<EditableText>() != null) {
-          primary?.nextFocus();
+        if (SdtvTextFocusRegistry.primaryIsTextField) {
+          FocusManager.instance.primaryFocus?.nextFocus();
           return;
         }
         onSubmit?.call();
       },
       onBack: onBack,
-      extraShortcuts: {
-        // Deck OSK / physical Tab
-        const SingleActivator(LogicalKeyboardKey.tab): const NextFocusIntent(),
-        const SingleActivator(LogicalKeyboardKey.tab, shift: true):
-            const PreviousFocusIntent(),
-        const SingleActivator(LogicalKeyboardKey.enter):
-            const SdtvConfirmIntent(),
-      },
-      extraActions: {
-        NextFocusIntent: CallbackAction<NextFocusIntent>(
-          onInvoke: (_) {
-            FocusManager.instance.primaryFocus?.nextFocus();
-            return null;
-          },
-        ),
-        PreviousFocusIntent: CallbackAction<PreviousFocusIntent>(
-          onInvoke: (_) {
-            FocusManager.instance.primaryFocus?.previousFocus();
-            return null;
-          },
-        ),
-      },
       child: FocusTraversalGroup(
         policy: OrderedTraversalPolicy(),
         child: child,
