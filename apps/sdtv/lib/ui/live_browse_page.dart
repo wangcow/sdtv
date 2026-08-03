@@ -1,3 +1,5 @@
+import 'dart:io' show exit;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:sdtv_input/sdtv_input.dart';
@@ -35,6 +37,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   static const _menuItems = <({String id, String label, IconData icon})>[
     (id: 'about', label: 'About', icon: Icons.info_outline),
     (id: 'signout', label: 'Sign out', icon: Icons.logout),
+    (id: 'exit', label: 'Exit sdtv', icon: Icons.power_settings_new),
     (id: 'cancel', label: 'Cancel', icon: Icons.close),
   ];
 
@@ -256,7 +259,29 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     if (id == 'signout') {
       await session.signOut();
+      return;
     }
+    if (id == 'exit') {
+      await _exitApp();
+    }
+  }
+
+  /// Quit the process so Game Mode returns to Steam (no STEAM → Exit game).
+  Future<void> _exitApp() async {
+    try {
+      await session.stopPlayback(notify: false).timeout(
+            const Duration(seconds: 1),
+          );
+    } catch (e) {
+      debugPrint('sdtv: stop before exit: $e');
+    }
+    try {
+      await session.player.dispose().timeout(const Duration(seconds: 1));
+    } catch (e) {
+      debugPrint('sdtv: dispose before exit: $e');
+    }
+    // Linux desktop / Deck: SystemNavigator.pop is unreliable; exit the process.
+    exit(0);
   }
 
   @override
