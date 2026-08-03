@@ -194,7 +194,15 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     );
 
     if (!mounted) return;
-    await session.stopPlayback(notify: false);
+    // Timed stop — unbounded mpv stop after bipbop was freezing the UI on B.
+    try {
+      await session.stopPlayback(notify: false).timeout(
+            const Duration(seconds: 2),
+          );
+    } catch (e) {
+      debugPrint('sdtv: stop after player: $e');
+    }
+    if (!mounted) return;
     setState(() => _column = 1);
   }
 

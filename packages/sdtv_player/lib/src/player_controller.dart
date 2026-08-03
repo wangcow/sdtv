@@ -107,24 +107,26 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
       ),
     );
 
+    // Only notify on *state* transitions. media_kit can spam playing/buffering
+    // while frames render — each notify rebuilds the player page and makes
+    // gamepad feel dead (B only works while buffering).
     _subs.add(_player.stream.playing.listen((playing) {
       if (_disposed) return;
-      if (_player.state.buffering) {
-        _state = SdtvPlayerState.buffering;
-      } else if (playing) {
-        _state = SdtvPlayerState.playing;
-        _error = null;
-      } else if (_url != null) {
-        _state = SdtvPlayerState.paused;
-      }
-      notifyListeners();
+      final next = _player.state.buffering
+          ? SdtvPlayerState.buffering
+          : playing
+              ? SdtvPlayerState.playing
+              : (_url != null ? SdtvPlayerState.paused : SdtvPlayerState.idle);
+      if (playing) _error = null;
+      _setState(next);
     }));
 
     _subs.add(_player.stream.buffering.listen((buffering) {
       if (_disposed) return;
       if (buffering) {
-        _state = SdtvPlayerState.buffering;
-        notifyListeners();
+        _setState(SdtvPlayerState.buffering);
+      } else if (_player.state.playing) {
+        _setState(SdtvPlayerState.playing);
       }
     }));
 
@@ -132,8 +134,7 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
       if (_disposed) return;
       if (message.isEmpty) return;
       _error = message;
-      _state = SdtvPlayerState.error;
-      notifyListeners();
+      _setState(SdtvPlayerState.error);
       debugPrint('sdtv_player error: $message');
     }));
   }
@@ -146,6 +147,12 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   String? _url;
   String? _error;
   bool _disposed = false;
+
+  void _setState(SdtvPlayerState next) {
+    if (_state == next) return;
+    _state = next;
+    notifyListeners();
+  }
 
   @override
   SdtvPlayerState get state => _state;
@@ -166,15 +173,13 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
     if (_disposed) return;
     _url = url.toString();
     _error = null;
-    _state = SdtvPlayerState.opening;
-    notifyListeners();
+    _setState(SdtvPlayerState.opening);
     try {
       await _player.open(Media(url.toString()), play: true);
       // State updates via streams.
     } catch (e, st) {
       _error = e.toString();
-      _state = SdtvPlayerState.error;
-      notifyListeners();
+      _setState(SdtvPlayerState.error);
       debugPrint('sdtv_player open failed: $e\n$st');
     }
   }
@@ -194,12 +199,14 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   @override
   Future<void> stop() async {
     if (_disposed) return;
+    // Never block UI forever if libmpv stalls on stop (seen on Deck exit).
     try {
-      await _player.stop();
-    } catch (_) {}
+      await _player.stop().timeout(const Duration(milliseconds: 900));
+    } catch (e) {
+      debugPrint('sdtv_player stop: $e');
+    }
     _url = null;
-    _state = SdtvPlayerState.idle;
-    notifyListeners();
+    _setState(SdtvPlayerState.idle);
   }
 
   @override
@@ -210,7 +217,7 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
     }
     _subs.clear();
     try {
-      await _player.dispose();
+      await _player.dispose().timeout(const Duration(seconds: 2));
     } catch (_) {}
     super.dispose();
   }
