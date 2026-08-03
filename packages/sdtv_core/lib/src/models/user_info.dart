@@ -16,7 +16,12 @@ class UserInfo {
   final String? activeConnections;
   final String? maxConnections;
 
-  bool get isActive => status.toLowerCase() == 'active';
+  /// Many panels return `Active`; some omit status when OK.
+  bool get isActive {
+    final s = status.toLowerCase().trim();
+    if (s.isEmpty) return true;
+    return s == 'active' || s == 'true' || s == '1';
+  }
 
   factory UserInfo.fromPlayerApiJson(Map<String, dynamic> root) {
     final user = root['user_info'];

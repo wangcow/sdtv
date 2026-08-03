@@ -25,25 +25,30 @@ Import your Xtream Codes URL, username, and password → browse Live TV (Movies 
 
 ## Status
 
-**Phase 2 (playback).** Login → demo browse → **real video** via media_kit/libmpv. Demo uses a public test HLS stream. Live Xtream still behind `SDTV_ALLOW_LIVE=1`.
+**Phase 3 (live Xtream).** Deck MVP complete: demo/mock couch playback + packaging.  
+**Connect** uses your real Xtream Codes server (catalog + stream URLs). **Demo** stays offline fixtures + public test HLS.
 
-### Run (Phase 1)
+### Run
 
 ```bash
 source tool/bazzite-flutter-env.sh
 ./tool/run.sh
 ```
 
-1. **Continue with demo playlist** (no network).  
-2. Browse categories / channels with arrows or gamepad.  
-3. Open a channel → stub player (pause / prev / next / back).  
+1. **Continue with demo playlist** — offline mock catalog + bipbop HLS.  
+2. **Connect to provider** — real `player_api.php` + `/live/user/pass/id.ts` (try `.m3u8` on failure).  
+3. Gamepad: D-pad browse · A play/pause · B back · LB/RB channel.
 
 Optional env:
 
 | Variable | Meaning |
 |----------|---------|
 | `SDTV_ENABLE_GAMEPAD=0` | Disable joystick reader |
-| `SDTV_ALLOW_LIVE=1` | Hit real Xtream API (use carefully — ban risk) |
+| `SDTV_FORCE_MOCK=1` | Connect uses mock catalog (CI / offline) |
+| `SDTV_ALLOW_LIVE=0` | Legacy alias for force-mock |
+| `SDTV_DEMO_STREAM=url` | Override demo HLS URL |
+
+On Deck, put env in `~/sdtv/sdtv.env` next to `run-sdtv.sh` (see [docs/STEAM_DECK.md](docs/STEAM_DECK.md)).
 
 ## Repo layout
 

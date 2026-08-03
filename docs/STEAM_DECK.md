@@ -43,6 +43,24 @@ flutter pub get
 flutter run -d linux
 ```
 
+### Live Xtream on Deck
+
+**Connect to provider** uses your real panel (not demo). Enter:
+
+- Server: `http://host:port` (panel root — no `/player_api.php`)
+- Username / password from your provider
+
+Badge **LIVE** = real catalog + real stream URLs. Channel zap opens a new URL each time.
+
+Optional `~/sdtv/sdtv.env` (created by you, survives deploys if you re-add it):
+
+```bash
+# Offline / safe Connect without hitting provider:
+SDTV_FORCE_MOCK=1
+```
+
+Deploy wipes `~/sdtv` contents — keep a copy of `sdtv.env` if you use it.
+
 ### Fast Game Mode test loop (recommended)
 
 Stay in **Game Mode** on the Deck. Build and push from Bazzite over SSH — no Desktop typing each iteration.

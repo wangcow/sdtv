@@ -234,7 +234,8 @@ class _LoginPageState extends State<LoginPage> {
                             const SizedBox(height: 8),
                             Text(
                               'Player only — bring your own Xtream Codes credentials. '
-                              'Demo mode uses local mock data (no network).',
+                              'Demo uses offline mock data. Connect hits your real '
+                              'provider (URL + user + pass).',
                               style: theme.textTheme.bodyMedium,
                             ),
                             const SizedBox(height: 28),
@@ -249,7 +250,7 @@ class _LoginPageState extends State<LoginPage> {
                             ),
                             const SizedBox(height: 28),
                             Text(
-                              'OR ADD YOUR PLAYLIST',
+                              'OR CONNECT XTREAM CODES',
                               style: theme.textTheme.labelSmall?.copyWith(
                                 letterSpacing: 1.2,
                                 color: theme.colorScheme.outline,
@@ -295,7 +296,9 @@ class _LoginPageState extends State<LoginPage> {
                             const SizedBox(height: 20),
                             _SelectTile(
                               selected: _selected == 4,
-                              label: _busy ? 'Connecting…' : 'Connect',
+                              label: _busy
+                                  ? 'Connecting…'
+                                  : 'Connect to provider',
                               icon: Icons.login,
                               onTap: () {
                                 setState(() => _selected = 4);
