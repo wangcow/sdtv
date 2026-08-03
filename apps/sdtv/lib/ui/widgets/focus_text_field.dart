@@ -48,45 +48,62 @@ class _SdtvFocusTextFieldState extends State<SdtvFocusTextField> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 120),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: _focused ? theme.colorScheme.primary : Colors.transparent,
-          width: 3,
+    // Override directional focus so gamepad D-pad leaves the field (Tab-like)
+    // instead of moving the text caret forever.
+    return Actions(
+      actions: <Type, Action<Intent>>{
+        DirectionalFocusIntent: CallbackAction<DirectionalFocusIntent>(
+          onInvoke: (intent) {
+            switch (intent.direction) {
+              case TraversalDirection.down:
+              case TraversalDirection.right:
+                _focus.nextFocus();
+              case TraversalDirection.up:
+              case TraversalDirection.left:
+                _focus.previousFocus();
+            }
+            return null;
+          },
         ),
-        boxShadow: _focused
-            ? [
-                BoxShadow(
-                  color: theme.colorScheme.primary.withValues(alpha: 0.35),
-                  blurRadius: 12,
-                ),
-              ]
-            : null,
-      ),
-      child: TextField(
-        focusNode: _focus,
-        controller: widget.controller,
-        obscureText: widget.obscureText,
-        keyboardType: widget.keyboardType,
-        autofocus: widget.autofocus,
-        style: theme.textTheme.titleMedium,
-        decoration: InputDecoration(
-          labelText: widget.label,
-          filled: true,
-          fillColor: theme.colorScheme.surfaceContainerHighest,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: BorderSide.none,
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: _focused ? theme.colorScheme.primary : Colors.transparent,
+            width: 3,
           ),
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+          boxShadow: _focused
+              ? [
+                  BoxShadow(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.35),
+                    blurRadius: 12,
+                  ),
+                ]
+              : null,
         ),
-        textInputAction: TextInputAction.next,
-        onSubmitted: (_) => widget.onSubmitted?.call(),
-        // Enter on field when focused via gamepad confirm → submit
-        // is handled by Shortcuts at form level when not editing.
+        child: TextField(
+          focusNode: _focus,
+          controller: widget.controller,
+          obscureText: widget.obscureText,
+          keyboardType: widget.keyboardType,
+          autofocus: widget.autofocus,
+          style: theme.textTheme.titleMedium,
+          decoration: InputDecoration(
+            labelText: widget.label,
+            filled: true,
+            fillColor: theme.colorScheme.surfaceContainerHighest,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide.none,
+            ),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+          ),
+          textInputAction: TextInputAction.next,
+          onSubmitted: (_) => widget.onSubmitted?.call(),
+        ),
       ),
     );
   }
