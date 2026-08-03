@@ -4,7 +4,7 @@ import 'package:sdtv_player/sdtv_player.dart';
 
 import '../state/session_controller.dart';
 
-/// Fullscreen-ish player shell. Stub playback until media_kit is wired.
+/// Fullscreen player: media_kit [Video] surface + couch controls.
 class PlayerPage extends StatefulWidget {
   const PlayerPage({super.key, required this.session});
 
@@ -15,6 +15,8 @@ class PlayerPage extends StatefulWidget {
 }
 
 class _PlayerPageState extends State<PlayerPage> {
+  bool _showHud = true;
+
   @override
   void initState() {
     super.initState();
@@ -31,7 +33,6 @@ class _PlayerPageState extends State<PlayerPage> {
     super.dispose();
   }
 
-  /// B leaves the player immediately (do not sit on IDLE).
   void _exit() {
     if (!mounted) return;
     Navigator.of(context).pop();
@@ -44,18 +45,25 @@ class _PlayerPageState extends State<PlayerPage> {
     final player = widget.session.player;
     final state = player.state;
     final url = player.currentUrl ?? '';
+    final vc = player.videoController;
+    final err = player.lastError;
 
     return SdtvInputScope(
       onBack: _exit,
       onMenu: _exit,
       onConfirm: () async {
-        // A = pause / resume only (not B).
         if (state == SdtvPlayerState.playing) {
           await player.pause();
         } else if (state == SdtvPlayerState.paused ||
-            state == SdtvPlayerState.idle) {
-          await player.play();
+            state == SdtvPlayerState.idle ||
+            state == SdtvPlayerState.error) {
+          if (state == SdtvPlayerState.error && url.isNotEmpty) {
+            await player.open(Uri.parse(url));
+          } else {
+            await player.play();
+          }
         }
+        setState(() => _showHud = true);
       },
       extraActions: {
         SdtvChannelUpIntent: CallbackAction<SdtvChannelUpIntent>(
@@ -82,7 +90,6 @@ class _PlayerPageState extends State<PlayerPage> {
             return null;
           },
         ),
-        // D-pad up/down = channel zap while watching.
         DirectionalFocusIntent: CallbackAction<DirectionalFocusIntent>(
           onInvoke: (intent) {
             if (intent.direction == TraversalDirection.up) {
@@ -90,98 +97,131 @@ class _PlayerPageState extends State<PlayerPage> {
             } else if (intent.direction == TraversalDirection.down) {
               widget.session.playAdjacent(1);
             }
+            setState(() => _showHud = true);
             return null;
           },
         ),
       },
       child: Scaffold(
         backgroundColor: Colors.black,
-        body: SafeArea(
+        body: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => setState(() => _showHud = !_showHud),
           child: Stack(
+            fit: StackFit.expand,
             children: [
-              Positioned.fill(
-                child: Container(
-                  color: const Color(0xFF0A0A0C),
-                  child: Center(
+              // Video surface
+              if (vc != null)
+                Video(
+                  controller: vc,
+                  controls: NoVideoControls,
+                  fill: Colors.black,
+                )
+              else
+                const ColoredBox(color: Colors.black),
+
+              // Buffering / error / opening chrome
+              if (state == SdtvPlayerState.opening ||
+                  state == SdtvPlayerState.buffering)
+                const Center(
+                  child: SizedBox(
+                    width: 48,
+                    height: 48,
+                    child: CircularProgressIndicator(strokeWidth: 3),
+                  ),
+                ),
+              if (state == SdtvPlayerState.error)
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(32),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(
-                          Icons.live_tv,
-                          size: 96,
-                          color:
-                              theme.colorScheme.primary.withValues(alpha: 0.7),
+                        const Icon(Icons.error_outline,
+                            color: Colors.white70, size: 48),
+                        const SizedBox(height: 12),
+                        Text(
+                          'Playback error',
+                          style: theme.textTheme.titleLarge
+                              ?.copyWith(color: Colors.white),
                         ),
+                        if (err != null) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            err,
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.bodyMedium
+                                ?.copyWith(color: Colors.white54),
+                          ),
+                        ],
                         const SizedBox(height: 16),
                         Text(
-                          state.name.toUpperCase(),
-                          style: theme.textTheme.titleLarge?.copyWith(
-                            color: Colors.white70,
-                            letterSpacing: 2,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Stub player — media_kit / libmpv next',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: Colors.white54,
-                          ),
+                          'A retry · B back',
+                          style: theme.textTheme.bodySmall
+                              ?.copyWith(color: Colors.white38),
                         ),
                       ],
                     ),
                   ),
                 ),
-              ),
-              Positioned(
-                left: 24,
-                right: 24,
-                top: 24,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        ch?.name ?? 'No channel',
-                        style: theme.textTheme.headlineSmall?.copyWith(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
+
+              // HUD
+              if (_showHud) ...[
+                Positioned(
+                  left: 24,
+                  right: 24,
+                  top: MediaQuery.paddingOf(context).top + 16,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          ch?.name ?? 'No channel',
+                          style: theme.textTheme.headlineSmall?.copyWith(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            shadows: const [
+                              Shadow(blurRadius: 8, color: Colors.black),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                    Text(
-                      ch != null ? '#${ch.streamId}' : '',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        color: Colors.white54,
+                      Text(
+                        state.name.toUpperCase(),
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: Colors.white70,
+                          letterSpacing: 1.2,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              Positioned(
-                left: 24,
-                right: 24,
-                bottom: 24,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      url.isEmpty ? '' : url,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: Colors.white38,
-                        fontFamily: 'monospace',
+                Positioned(
+                  left: 24,
+                  right: 24,
+                  bottom: MediaQuery.paddingOf(context).bottom + 20,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (widget.session.useDemo)
+                        Text(
+                          'Demo stream (public test HLS)',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: Colors.white54,
+                          ),
+                        ),
+                      Text(
+                        'A pause/play · ↑↓ channel · B back',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: Colors.white70,
+                          shadows: const [
+                            Shadow(blurRadius: 6, color: Colors.black),
+                          ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'A pause/play · ↑↓ channel · B back to list',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: Colors.white70,
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
         ),
