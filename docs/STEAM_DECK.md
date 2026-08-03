@@ -56,8 +56,10 @@ bash tool/package-deck.sh
 
 That produces:
 
-- `apps/sdtv/build/linux/x64/release/bundle/` — full tree with brew `libmpv` + deps, soname links, absolute `DT_NEEDED` rewritten, `run-sdtv.sh`
+- `apps/sdtv/build/linux/x64/release/bundle/` — tree with brew **libmpv + codecs only** (not brew GTK/X11/mesa), soname links, absolute `DT_NEEDED` rewritten, `run-sdtv.sh`
 - `dist/sdtv-deck.tar.gz` — same tree as a single archive (preferred for transfer)
+
+`run-sdtv.sh` sets `LD_LIBRARY_PATH` to the bundled media libs **and** forces system data paths (`XKB_CONFIG_ROOT=/usr/share/X11/xkb`, `FONTCONFIG_FILE=/etc/fonts/fonts.conf`) so the app uses the Deck’s keyboard/font config. Shipping brew’s `libxkbcommon`/`libfontconfig` without those paths causes `Failed to create XKB keymap` / Fontconfig Cellar errors.
 
 #### Deploy (recommended)
 
