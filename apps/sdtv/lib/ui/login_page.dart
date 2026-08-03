@@ -18,6 +18,9 @@ class _LoginPageState extends State<LoginPage> {
   final _url = TextEditingController();
   final _user = TextEditingController();
   final _pass = TextEditingController();
+  final _urlFocus = FocusNode(debugLabel: 'url');
+  final _userFocus = FocusNode(debugLabel: 'user');
+  final _passFocus = FocusNode(debugLabel: 'pass');
   bool _busy = false;
   String? _localError;
 
@@ -26,6 +29,9 @@ class _LoginPageState extends State<LoginPage> {
     _url.dispose();
     _user.dispose();
     _pass.dispose();
+    _urlFocus.dispose();
+    _userFocus.dispose();
+    _passFocus.dispose();
     super.dispose();
   }
 
@@ -43,7 +49,10 @@ class _LoginPageState extends State<LoginPage> {
     final user = _user.text.trim();
     final pass = _pass.text;
     if (url.isEmpty || user.isEmpty || pass.isEmpty) {
-      setState(() => _localError = 'Enter server URL, username, and password — or use Demo.');
+      setState(
+        () => _localError =
+            'Enter server URL, username, and password — or use Demo.',
+      );
       return;
     }
     setState(() {
@@ -99,11 +108,14 @@ class _LoginPageState extends State<LoginPage> {
                           style: theme.textTheme.bodyMedium,
                         ),
                         const SizedBox(height: 28),
-                        SdtvFocusTile(
-                          label: 'Continue with demo playlist',
-                          icon: Icons.play_circle_outline,
-                          autofocus: true,
-                          onActivate: _busy ? null : _demo,
+                        FocusTraversalOrder(
+                          order: const NumericFocusOrder(0),
+                          child: SdtvFocusTile(
+                            label: 'Continue with demo playlist',
+                            icon: Icons.play_circle_outline,
+                            autofocus: true,
+                            onActivate: _busy ? null : _demo,
+                          ),
                         ),
                         const SizedBox(height: 28),
                         Text(
@@ -114,28 +126,44 @@ class _LoginPageState extends State<LoginPage> {
                           ),
                         ),
                         const SizedBox(height: 12),
-                        SdtvFocusTextField(
-                          controller: _url,
-                          label: 'Server URL (http://host:port)',
-                          keyboardType: TextInputType.url,
+                        FocusTraversalOrder(
+                          order: const NumericFocusOrder(1),
+                          child: SdtvFocusTextField(
+                            controller: _url,
+                            focusNode: _urlFocus,
+                            label: 'Server URL (http://host:port)',
+                            keyboardType: TextInputType.url,
+                          ),
                         ),
                         const SizedBox(height: 12),
-                        SdtvFocusTextField(
-                          controller: _user,
-                          label: 'Username',
+                        FocusTraversalOrder(
+                          order: const NumericFocusOrder(2),
+                          child: SdtvFocusTextField(
+                            controller: _user,
+                            focusNode: _userFocus,
+                            label: 'Username',
+                          ),
                         ),
                         const SizedBox(height: 12),
-                        SdtvFocusTextField(
-                          controller: _pass,
-                          label: 'Password',
-                          obscureText: true,
-                          onSubmitted: _busy ? null : _connect,
+                        FocusTraversalOrder(
+                          order: const NumericFocusOrder(3),
+                          child: SdtvFocusTextField(
+                            controller: _pass,
+                            focusNode: _passFocus,
+                            label: 'Password',
+                            obscureText: true,
+                            textInputAction: TextInputAction.done,
+                            onSubmitted: _busy ? null : _connect,
+                          ),
                         ),
                         const SizedBox(height: 20),
-                        SdtvFocusTile(
-                          label: _busy ? 'Connecting…' : 'Connect',
-                          icon: Icons.login,
-                          onActivate: _busy ? null : _connect,
+                        FocusTraversalOrder(
+                          order: const NumericFocusOrder(4),
+                          child: SdtvFocusTile(
+                            label: _busy ? 'Connecting…' : 'Connect',
+                            icon: Icons.login,
+                            onActivate: _busy ? null : _connect,
+                          ),
                         ),
                         if (err != null) ...[
                           const SizedBox(height: 20),

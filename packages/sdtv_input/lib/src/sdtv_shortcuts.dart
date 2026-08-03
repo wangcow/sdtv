@@ -57,6 +57,10 @@ Map<ShortcutActivator, Intent> sdtvNavigationShortcuts() {
         const SdtvMenuIntent(),
     const SingleActivator(LogicalKeyboardKey.gameButtonStart):
         const SdtvMenuIntent(),
+    // Some Deck/Steam layouts emit these for Options (☰).
+    const SingleActivator(LogicalKeyboardKey.gameButtonMode):
+        const SdtvMenuIntent(),
+    const SingleActivator(LogicalKeyboardKey.f1): const SdtvMenuIntent(),
 
     const SingleActivator(LogicalKeyboardKey.gameButtonLeft1):
         const SdtvPageUpIntent(),

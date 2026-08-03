@@ -235,7 +235,7 @@ class LiveBrowsePage extends StatelessWidget {
                   children: [
                     Expanded(
                       child: Text(
-                        'A play · B sign out · Start about',
+                        'A play · B sign out · ☰/Y about',
                         style: theme.textTheme.bodySmall,
                         overflow: TextOverflow.ellipsis,
                       ),
