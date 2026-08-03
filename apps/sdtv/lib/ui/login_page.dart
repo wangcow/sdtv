@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:sdtv_core/sdtv_core.dart';
@@ -136,9 +138,14 @@ class _LoginPageState extends State<LoginPage> {
 
     return SdtvInputScope(
       onConfirm: () {
-        if (!_busy) _activate();
+        if (!_busy) unawaited(_activate());
       },
       // All directions: change selection index only (no Flutter focus walk).
+      onDirection: (dir) {
+        final forward = dir == TraversalDirection.down ||
+            dir == TraversalDirection.right;
+        _nav(forward ? 1 : -1);
+      },
       extraActions: {
         DirectionalFocusIntent: CallbackAction<DirectionalFocusIntent>(
           onInvoke: (intent) {

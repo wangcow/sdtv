@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io' show exit;
 
 import 'package:flutter/material.dart';
@@ -297,7 +298,21 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     return SdtvInputScope(
       onBack: _onBack,
       onMenu: _openMenu,
-      onConfirm: _activate,
+      onConfirm: () {
+        unawaited(_activate());
+      },
+      onDirection: (dir) {
+        switch (dir) {
+          case TraversalDirection.up:
+            _moveVertical(-1);
+          case TraversalDirection.down:
+            _moveVertical(1);
+          case TraversalDirection.left:
+            _moveHorizontal(-1);
+          case TraversalDirection.right:
+            _moveHorizontal(1);
+        }
+      },
       extraActions: {
         DirectionalFocusIntent: CallbackAction<DirectionalFocusIntent>(
           onInvoke: (intent) {

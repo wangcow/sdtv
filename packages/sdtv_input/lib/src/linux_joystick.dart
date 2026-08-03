@@ -162,6 +162,10 @@ class LinuxJoystickReader {
       final pressed = value != 0;
       if (pressed) {
         if (_buttonsDown.add(number) && !isInit) {
+          // Cancel stick/hat hold so B is not drowned by direction spam.
+          _heldDir = null;
+          _repeatTimer?.cancel();
+          _repeatTimer = null;
           final edge = mapButton(number);
           if (edge != null) {
             debugPrint('sdtv_input: js button $number → $edge');

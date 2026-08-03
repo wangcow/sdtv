@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:sdtv_input/sdtv_input.dart';
 
 import 'state/session_controller.dart';
 import 'theme.dart';
@@ -34,11 +35,15 @@ class _SdtvAppState extends State<SdtvApp> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'sdtv',
-      debugShowCheckedModeBanner: false,
-      theme: sdtvDarkTheme,
-      home: _home(),
+    // One joystick owner for the whole app. Pages only push/pop pad layers
+    // (SdtvInputScope) so the player never fights browse for /dev/input/js*.
+    return SdtvGamepadBinding(
+      child: MaterialApp(
+        title: 'sdtv',
+        debugShowCheckedModeBanner: false,
+        theme: sdtvDarkTheme,
+        home: _home(),
+      ),
     );
   }
 
