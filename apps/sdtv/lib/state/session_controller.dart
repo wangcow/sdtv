@@ -15,7 +15,7 @@ enum SessionPhase {
   error,
 }
 
-/// Public HLS used in demo mode so the player can show real video without a provider.
+/// Public HLS used in demo / forced-mock mode.
 const kDemoPlaybackUri = String.fromEnvironment(
   'SDTV_DEMO_STREAM',
   defaultValue:
@@ -39,8 +39,7 @@ class SessionController extends ChangeNotifier {
   XtreamClient? _client;
   bool useDemo = true;
 
-  /// True when catalog/playback is fixture-based (not a real provider).
-  /// "Connect" without [SDTV_ALLOW_LIVE] still uses mock fixtures.
+  /// True when catalog/playback is fixture-based (demo or SDTV_FORCE_MOCK).
   bool mockCatalog = true;
 
   List<MediaCategory> categories = const [];
@@ -48,7 +47,7 @@ class SessionController extends ChangeNotifier {
   String? selectedCategoryId;
   LiveChannel? nowPlaying;
 
-  /// Badge / HUD: real HTTP Xtream only when live flag is on and not demo.
+  /// Real HTTP Xtream provider (not demo, not forced mock).
   bool get isLiveProvider => !useDemo && !mockCatalog;
 
   List<LiveChannel> get channelsInCategory {
@@ -110,6 +109,7 @@ class SessionController extends ChangeNotifier {
     }
   }
 
+  /// Connect to a provider (or mock if [SDTV_FORCE_MOCK]=1).
   Future<void> connectRemote(
     XtreamCredentials credentials, {
     bool save = true,
@@ -125,18 +125,19 @@ class SessionController extends ChangeNotifier {
         );
       }
 
-      // Default: mock catalog + demo HLS (safe). Real Xtream needs env flag.
-      // SDTV_ALLOW_LIVE=1 on the Deck launcher for true provider streams.
-      final allowLive = _envFlag('SDTV_ALLOW_LIVE');
+      // Product default: Connect = real Xtream.
+      // CI / safe offline: SDTV_FORCE_MOCK=1 (or legacy SDTV_ALLOW_LIVE=0).
+      final forceMock = _envFlag('SDTV_FORCE_MOCK') ||
+          _envIsFalse('SDTV_ALLOW_LIVE');
 
       final XtreamClient client;
       final bool mock;
-      if (allowLive) {
-        client = HttpXtreamClient(credentials: credentials);
-        mock = false;
-      } else {
+      if (forceMock) {
         client = await loadMockXtreamClient(credentials: credentials);
         mock = true;
+      } else {
+        client = HttpXtreamClient(credentials: credentials);
+        mock = false;
       }
       await _finishConnect(
         client,
@@ -167,6 +168,17 @@ class SessionController extends ChangeNotifier {
     final cats = await client.getLiveCategories();
     final streams = await client.getLiveStreams();
 
+    if (cats.isEmpty && streams.isEmpty) {
+      throw XtreamException('Login OK but no live categories or channels.');
+    }
+
+    // Close previous HTTP client if any.
+    try {
+      if (_client is HttpXtreamClient) {
+        (_client as HttpXtreamClient).close();
+      }
+    } catch (_) {}
+
     _client = client;
     userInfo = info;
     categories = cats;
@@ -196,29 +208,34 @@ class SessionController extends ChangeNotifier {
     if (client == null) return;
     final previous = nowPlaying;
     nowPlaying = channel;
-    // Update HUD immediately (player page listens to session).
     notifyListeners();
 
-    // Demo + mock catalog: public test HLS (never fake relative paths).
-    // Live provider: real Xtream URL when SDTV_ALLOW_LIVE=1.
-    final Uri url;
+    // Demo / forced mock: public test HLS.
     if (useDemo || mockCatalog) {
-      url = Uri.parse(kDemoPlaybackUri);
-    } else {
-      url = client.livePlayUrl(channel.streamId);
-    }
-
-    // Shared demo HLS: zap only changes the channel name (no re-open).
-    if ((useDemo || mockCatalog) &&
-        previous != null &&
-        player.currentUrl == url.toString() &&
-        (player.state == SdtvPlayerState.playing ||
-            player.state == SdtvPlayerState.paused ||
-            player.state == SdtvPlayerState.buffering)) {
+      final url = Uri.parse(kDemoPlaybackUri);
+      if (previous != null &&
+          player.currentUrl == url.toString() &&
+          (player.state == SdtvPlayerState.playing ||
+              player.state == SdtvPlayerState.paused ||
+              player.state == SdtvPlayerState.buffering)) {
+        return;
+      }
+      await player.open(url);
+      notifyListeners();
       return;
     }
 
-    await player.open(url);
+    // Live provider: real per-channel URL. Prefer .ts then fall back to .m3u8.
+    final ts = client.livePlayUrl(channel.streamId, extension: 'ts');
+    final m3u8 = client.livePlayUrl(channel.streamId, extension: 'm3u8');
+
+    await player.open(ts);
+    // Brief window for async open/error from libmpv.
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+    if (player.state == SdtvPlayerState.error) {
+      debugPrint('sdtv: .ts open failed, trying .m3u8');
+      await player.open(m3u8);
+    }
     notifyListeners();
   }
 
@@ -226,7 +243,6 @@ class SessionController extends ChangeNotifier {
     final list = channelsInCategory;
     if (list.isEmpty || nowPlaying == null) return;
     if (list.length == 1) {
-      // Single-channel category (News/Sports in mock): nothing to zap.
       notifyListeners();
       return;
     }
@@ -235,7 +251,6 @@ class SessionController extends ChangeNotifier {
       await playChannel(list[0]);
       return;
     }
-    // Dart `%` can be negative; normalize into [0, length).
     final next = (idx + delta) % list.length;
     final i = next < 0 ? next + list.length : next;
     if (i == idx) return;
@@ -253,7 +268,6 @@ class SessionController extends ChangeNotifier {
   }
 
   Future<void> signOut() async {
-    // Single notify at end — avoids rebuild storms mid-teardown (felt like a freeze).
     try {
       await stopPlayback(notify: false);
     } catch (_) {}
@@ -269,6 +283,8 @@ class SessionController extends ChangeNotifier {
     categories = const [];
     allChannels = const [];
     selectedCategoryId = null;
+    useDemo = true;
+    mockCatalog = true;
     try {
       await _settings.clearSession();
     } catch (e, st) {
@@ -287,12 +303,20 @@ class SessionController extends ChangeNotifier {
     return v == '1' || v == 'true' || v == 'yes';
   }
 
+  /// True when env is explicitly 0/false/no (used for legacy SDTV_ALLOW_LIVE=0).
+  bool _envIsFalse(String name) {
+    if (kIsWeb) return false;
+    final compile = String.fromEnvironment(name, defaultValue: '');
+    if (compile == '0' || compile.toLowerCase() == 'false') return true;
+    final v = Platform.environment[name]?.toLowerCase();
+    return v == '0' || v == 'false' || v == 'no';
+  }
+
   @override
   void dispose() {
     if (_client is HttpXtreamClient) {
       (_client as HttpXtreamClient).close();
     }
-    // Player dispose is async; fire-and-forget.
     player.dispose();
     super.dispose();
   }

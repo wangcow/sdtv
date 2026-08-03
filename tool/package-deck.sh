@@ -320,9 +320,17 @@ fi
 if [ -f /etc/fonts/fonts.conf ]; then
   export FONTCONFIG_FILE=/etc/fonts/fonts.conf
 fi
-# Prefer system schemas if present
 if [ -d /usr/share/glib-2.0/schemas ]; then
   export GSETTINGS_SCHEMA_DIR=/usr/share/glib-2.0/schemas
+fi
+
+# Optional overrides (create yourself; not in the tarball), e.g.:
+#   echo 'SDTV_FORCE_MOCK=1' > sdtv.env
+if [ -f "${DIR}/sdtv.env" ]; then
+  # shellcheck disable=SC1091
+  set -a
+  . "${DIR}/sdtv.env"
+  set +a
 fi
 
 exec "${DIR}/sdtv" "$@"

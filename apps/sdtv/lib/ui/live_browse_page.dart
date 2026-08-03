@@ -372,8 +372,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             session.useDemo
                                 ? 'DEMO'
                                 : session.mockCatalog
-                                    ? 'MOCK CATALOG'
-                                    : 'LIVE TV',
+                                    ? 'MOCK'
+                                    : 'LIVE',
                             style: theme.textTheme.labelSmall?.copyWith(
                               color: theme.colorScheme.primary,
                               fontWeight: FontWeight.w700,
@@ -603,12 +603,13 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             ),
                             const SizedBox(height: 12),
                             Text(
-                              'Live TV browse (MVP).\n'
-                              'Without SDTV_ALLOW_LIVE=1, Connect uses the '
-                              'mock catalog + public demo stream (not your '
-                              'provider).\n\n'
+                              'sdtv — Steam Deck IPTV player.\n'
+                              'Demo = offline mock. Connect = your Xtream '
+                              'provider (real catalog + streams).\n'
+                              'Media player only — you supply credentials.\n\n'
                               'Signed in as $user'
-                              '${session.useDemo ? ' (demo)' : session.mockCatalog ? ' (mock)' : ' (live)'}\n\n'
+                              '${session.useDemo ? ' (demo)' : session.mockCatalog ? ' (mock)' : ' (live)'}\n'
+                              'Channels: ${session.allChannels.length}\n\n'
                               'Product of the Wangcow Corporation\n'
                               'Apache License 2.0',
                               style: theme.textTheme.bodyMedium,

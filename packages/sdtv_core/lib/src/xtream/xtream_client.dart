@@ -18,23 +18,43 @@ abstract class XtreamClient {
 
 /// HTTP implementation of [XtreamClient] against a real provider.
 ///
-/// Prefer [MockXtreamClient] for CI and early development to avoid
-/// stressing or risking paid accounts.
+/// Prefer [MockXtreamClient] for CI and demo mode.
 class HttpXtreamClient implements XtreamClient {
   HttpXtreamClient({
     required this.credentials,
     http.Client? httpClient,
-    this.timeout = const Duration(seconds: 20),
+    this.timeout = const Duration(seconds: 25),
+    this.userAgent = 'sdtv/0.1 (Steam Deck; Flutter; libmpv)',
   }) : _http = httpClient ?? http.Client();
 
   final XtreamCredentials credentials;
   final http.Client _http;
   final Duration timeout;
+  final String userAgent;
+
+  Map<String, String> get _headers => {
+        'User-Agent': userAgent,
+        'Accept': 'application/json, text/plain, */*',
+      };
 
   @override
   Future<UserInfo> authenticate() async {
     final json = await _getJson(credentials.authQuery);
-    final info = UserInfo.fromPlayerApiJson(json);
+    if (json is! Map) {
+      throw XtreamException(
+        'Unexpected auth response (not a JSON object). '
+        'Check server URL ends at the panel root (no /player_api.php).',
+      );
+    }
+    final map = json is Map<String, dynamic>
+        ? json
+        : Map<String, dynamic>.from(json);
+    final info = UserInfo.fromPlayerApiJson(map);
+    if (info.username.isEmpty && info.status.isEmpty) {
+      throw XtreamException(
+        'Login failed — empty account info. Check URL, username, and password.',
+      );
+    }
     if (!info.isActive && info.status.isNotEmpty) {
       throw XtreamException('Account status: ${info.status}');
     }
@@ -67,17 +87,38 @@ class HttpXtreamClient implements XtreamClient {
 
   Future<dynamic> _getJson(Map<String, String> query) async {
     final uri = credentials.playerApiUri.replace(queryParameters: query);
-    final response = await _http.get(uri).timeout(timeout);
-    if (response.statusCode < 200 || response.statusCode >= 300) {
+    late final http.Response response;
+    try {
+      response = await _http.get(uri, headers: _headers).timeout(timeout);
+    } on Exception catch (e) {
       throw XtreamException(
-        'HTTP ${response.statusCode}',
+        'Network error reaching ${credentials.baseUrl}: $e',
+      );
+    }
+    if (response.statusCode == 401 || response.statusCode == 403) {
+      throw XtreamException(
+        'Auth rejected (HTTP ${response.statusCode}). Check username/password.',
         statusCode: response.statusCode,
       );
     }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw XtreamException(
+        'HTTP ${response.statusCode} from player_api.php',
+        statusCode: response.statusCode,
+      );
+    }
+    final body = response.body.trim();
+    if (body.isEmpty) {
+      throw XtreamException('Empty response from player_api.php');
+    }
     try {
-      return jsonDecode(response.body);
-    } on FormatException catch (e) {
-      throw XtreamException('Invalid JSON: $e');
+      return jsonDecode(body);
+    } on FormatException {
+      final preview =
+          body.length > 120 ? '${body.substring(0, 120)}…' : body;
+      throw XtreamException(
+        'Invalid JSON from player_api (got HTML or text?). Preview: $preview',
+      );
     }
   }
 
