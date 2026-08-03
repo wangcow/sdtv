@@ -1,62 +1,48 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 
+import 'joystick_isolate.dart';
 import 'linux_joystick.dart';
 
-/// Process-wide joystick owner. Nested scopes share one device; only the
-/// **topmost** (last acquired) listener receives events.
-///
-/// Open/close is serialized. A previous bug let a new page [acquire] while the
-/// old page was still disposing the device (`_reader != null` but already
-/// closing). The new page kept a dead hub until something else reopened it
-/// (e.g. opening the player) — D-pad dead after demo login / after sign-out.
+/// Process-wide joystick owner. Prefers a **background isolate** so media_kit
+/// video frames cannot starve pad reads on the UI isolate.
 class SdtvJoystickHub {
   SdtvJoystickHub._();
   static final SdtvJoystickHub instance = SdtvJoystickHub._();
 
-  LinuxJoystickReader? _reader;
-  StreamSubscription<GamepadEdge>? _sub;
   final _listeners = <void Function(GamepadEdge)>[];
+  final _iso = JoystickIsolate();
+  StreamSubscription<GamepadEdge>? _sub;
+  LinuxJoystickReader? _fallback;
+  StreamSubscription<GamepadEdge>? _fallbackSub;
   Future<void>? _opening;
   Future<void>? _closing;
 
-  String? get openPath => _reader?.openPath;
-
-  /// True when a live device pump is running.
-  bool get isOpen => _reader != null && _reader!.isOpen;
+  bool get isOpen =>
+      _iso.isRunning || (_fallback != null && _fallback!.isOpen);
 
   int get listenerCount => _listeners.length;
 
+  String? get openPath =>
+      _fallback?.openPath ?? (_iso.isRunning ? 'isolate' : null);
+
   Future<void> acquire(void Function(GamepadEdge) onEdge) async {
-    // Re-stack: this listener becomes topmost.
     _listeners.remove(onEdge);
     _listeners.add(onEdge);
     await _ensureOpen();
   }
 
-  /// Guarantee a live device while anyone is listening.
   Future<void> _ensureOpen() async {
-    // Wait out any in-flight close so we don't attach to a dying reader.
     final closing = _closing;
-    if (closing != null) {
-      await closing;
-    }
+    if (closing != null) await closing;
 
-    if (_reader != null && _reader!.isOpen) {
-      return;
-    }
-
-    // Stale reader object (closed pump) — drop it.
-    if (_reader != null) {
-      await _tearDownReader();
-    }
-
+    if (isOpen) return;
     if (_opening != null) {
       await _opening;
-      if (_reader != null && _reader!.isOpen) return;
+      return;
     }
-
     if (_listeners.isEmpty) return;
 
     _opening = _open();
@@ -68,74 +54,63 @@ class SdtvJoystickHub {
   }
 
   Future<void> _open() async {
-    // Retry once — previous page may still be releasing the fd for a beat.
+    final ok = await _iso.start();
+    if (ok) {
+      await _sub?.cancel();
+      _sub = _iso.events.listen(_deliver);
+      return;
+    }
+
     for (var attempt = 0; attempt < 3; attempt++) {
       if (_listeners.isEmpty) return;
       final reader = LinuxJoystickReader();
-      final ok = await reader.open();
-      if (ok) {
-        _reader = reader;
-        debugPrint('sdtv_input: hub open ${reader.openPath}');
-        _sub = reader.events.listen(
-          (edge) {
-            if (_listeners.isEmpty) return;
-            try {
-              _listeners.last(edge);
-            } catch (e, st) {
-              debugPrint('sdtv_input: hub listener error: $e\n$st');
-            }
-          },
-          onError: (Object e, StackTrace st) {
-            debugPrint('sdtv_input: hub stream error: $e\n$st');
-          },
-          onDone: () {
-            debugPrint('sdtv_input: hub stream done');
-            // Device gone — clear so next acquire reopens.
-            unawaited(_onPumpDone());
-          },
-        );
+      final opened = await reader.open();
+      if (opened) {
+        _fallback = reader;
+        debugPrint('sdtv_input: hub fallback open ${reader.openPath}');
+        _fallbackSub = reader.events.listen(_deliver);
         return;
       }
       await reader.dispose();
-      debugPrint('sdtv_input: hub open attempt ${attempt + 1} failed');
       await Future<void>.delayed(Duration(milliseconds: 80 * (attempt + 1)));
     }
-    debugPrint('sdtv_input: hub — no joystick under /dev/input/js*');
+    debugPrint('sdtv_input: hub — no joystick');
   }
 
-  Future<void> _onPumpDone() async {
-    // Only tear down if this is still our reader.
-    if (_listeners.isEmpty) {
-      await _tearDownReader();
-      return;
-    }
-    // Listeners still want input — reopen.
-    await _tearDownReader();
-    await _ensureOpen();
+  void _deliver(GamepadEdge edge) {
+    if (_listeners.isEmpty) return;
+    // Touch priority — do not wait behind video raster work.
+    SchedulerBinding.instance.scheduleTask(() {
+      if (_listeners.isEmpty) return;
+      try {
+        _listeners.last(edge);
+      } catch (e, st) {
+        debugPrint('sdtv_input: hub listener error: $e\n$st');
+      }
+    }, Priority.touch);
   }
 
-  Future<void> _tearDownReader() async {
+  Future<void> _tearDown() async {
     await _sub?.cancel();
     _sub = null;
-    final r = _reader;
-    _reader = null;
+    await _iso.stop();
+    await _fallbackSub?.cancel();
+    _fallbackSub = null;
+    final f = _fallback;
+    _fallback = null;
     try {
-      await r?.dispose();
+      await f?.dispose();
     } catch (_) {}
   }
 
   Future<void> release(void Function(GamepadEdge) onEdge) async {
     _listeners.remove(onEdge);
-    if (_listeners.isNotEmpty) {
-      // Another page still owns the stack; leave device open.
-      return;
-    }
-    // Last listener — close device (serialized with acquire).
+    if (_listeners.isNotEmpty) return;
     if (_closing != null) {
       await _closing;
       return;
     }
-    _closing = _tearDownReader().whenComplete(() {
+    _closing = _tearDown().whenComplete(() {
       debugPrint('sdtv_input: hub closed');
     });
     try {
@@ -145,7 +120,6 @@ class SdtvJoystickHub {
     }
   }
 
-  /// Force top-of-stack rebind + live device (call after route/phase changes).
   Future<void> reassert(void Function(GamepadEdge) onEdge) async {
     await acquire(onEdge);
   }
