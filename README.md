@@ -25,7 +25,25 @@ Import your Xtream Codes URL, username, and password → browse Live TV (Movies 
 
 ## Status
 
-**Phase 0 scaffold.** Controller playground + package layout + mock Xtream fixtures. Live playback and real providers are not wired yet.
+**Phase 1 (in progress).** Login → demo/mock live categories & channels → stub player (channel zap). Real libmpv decode and live Xtream (`SDTV_ALLOW_LIVE=1`) come next.
+
+### Run (Phase 1)
+
+```bash
+source tool/bazzite-flutter-env.sh
+./tool/run.sh
+```
+
+1. **Continue with demo playlist** (no network).  
+2. Browse categories / channels with arrows or gamepad.  
+3. Open a channel → stub player (pause / prev / next / back).  
+
+Optional env:
+
+| Variable | Meaning |
+|----------|---------|
+| `SDTV_ENABLE_GAMEPAD=0` | Disable joystick reader |
+| `SDTV_ALLOW_LIVE=1` | Hit real Xtream API (use carefully — ban risk) |
 
 ## Repo layout
 

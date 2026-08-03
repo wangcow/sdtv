@@ -1,23 +1,12 @@
 import 'package:flutter/material.dart';
 
-import 'theme.dart';
-import 'ui/controller_playground_page.dart';
+import 'app.dart';
+import 'services/settings_store.dart';
+import 'state/session_controller.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const SdtvApp());
-}
-
-class SdtvApp extends StatelessWidget {
-  const SdtvApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'sdtv',
-      debugShowCheckedModeBanner: false,
-      theme: sdtvDarkTheme,
-      home: const ControllerPlaygroundPage(),
-    );
-  }
+  final settings = await SettingsStore.open();
+  final session = SessionController(settings: settings);
+  runApp(SdtvApp(session: session));
 }
