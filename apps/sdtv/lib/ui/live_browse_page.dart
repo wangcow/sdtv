@@ -198,7 +198,33 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     setState(() => _column = 1);
   }
 
+  /// Hierarchical back: about → menu → categories ← channels ← (player pops itself).
+  /// Menu only when already on the category column.
+  void _onBack() {
+    if (_aboutOpen) {
+      setState(() => _aboutOpen = false);
+      return;
+    }
+    if (_menuOpen) {
+      setState(() => _menuOpen = false);
+      return;
+    }
+    // In channel list: step back to categories (don't open system menu).
+    if (_column == 1) {
+      if (!_acceptNav()) return;
+      setState(() => _column = 0);
+      _scrollTo(_catScroll, _catIndex);
+      return;
+    }
+    // Category list: open menu.
+    setState(() {
+      _menuOpen = true;
+      _menuIndex = 0;
+    });
+  }
+
   void _openMenu() {
+    // ☰ / Start always opens menu (or closes overlay if one is up).
     if (_aboutOpen) {
       setState(() => _aboutOpen = false);
       return;
@@ -236,7 +262,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         : cats[_catIndex.clamp(0, cats.length - 1)].categoryName;
 
     return SdtvInputScope(
-      onBack: _openMenu,
+      onBack: _onBack,
       onMenu: _openMenu,
       onConfirm: _activate,
       extraActions: {
@@ -424,7 +450,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                       ),
                     ),
                     child: Text(
-                      '↑↓ list · ←→ columns · A open · B menu',
+                      _column == 1
+                          ? '↑↓ channels · ← or B categories · A play · ☰ menu'
+                          : '↑↓ categories · → or A channels · B menu',
                       style: theme.textTheme.bodySmall,
                     ),
                   ),
