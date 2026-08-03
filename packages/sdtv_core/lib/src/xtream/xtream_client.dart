@@ -111,15 +111,73 @@ class HttpXtreamClient implements XtreamClient {
     if (body.isEmpty) {
       throw XtreamException('Empty response from player_api.php');
     }
-    try {
-      return jsonDecode(body);
-    } on FormatException {
-      final preview =
-          body.length > 120 ? '${body.substring(0, 120)}…' : body;
-      throw XtreamException(
-        'Invalid JSON from player_api (got HTML or text?). Preview: $preview',
-      );
+
+    // Happy path: JSON object/array.
+    if (body.startsWith('{') || body.startsWith('[')) {
+      try {
+        return jsonDecode(body);
+      } on FormatException catch (e) {
+        throw XtreamException('Invalid JSON from player_api: $e');
+      }
     }
+
+    // XUI.one and some panels return HTML error pages for bad logins
+    // (e.g. title "INVALID_CREDENTIALS") instead of JSON.
+    final htmlHint = _parseHtmlApiError(body);
+    if (htmlHint != null) {
+      throw XtreamException(htmlHint);
+    }
+
+    final preview = body.length > 100 ? '${body.substring(0, 100)}…' : body;
+    throw XtreamException(
+      'player_api did not return JSON. '
+      'URL tried: $uri — response starts with: $preview',
+    );
+  }
+
+  /// Map known panel HTML error pages to short user-facing messages.
+  static String? _parseHtmlApiError(String body) {
+    final lower = body.toLowerCase();
+    if (lower.contains('invalid_credentials') ||
+        lower.contains('username or password is invalid') ||
+        lower.contains('invalid username') ||
+        lower.contains('wrong username') ||
+        lower.contains('auth failed') ||
+        lower.contains('authentication failed')) {
+      return 'Username or password is invalid '
+          '(panel rejected login). Double-check both fields.';
+    }
+    if (lower.contains('expired') || lower.contains('account expired')) {
+      return 'Account expired on the provider panel.';
+    }
+    if (lower.contains('banned') || lower.contains('disabled')) {
+      return 'Account disabled or banned on the provider panel.';
+    }
+    if (lower.contains('max connections') ||
+        lower.contains('too many connections')) {
+      return 'Too many connections for this account.';
+    }
+    if (lower.contains('xui.one') || lower.contains('xui.one - debug')) {
+      // Generic XUI HTML error — try to pull <h2>…</h2>
+      final h2 = RegExp(
+        r'<h2[^>]*>\s*([^<]+?)\s*</h2>',
+        caseSensitive: false,
+      ).firstMatch(body);
+      if (h2 != null) {
+        final code = h2.group(1)!.trim();
+        if (code.isNotEmpty && code.toLowerCase() != 'xui.one') {
+          return 'Provider error: $code';
+        }
+      }
+      return 'Provider returned an HTML error page (not JSON). '
+          'Check username/password and that the server URL is correct.';
+    }
+    if (lower.contains('<html') || lower.contains('<!doctype')) {
+      return 'Server returned a web page instead of the Xtream API. '
+          'Confirm the URL is the panel host (e.g. http://host:port), '
+          'not a website homepage, and credentials are correct.';
+    }
+    return null;
   }
 
   List<T> _parseList<T>(
