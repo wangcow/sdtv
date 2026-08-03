@@ -1,0 +1,32 @@
+# Flatpak manifest stub — full Flutter + libmpv module wiring is Phase 1/2.
+# App ID: org.wangcow.SDTV
+#
+# Do not submit to Flathub until MVP Live TV is Deck-validated.
+#
+# Expected finish-args (controllers + GPU + network):
+app-id: org.wangcow.SDTV
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: sdtv
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --socket=pulseaudio
+  - --device=dri
+  # Controllers inside the sandbox — tighten later if possible
+  - --device=all
+  - --filesystem=xdg-config/sdtv:create
+modules:
+  # Placeholder: real module will build Flutter Linux release + bundle libmpv.
+  - name: sdtv-placeholder
+    buildsystem: simple
+    build-commands:
+      - echo "TODO: build Flutter release and install to /app/bin/sdtv" > /app/README.sdtv
+      - install -d /app/bin
+      - echo '#!/bin/sh' > /app/bin/sdtv
+      - echo 'echo "sdtv Flatpak build not assembled yet"' >> /app/bin/sdtv
+      - chmod +x /app/bin/sdtv
+    sources: []

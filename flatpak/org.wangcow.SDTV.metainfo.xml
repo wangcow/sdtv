@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.wangcow.SDTV</id>
+  <name>sdtv</name>
+  <summary>Steam Deck–first IPTV player with controller-native navigation</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <developer_name>Wangcow Corporation</developer_name>
+  <url type="homepage">https://wangcow.com</url>
+  <description>
+    <p>
+      sdtv is a media player for Linux and Steam Deck. Add your own Xtream Codes
+      server URL, username, and password to browse live TV with a TiviMate-like
+      interface designed for gamepad navigation in Steam Game Mode.
+    </p>
+    <p>
+      This application does not provide, host, or distribute any channels,
+      playlists, or media content. You must supply your own provider credentials.
+    </p>
+    <p>Product of the Wangcow Corporation.</p>
+  </description>
+  <launchable type="desktop-id">org.wangcow.SDTV.desktop</launchable>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Player</category>
+    <category>TV</category>
+  </categories>
+  <recommends>
+    <control>gamepad</control>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.1.0" date="2026-08-03">
+      <description>
+        <p>Initial scaffold: controller playground and project structure.</p>
+      </description>
+    </release>
+  </releases>
+</component>

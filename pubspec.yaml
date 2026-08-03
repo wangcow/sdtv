@@ -1,0 +1,12 @@
+name: sdtv_workspace
+description: Monorepo workspace for sdtv — Steam Deck–first IPTV player.
+publish_to: none
+
+environment:
+  sdk: ^3.8.0
+
+workspace:
+  - apps/sdtv
+  - packages/sdtv_core
+  - packages/sdtv_input
+  - packages/sdtv_player
