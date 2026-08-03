@@ -29,6 +29,8 @@ class SdtvGamepadBinding extends StatefulWidget {
 class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
   Timer? _startTimer;
   bool _acquired = false;
+  DateTime? _lastDirAt;
+  static const _dirCooldown = Duration(milliseconds: 160);
 
   @override
   void initState() {
@@ -108,6 +110,20 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
     if (edge == GamepadEdge.menu || edge == GamepadEdge.back) {
       _callApp(edge);
       return;
+    }
+
+    // Debounce directions: Steam Deck often sends js D-pad *and* a keyboard
+    // arrow for one physical press — without this, forms skip every other field.
+    final isDir = edge == GamepadEdge.up ||
+        edge == GamepadEdge.down ||
+        edge == GamepadEdge.left ||
+        edge == GamepadEdge.right;
+    if (isDir) {
+      final now = DateTime.now();
+      if (_lastDirAt != null && now.difference(_lastDirAt!) < _dirCooldown) {
+        return;
+      }
+      _lastDirAt = now;
     }
 
     // Always route directions through Actions so pages can override
