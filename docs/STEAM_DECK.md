@@ -43,58 +43,66 @@ flutter pub get
 flutter run -d linux
 ```
 
-### Shipping a release bundle to another Deck
+### Fast Game Mode test loop (recommended)
 
-On the **build machine** (Bazzite + Homebrew mpv):
+Stay in **Game Mode** on the Deck. Build and push from Bazzite over SSH — no Desktop typing each iteration.
+
+#### One-time Deck setup (Desktop Mode once)
+
+1. **Enable SSH** (Desktop → Konsole):
+   ```bash
+   passwd   # if you never set a password for user deck
+   sudo systemctl enable --now sshd
+   ```
+
+2. **SSH key from Bazzite** (skip password prompts):
+   ```bash
+   ssh-copy-id deck@DECK_IP
+   ssh deck@DECK_IP 'echo ok'
+   ```
+
+3. **First deploy + Non-Steam shortcut** (once):
+   ```bash
+   # on Bazzite
+   export SDTV_DECK_HOST=deck@DECK_IP
+   ./tool/deploy-deck.sh
+   ```
+   On Deck Desktop: Steam → **Add a Non-Steam Game** →  
+   `/home/deck/sdtv/run-sdtv.sh` → name it **sdtv**.  
+   Controller: **Gamepad** template (not Desktop).
+
+Return to Game Mode. Later deploys overwrite `~/sdtv` in place; the shortcut stays valid.
+
+#### Everyday (Deck stays in Game Mode)
 
 ```bash
 cd ~/Documents/Programming/projects/sdtv
-source tool/bazzite-flutter-env.sh
-# Needs: brew install mpv patchelf
-bash tool/package-deck.sh
+export SDTV_DECK_HOST=deck@192.168.1.180   # once per shell / add to ~/.bashrc
+
+./tool/deploy-deck.sh              # rebuild + upload + remote extract
+# ./tool/deploy-deck.sh --no-package   # re-push last tarball only
 ```
 
-That produces:
+On the Deck: **Exit game** if sdtv is open → launch **sdtv** from the library again.
 
-- `apps/sdtv/build/linux/x64/release/bundle/` — tree with brew **libmpv + codecs only** (not brew GTK/X11/mesa), soname links, absolute `DT_NEEDED` rewritten, `run-sdtv.sh`
-- `dist/sdtv-deck.tar.gz` — same tree as a single archive (preferred for transfer)
+| Flag | Meaning |
+|------|---------|
+| *(default)* | `package-deck.sh` + scp + extract to `~/sdtv` |
+| `--no-package` | Upload existing `dist/sdtv-deck.tar.gz` only |
+| `--package-only` | Build tarball, no network |
+| `--host deck@IP` | Target (else `$SDTV_DECK_HOST` or first arg) |
 
-`run-sdtv.sh` sets `LD_LIBRARY_PATH` to the bundled media libs **and** forces system data paths (`XKB_CONFIG_ROOT=/usr/share/X11/xkb`, `FONTCONFIG_FILE=/etc/fonts/fonts.conf`) so the app uses the Deck’s keyboard/font config. Shipping brew’s `libxkbcommon`/`libfontconfig` without those paths causes `Failed to create XKB keymap` / Fontconfig Cellar errors.
-
-#### Deploy (recommended)
-
-**Do not** `scp -r` over a previous install. Old brew libs are often read-only (`555`), so scp hits **Permission denied**, leaves a half-updated tree, and you still get `libmujs` / Cellar errors.
-
-On the **Deck** (ssh or Konsole):
+### Packaging details
 
 ```bash
-rm -rf ~/sdtv ~/Documents/sdtv
-mkdir -p ~/sdtv
+bash tool/package-deck.sh   # or just ./tool/deploy-deck.sh
 ```
 
-On the **build machine**:
+Produces brew **libmpv + codecs** (not brew GTK/X11/mesa), rewritten `DT_NEEDED`, and `run-sdtv.sh` (sets media `LD_LIBRARY_PATH` + system XKB/fontconfig paths).
 
-```bash
-scp dist/sdtv-deck.tar.gz deck@DECK_IP:~/sdtv-deck.tar.gz
-```
+Always launch **`run-sdtv.sh`**, not `./sdtv`. Prefer `./tool/deploy-deck.sh` over raw `scp -r` (avoids read-only lib Permission denied).
 
-On the **Deck**:
-
-```bash
-tar -xzf ~/sdtv-deck.tar.gz -C ~/sdtv
-chmod +x ~/sdtv/run-sdtv.sh ~/sdtv/sdtv
-cd ~/sdtv && ./run-sdtv.sh
-```
-
-Always launch with **`./run-sdtv.sh`**, not `./sdtv` — the wrapper sets `LD_LIBRARY_PATH` to the bundled `lib/` only.
-
-**Game Mode:** Steam → Add a Non-Steam Game → pick `~/sdtv/run-sdtv.sh`.
-
-If you still see `libmujs.so` / Cellar path errors:
-
-1. Confirm you wiped the old dir (`rm -rf`) before extract.
-2. Check `ls -la ~/sdtv/lib/libmpv* ~/sdtv/lib/libmujs*` — both must exist.
-3. Re-run `package-deck.sh` and redeploy the tarball.### Bazzite vs regular Fedora
+### Bazzite vs regular Fedora
 
 | | Bazzite (immutable) | Fedora Workstation |
 |--|---------------------|--------------------|
