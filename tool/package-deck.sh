@@ -260,7 +260,15 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 export LD_LIBRARY_PATH="${DIR}/lib"
 exec "${DIR}/sdtv" "$@"
 EOF
-chmod +x "${BUNDLE}/run-sdtv.sh"
+chmod +x "${BUNDLE}/run-sdtv.sh" "${BUNDLE}/sdtv"
+
+# Homebrew libs often ship mode 555; make everything user-writable so scp/rsync
+# can overwrite a previous install on the Deck without "Permission denied".
+echo "Making bundle user-writable (for re-deploy)…"
+chmod -R u+rwX "${BUNDLE}"
+# Symlinks don't need modes; real .so + binary stay executable
+find "${BUNDLE}" -type f \( -name '*.so' -o -name '*.so.*' -o -name 'sdtv' -o -name 'run-sdtv.sh' \) \
+  -exec chmod u+rwx {} +
 
 echo ""
 echo "=== libmpv / mujs / bluray sonames in bundle ==="
@@ -305,10 +313,36 @@ else
   patchelf --print-needed "${LIBDIR}/libmpv.so.2" | grep -i mujs || true
 fi
 
+# Single-file tarball: atomic transfer avoids partial scp + permission fights
+DIST="${ROOT}/dist"
+mkdir -p "${DIST}"
+TARBALL="${DIST}/sdtv-deck.tar.gz"
 echo ""
+echo "Creating ${TARBALL} …"
+# Archive contents of bundle as top-level (sdtv, lib/, data/, run-sdtv.sh) — not a nested bundle/
+tar -C "${BUNDLE}" -czf "${TARBALL}" .
+ls -lh "${TARBALL}"
+
+echo ""
+echo "=========================================="
 echo "Bundle ready: ${BUNDLE}"
-echo "Copy the *entire* bundle/ folder to the Deck, then:"
-echo "  ./run-sdtv.sh"
-echo "(or add run-sdtv.sh as a non-Steam game)"
+echo "Tarball:      ${TARBALL}"
 echo ""
-echo "Do NOT run ./sdtv directly — always use ./run-sdtv.sh so LD_LIBRARY_PATH is set."
+echo "Deploy to Deck (recommended — wipe old install first):"
+echo ""
+echo "  # On Deck (ssh or Konsole):"
+echo "  rm -rf ~/sdtv"
+echo "  mkdir -p ~/sdtv"
+echo ""
+echo "  # On build machine:"
+echo "  scp ${TARBALL} deck@DECK_IP:~/sdtv-deck.tar.gz"
+echo ""
+echo "  # On Deck:"
+echo "  tar -xzf ~/sdtv-deck.tar.gz -C ~/sdtv"
+echo "  chmod +x ~/sdtv/run-sdtv.sh ~/sdtv/sdtv"
+echo "  cd ~/sdtv && ./run-sdtv.sh"
+echo ""
+echo "Do NOT scp -r over an old install — read-only libs cause Permission denied"
+echo "and leave a half-updated tree (missing libmpv, stale absolute paths)."
+echo "Always use ./run-sdtv.sh, not ./sdtv directly."
+echo "=========================================="
