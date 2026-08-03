@@ -179,24 +179,40 @@ class SessionController extends ChangeNotifier {
     await playChannel(list[i]);
   }
 
-  Future<void> stopPlayback() async {
-    await player.stop();
+  Future<void> stopPlayback({bool notify = true}) async {
+    try {
+      await player.stop();
+    } catch (e, st) {
+      debugPrint('sdtv: stopPlayback error: $e\n$st');
+    }
     nowPlaying = null;
-    notifyListeners();
+    if (notify) notifyListeners();
   }
 
   Future<void> signOut() async {
-    await stopPlayback();
-    if (_client is HttpXtreamClient) {
-      (_client as HttpXtreamClient).close();
+    // Single notify at end — avoids rebuild storms mid-teardown (felt like a freeze).
+    try {
+      await stopPlayback(notify: false);
+    } catch (_) {}
+    try {
+      if (_client is HttpXtreamClient) {
+        (_client as HttpXtreamClient).close();
+      }
+    } catch (e, st) {
+      debugPrint('sdtv: client close error: $e\n$st');
     }
     _client = null;
     userInfo = null;
     categories = const [];
     allChannels = const [];
     selectedCategoryId = null;
-    await _settings.clearSession();
+    try {
+      await _settings.clearSession();
+    } catch (e, st) {
+      debugPrint('sdtv: clearSession error: $e\n$st');
+    }
     phase = SessionPhase.login;
+    errorMessage = null;
     notifyListeners();
   }
 

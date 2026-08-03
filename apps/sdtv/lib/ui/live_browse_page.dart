@@ -17,6 +17,76 @@ class LiveBrowsePage extends StatelessWidget {
     return 'All';
   }
 
+  /// Dialogs must not open a second joystick reader — disable gamepad there
+  /// and rely on the parent scope + keyboard/mouse for the modal.
+  static Future<void> _confirmSignOut(
+    BuildContext context,
+    SessionController session,
+  ) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => SdtvInputScope(
+        enableGamepad: false,
+        onBack: () => Navigator.of(ctx).pop(false),
+        child: AlertDialog(
+          title: const Text('Sign out?'),
+          content: const Text('Return to login and clear this session?'),
+          actions: [
+            SdtvFocusTile(
+              label: 'Cancel',
+              autofocus: true,
+              onActivate: () {
+                if (ctx.mounted) Navigator.of(ctx).pop(false);
+              },
+            ),
+            const SizedBox(height: 8),
+            SdtvFocusTile(
+              label: 'Sign out',
+              onActivate: () {
+                if (ctx.mounted) Navigator.of(ctx).pop(true);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok == true) {
+      await session.signOut();
+    }
+  }
+
+  static void _showAbout(BuildContext context, String user, bool useDemo) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => SdtvInputScope(
+        enableGamepad: false,
+        onBack: () => Navigator.of(ctx).pop(),
+        onConfirm: () => Navigator.of(ctx).pop(),
+        child: AlertDialog(
+          title: const Text('About sdtv'),
+          content: Text(
+            'Live TV browse (Phase 1).\n'
+            'Demo/mock catalog — no real streams until SDTV_ALLOW_LIVE=1.\n\n'
+            'Signed in as $user'
+            '${useDemo ? ' (demo)' : ''}\n\n'
+            'Product of the Wangcow Corporation\n'
+            'Apache License 2.0',
+          ),
+          actions: [
+            SdtvFocusTile(
+              label: 'Close',
+              autofocus: true,
+              onActivate: () {
+                if (ctx.mounted) Navigator.of(ctx).pop();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -26,58 +96,8 @@ class LiveBrowsePage extends StatelessWidget {
     final user = session.userInfo?.username ?? 'user';
 
     return SdtvInputScope(
-      onBack: () async {
-        final ok = await showDialog<bool>(
-          context: context,
-          builder: (ctx) => SdtvInputScope(
-            onBack: () => Navigator.pop(ctx, false),
-            child: AlertDialog(
-              title: const Text('Sign out?'),
-              content: const Text('Return to login and clear this session?'),
-              actions: [
-                SdtvFocusTile(
-                  label: 'Cancel',
-                  autofocus: true,
-                  onActivate: () => Navigator.pop(ctx, false),
-                ),
-                const SizedBox(height: 8),
-                SdtvFocusTile(
-                  label: 'Sign out',
-                  onActivate: () => Navigator.pop(ctx, true),
-                ),
-              ],
-            ),
-          ),
-        );
-        if (ok == true) await session.signOut();
-      },
-      onMenu: () {
-        showDialog<void>(
-          context: context,
-          builder: (ctx) => SdtvInputScope(
-            onBack: () => Navigator.pop(ctx),
-            onConfirm: () => Navigator.pop(ctx),
-            child: AlertDialog(
-              title: const Text('About sdtv'),
-              content: Text(
-                'Live TV browse (Phase 1).\n'
-                'Demo/mock catalog — no real streams until SDTV_ALLOW_LIVE=1.\n\n'
-                'Signed in as $user'
-                '${session.useDemo ? ' (demo)' : ''}\n\n'
-                'Product of the Wangcow Corporation\n'
-                'Apache License 2.0',
-              ),
-              actions: [
-                SdtvFocusTile(
-                  label: 'Close',
-                  autofocus: true,
-                  onActivate: () => Navigator.pop(ctx),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+      onBack: () => _confirmSignOut(context, session),
+      onMenu: () => _showAbout(context, user, session.useDemo),
       child: Scaffold(
         body: SafeArea(
           child: Column(

@@ -5,18 +5,17 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 import 'actions.dart';
+import 'joystick_hub.dart';
 import 'linux_joystick.dart';
 
-/// Binds [LinuxJoystickReader] to Flutter [Actions].
+/// Binds the shared [SdtvJoystickHub] to Flutter [Actions].
 ///
-/// Starts **only after** several frames so gamepad setup cannot block the
-/// native first-frame / window show path.
+/// Starts after the first frame. Nested scopes share one device open.
 class SdtvGamepadBinding extends StatefulWidget {
   const SdtvGamepadBinding({
     super.key,
     required this.child,
     this.enabled = true,
-    /// Delay after first frame before touching `/dev/input/js*`.
     this.startDelay = const Duration(milliseconds: 400),
   });
 
@@ -29,17 +28,13 @@ class SdtvGamepadBinding extends StatefulWidget {
 }
 
 class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
-  LinuxJoystickReader? _reader;
-  StreamSubscription<GamepadEdge>? _sub;
   Timer? _startTimer;
-  String _status = 'pad: off';
+  bool _acquired = false;
 
   @override
   void initState() {
     super.initState();
-    if (widget.enabled) {
-      _scheduleStart();
-    }
+    if (widget.enabled) _scheduleStart();
   }
 
   @override
@@ -48,65 +43,77 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
     if (widget.enabled && !oldWidget.enabled) {
       _scheduleStart();
     } else if (!widget.enabled && oldWidget.enabled) {
-      unawaited(_stop());
+      unawaited(_release());
     }
   }
 
   void _scheduleStart() {
     _startTimer?.cancel();
-    // Wait for the first frame, then an extra delay so the window is mapped.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !widget.enabled) return;
       _startTimer = Timer(widget.startDelay, () {
-        if (mounted && widget.enabled) unawaited(_start());
+        if (mounted && widget.enabled) unawaited(_acquire());
       });
     });
   }
 
-  Future<void> _start() async {
-    if (!Platform.isLinux) return;
+  Future<void> _acquire() async {
+    if (!Platform.isLinux || _acquired) return;
     try {
-      await _stop();
-      final reader = LinuxJoystickReader();
-      final ok = await reader.open();
-      if (!mounted) {
-        await reader.dispose();
-        return;
-      }
-      if (!ok) {
-        await reader.dispose();
-        _status = 'pad: none';
-        debugPrint('sdtv_input: no joystick device under /dev/input/js*');
-        return;
-      }
-      _reader = reader;
-      _status = 'pad: ${reader.openPath}';
-      debugPrint('sdtv_input: joystick open ${_status}');
-      _sub = reader.events.listen(
-        _onEdge,
-        onError: (Object e, StackTrace st) {
-          debugPrint('sdtv_input: joystick stream error: $e\n$st');
-        },
-      );
+      await SdtvJoystickHub.instance.acquire(_onEdge);
+      _acquired = true;
     } catch (e, st) {
-      // Never let pad setup take down the UI.
-      debugPrint('sdtv_input: joystick start failed: $e\n$st');
-      _status = 'pad: error';
+      debugPrint('sdtv_input: hub acquire failed: $e\n$st');
     }
   }
 
-  Future<void> _stop() async {
+  Future<void> _release() async {
     _startTimer?.cancel();
     _startTimer = null;
-    await _sub?.cancel();
-    _sub = null;
-    await _reader?.dispose();
-    _reader = null;
-    _status = 'pad: off';
+    if (!_acquired) return;
+    _acquired = false;
+    await SdtvJoystickHub.instance.release(_onEdge);
+  }
+
+  bool _primaryIsTextInput() {
+    final node = FocusManager.instance.primaryFocus;
+    if (node == null) return false;
+    final ctx = node.context;
+    if (ctx == null) return false;
+    // TextField focus lands on EditableText.
+    if (ctx.widget is EditableText) return true;
+    return ctx.findAncestorWidgetOfExactType<EditableText>() != null;
   }
 
   void _onEdge(GamepadEdge edge) {
     if (!mounted) return;
+
+    // Text fields trap DirectionalFocus for caret movement. For couch nav,
+    // treat stick/D-pad as Tab/Shift+Tab while a field is focused.
+    if (_primaryIsTextInput()) {
+      switch (edge) {
+        case GamepadEdge.down:
+        case GamepadEdge.right:
+          FocusManager.instance.primaryFocus?.nextFocus();
+          return;
+        case GamepadEdge.up:
+        case GamepadEdge.left:
+          FocusManager.instance.primaryFocus?.previousFocus();
+          return;
+        case GamepadEdge.confirm:
+          // Leave the field and activate default confirm on next frame if needed.
+          FocusManager.instance.primaryFocus?.nextFocus();
+          return;
+        case GamepadEdge.back:
+          FocusManager.instance.primaryFocus?.unfocus();
+          // Fall through to Back intent on the scope.
+          break;
+        case GamepadEdge.menu:
+        case GamepadEdge.pageUp:
+        case GamepadEdge.pageDown:
+          break;
+      }
+    }
 
     final Intent intent;
     switch (edge) {
@@ -143,12 +150,10 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
 
   @override
   void dispose() {
-    unawaited(_stop());
+    unawaited(_release());
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) => widget.child;
-
-  String get debugStatus => _status;
 }
