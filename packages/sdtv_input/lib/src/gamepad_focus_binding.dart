@@ -75,42 +75,89 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
     await SdtvJoystickHub.instance.release(_onEdge);
   }
 
+  /// True when focus is on a text field (or its EditableText child).
   bool _primaryIsTextInput() {
     final node = FocusManager.instance.primaryFocus;
     if (node == null) return false;
+
+    // Common: focus node is attached directly to EditableText.
     final ctx = node.context;
-    if (ctx == null) return false;
-    // TextField focus lands on EditableText.
-    if (ctx.widget is EditableText) return true;
-    return ctx.findAncestorWidgetOfExactType<EditableText>() != null;
+    if (ctx != null) {
+      if (ctx.widget is EditableText) return true;
+      if (ctx.findAncestorWidgetOfExactType<EditableText>() != null) {
+        return true;
+      }
+    }
+
+    // TextField often uses a parent FocusNode whose descendants include EditableText.
+    bool walk(FocusNode n) {
+      for (final child in n.children) {
+        final c = child.context;
+        if (c?.widget is EditableText) return true;
+        if (walk(child)) return true;
+      }
+      return false;
+    }
+
+    return walk(node);
+  }
+
+  /// Move focus like Tab / Shift+Tab (works better than DirectionalFocus in forms).
+  void _traverse({required bool forward}) {
+    final node = FocusManager.instance.primaryFocus;
+    if (node == null) return;
+    if (forward) {
+      node.nextFocus();
+    } else {
+      node.previousFocus();
+    }
   }
 
   void _onEdge(GamepadEdge edge) {
     if (!mounted) return;
 
-    // Text fields trap DirectionalFocus for caret movement. For couch nav,
-    // treat stick/D-pad as Tab/Shift+Tab while a field is focused.
+    // App-level intents must run on this scope (parent Actions), not the focused
+    // tile — otherwise Menu can fail to find a handler and feel like a no-op,
+    // or Steam remaps ☰ to Escape which only hits Back.
+    if (edge == GamepadEdge.menu || edge == GamepadEdge.back) {
+      final intent = edge == GamepadEdge.menu
+          ? const SdtvMenuIntent()
+          : const SdtvBackIntent();
+      try {
+        final handled = Actions.maybeInvoke<Intent>(context, intent);
+        debugPrint('sdtv_input: $edge invoke handled=$handled');
+      } catch (e, st) {
+        debugPrint('sdtv_input: $edge failed: $e\n$st');
+      }
+      return;
+    }
+
+    // Text fields: D-pad/stick = Tab traversal (not caret).
     if (_primaryIsTextInput()) {
       switch (edge) {
         case GamepadEdge.down:
         case GamepadEdge.right:
-          FocusManager.instance.primaryFocus?.nextFocus();
+          _traverse(forward: true);
           return;
         case GamepadEdge.up:
         case GamepadEdge.left:
-          FocusManager.instance.primaryFocus?.previousFocus();
+          _traverse(forward: false);
           return;
         case GamepadEdge.confirm:
-          // Leave the field and activate default confirm on next frame if needed.
-          FocusManager.instance.primaryFocus?.nextFocus();
+          _traverse(forward: true);
+          return;
+        case GamepadEdge.pageUp:
+          _traverse(forward: false);
+          return;
+        case GamepadEdge.pageDown:
+          _traverse(forward: true);
           return;
         case GamepadEdge.back:
-          FocusManager.instance.primaryFocus?.unfocus();
-          // Fall through to Back intent on the scope.
-          break;
         case GamepadEdge.menu:
-        case GamepadEdge.pageUp:
-        case GamepadEdge.pageDown:
+        case GamepadEdge.up:
+        case GamepadEdge.down:
+        case GamepadEdge.left:
+        case GamepadEdge.right:
           break;
       }
     }
@@ -142,6 +189,16 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
       final handled = Actions.maybeInvoke(focusCtx, intent);
       if (handled == null && edge == GamepadEdge.confirm) {
         Actions.maybeInvoke(focusCtx, const ActivateIntent());
+      }
+      // If directional focus didn't move (e.g. form fields), fall back to Tab order.
+      if (handled == null &&
+          (edge == GamepadEdge.down ||
+              edge == GamepadEdge.right ||
+              edge == GamepadEdge.up ||
+              edge == GamepadEdge.left)) {
+        _traverse(
+          forward: edge == GamepadEdge.down || edge == GamepadEdge.right,
+        );
       }
     } catch (e, st) {
       debugPrint('sdtv_input: invoke $edge failed: $e\n$st');

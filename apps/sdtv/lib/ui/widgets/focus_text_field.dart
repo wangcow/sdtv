@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:sdtv_input/sdtv_input.dart';
 
-/// Focusable text field for couch login (keyboard or OSK).
+/// Focusable text field for couch login (keyboard, OSK, or gamepad).
 class SdtvFocusTextField extends StatefulWidget {
   const SdtvFocusTextField({
     super.key,
@@ -11,7 +11,9 @@ class SdtvFocusTextField extends StatefulWidget {
     this.obscureText = false,
     this.keyboardType,
     this.autofocus = false,
+    this.focusNode,
     this.onSubmitted,
+    this.textInputAction = TextInputAction.next,
   });
 
   final TextEditingController controller;
@@ -19,7 +21,9 @@ class SdtvFocusTextField extends StatefulWidget {
   final bool obscureText;
   final TextInputType? keyboardType;
   final bool autofocus;
+  final FocusNode? focusNode;
   final VoidCallback? onSubmitted;
+  final TextInputAction textInputAction;
 
   @override
   State<SdtvFocusTextField> createState() => _SdtvFocusTextFieldState();
@@ -27,41 +31,63 @@ class SdtvFocusTextField extends StatefulWidget {
 
 class _SdtvFocusTextFieldState extends State<SdtvFocusTextField> {
   late final FocusNode _focus;
+  late final bool _ownsFocus;
   bool _focused = false;
 
   @override
   void initState() {
     super.initState();
-    _focus = FocusNode(debugLabel: widget.label);
-    _focus.addListener(() {
-      final has = _focus.hasFocus;
-      if (has != _focused) setState(() => _focused = has);
-    });
+    _ownsFocus = widget.focusNode == null;
+    _focus = widget.focusNode ?? FocusNode(debugLabel: widget.label);
+    _focus.addListener(_onFocusChange);
+  }
+
+  void _onFocusChange() {
+    final has = _focus.hasFocus;
+    if (has != _focused) setState(() => _focused = has);
   }
 
   @override
   void dispose() {
-    _focus.dispose();
+    _focus.removeListener(_onFocusChange);
+    if (_ownsFocus) _focus.dispose();
     super.dispose();
+  }
+
+  void _goNext() {
+    final moved = _focus.nextFocus();
+    if (!moved) {
+      widget.onSubmitted?.call();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // Override directional focus so gamepad D-pad leaves the field (Tab-like)
-    // instead of moving the text caret forever.
     return Actions(
       actions: <Type, Action<Intent>>{
+        // D-pad / arrows while editing: leave field (Tab order).
         DirectionalFocusIntent: CallbackAction<DirectionalFocusIntent>(
           onInvoke: (intent) {
-            switch (intent.direction) {
-              case TraversalDirection.down:
-              case TraversalDirection.right:
-                _focus.nextFocus();
-              case TraversalDirection.up:
-              case TraversalDirection.left:
-                _focus.previousFocus();
+            final forward = intent.direction == TraversalDirection.down ||
+                intent.direction == TraversalDirection.right;
+            if (forward) {
+              _goNext();
+            } else {
+              _focus.previousFocus();
             }
+            return null;
+          },
+        ),
+        NextFocusIntent: CallbackAction<NextFocusIntent>(
+          onInvoke: (_) {
+            _goNext();
+            return null;
+          },
+        ),
+        PreviousFocusIntent: CallbackAction<PreviousFocusIntent>(
+          onInvoke: (_) {
+            _focus.previousFocus();
             return null;
           },
         ),
@@ -101,15 +127,19 @@ class _SdtvFocusTextFieldState extends State<SdtvFocusTextField> {
             contentPadding:
                 const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
           ),
-          textInputAction: TextInputAction.next,
-          onSubmitted: (_) => widget.onSubmitted?.call(),
+          textInputAction: widget.textInputAction,
+          onEditingComplete: _goNext,
+          onSubmitted: (_) {
+            _goNext();
+            widget.onSubmitted?.call();
+          },
         ),
       ),
     );
   }
 }
 
-/// Wraps a form so A/Enter on a focused non-text control submits.
+/// Login form: gamepad + Tab traversal between fields.
 class SdtvLoginFormScope extends StatelessWidget {
   const SdtvLoginFormScope({
     super.key,
@@ -126,17 +156,46 @@ class SdtvLoginFormScope extends StatelessWidget {
   Widget build(BuildContext context) {
     return SdtvInputScope(
       onConfirm: () {
-        // If a TextField has focus, let it handle Enter; otherwise submit.
         final primary = FocusManager.instance.primaryFocus;
-        if (primary?.context?.widget is EditableText) return;
+        // Don't submit while typing in a field — move to next instead.
+        if (primary?.context?.widget is EditableText) {
+          primary?.nextFocus();
+          return;
+        }
+        // Also detect EditableText under the focused node.
+        final ctx = primary?.context;
+        if (ctx != null &&
+            ctx.findAncestorWidgetOfExactType<EditableText>() != null) {
+          primary?.nextFocus();
+          return;
+        }
         onSubmit?.call();
       },
       onBack: onBack,
-      child: Shortcuts(
-        shortcuts: {
-          const SingleActivator(LogicalKeyboardKey.enter):
-              const SdtvConfirmIntent(),
-        },
+      extraShortcuts: {
+        // Deck OSK / physical Tab
+        const SingleActivator(LogicalKeyboardKey.tab): const NextFocusIntent(),
+        const SingleActivator(LogicalKeyboardKey.tab, shift: true):
+            const PreviousFocusIntent(),
+        const SingleActivator(LogicalKeyboardKey.enter):
+            const SdtvConfirmIntent(),
+      },
+      extraActions: {
+        NextFocusIntent: CallbackAction<NextFocusIntent>(
+          onInvoke: (_) {
+            FocusManager.instance.primaryFocus?.nextFocus();
+            return null;
+          },
+        ),
+        PreviousFocusIntent: CallbackAction<PreviousFocusIntent>(
+          onInvoke: (_) {
+            FocusManager.instance.primaryFocus?.previousFocus();
+            return null;
+          },
+        ),
+      },
+      child: FocusTraversalGroup(
+        policy: OrderedTraversalPolicy(),
         child: child,
       ),
     );

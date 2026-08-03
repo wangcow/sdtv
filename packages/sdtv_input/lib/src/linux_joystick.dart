@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
+
 /// Semantic pad events produced from Linux joystick devices (`/dev/input/js*`).
 enum GamepadEdge {
   up,
@@ -49,20 +51,31 @@ class LinuxJoystickReader {
   String? get openPath => _openPath;
   String? _openPath;
 
-  /// Xpad / standard Xbox layout on Linux.
-  /// Button: 0=A 1=B 2=X 3=Y 4=LB 5=RB 6=Select 7=Start
+  /// Linux joystick button indices vary by driver (xpad vs Steam Deck).
+  ///
+  /// Common xpad/XInput-ish: 0=A 1=B 2=X 3=Y 4=LB 5=RB 6=Select 7=Start
+  /// Deck/Steam often also use 6/7 for View/Options (☰), sometimes 8+ for guide.
   /// Axis: 0=LX 1=LY 6=DpadX 7=DpadY
   static GamepadEdge? mapButton(int number) {
     switch (number) {
-      case 0:
+      case 0: // A / South
         return GamepadEdge.confirm;
-      case 1:
+      case 1: // B / East
         return GamepadEdge.back;
-      case 4:
+      case 3: // Y / North — secondary "menu/about" (handy on Deck)
+        return GamepadEdge.menu;
+      case 4: // LB
         return GamepadEdge.pageUp;
-      case 5:
+      case 5: // RB
         return GamepadEdge.pageDown;
-      case 7:
+      case 6: // Select / View (…) — treat as menu, NOT back
+        return GamepadEdge.menu;
+      case 7: // Start / Options (☰)
+        return GamepadEdge.menu;
+      case 8: // Guide / mode on some stacks
+      case 9:
+      case 10:
+      case 11:
         return GamepadEdge.menu;
       default:
         return null;
@@ -139,7 +152,12 @@ class LinuxJoystickReader {
       if (pressed) {
         if (_buttonsDown.add(number) && !isInit) {
           final edge = mapButton(number);
-          if (edge != null) _emit(edge);
+          if (edge != null) {
+            debugPrint('sdtv_input: js button $number → $edge');
+            _emit(edge);
+          } else {
+            debugPrint('sdtv_input: js button $number (unmapped)');
+          }
         }
       } else {
         _buttonsDown.remove(number);
