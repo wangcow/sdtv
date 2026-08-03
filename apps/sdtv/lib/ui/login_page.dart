@@ -121,6 +121,14 @@ class _LoginPageState extends State<LoginPage> {
       );
       return;
     }
+    if (!XtreamCredentials.isPlausibleServerUrl(url)) {
+      setState(
+        () => _localError =
+            'Server URL must be like http://host:8080 (not a short placeholder). '
+            'Or use “Continue with demo playlist”.',
+      );
+      return;
+    }
     setState(() {
       _busy = true;
       _localError = null;

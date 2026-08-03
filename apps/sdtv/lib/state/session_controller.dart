@@ -39,10 +39,17 @@ class SessionController extends ChangeNotifier {
   XtreamClient? _client;
   bool useDemo = true;
 
+  /// True when catalog/playback is fixture-based (not a real provider).
+  /// "Connect" without [SDTV_ALLOW_LIVE] still uses mock fixtures.
+  bool mockCatalog = true;
+
   List<MediaCategory> categories = const [];
   List<LiveChannel> allChannels = const [];
   String? selectedCategoryId;
   LiveChannel? nowPlaying;
+
+  /// Badge / HUD: real HTTP Xtream only when live flag is on and not demo.
+  bool get isLiveProvider => !useDemo && !mockCatalog;
 
   List<LiveChannel> get channelsInCategory {
     final id = selectedCategoryId;
@@ -90,7 +97,12 @@ class SessionController extends ChangeNotifier {
 
     try {
       final client = await loadMockXtreamClient();
-      await _finishConnect(client, useDemo: true, save: save);
+      await _finishConnect(
+        client,
+        useDemo: true,
+        mockCatalog: true,
+        save: save,
+      );
     } catch (e) {
       errorMessage = 'Demo load failed: $e';
       phase = SessionPhase.login;
@@ -107,19 +119,29 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // Phase 1 default: mock catalog (no provider ban risk).
-      // Real network: SDTV_ALLOW_LIVE=1 ./tool/run.sh
+      if (!XtreamCredentials.isPlausibleServerUrl(credentials.baseUrl)) {
+        throw XtreamException(
+          'Server URL must look like http://host:port (not a placeholder).',
+        );
+      }
+
+      // Default: mock catalog + demo HLS (safe). Real Xtream needs env flag.
+      // SDTV_ALLOW_LIVE=1 on the Deck launcher for true provider streams.
       final allowLive = _envFlag('SDTV_ALLOW_LIVE');
 
       final XtreamClient client;
+      final bool mock;
       if (allowLive) {
         client = HttpXtreamClient(credentials: credentials);
+        mock = false;
       } else {
         client = await loadMockXtreamClient(credentials: credentials);
+        mock = true;
       }
       await _finishConnect(
         client,
         useDemo: false,
+        mockCatalog: mock,
         save: save,
         credentials: credentials,
       );
@@ -137,6 +159,7 @@ class SessionController extends ChangeNotifier {
   Future<void> _finishConnect(
     XtreamClient client, {
     required bool useDemo,
+    required bool mockCatalog,
     required bool save,
     XtreamCredentials? credentials,
   }) async {
@@ -150,6 +173,7 @@ class SessionController extends ChangeNotifier {
     allChannels = streams;
     selectedCategoryId = cats.isNotEmpty ? cats.first.categoryId : null;
     this.useDemo = useDemo;
+    this.mockCatalog = mockCatalog;
 
     if (save) {
       await _settings.saveSession(
@@ -175,18 +199,17 @@ class SessionController extends ChangeNotifier {
     // Update HUD immediately (player page listens to session).
     notifyListeners();
 
-    // Demo/mock playlists use a public test stream (real video, no provider).
-    // Live Xtream uses the provider URL when SDTV_ALLOW_LIVE=1.
+    // Demo + mock catalog: public test HLS (never fake relative paths).
+    // Live provider: real Xtream URL when SDTV_ALLOW_LIVE=1.
     final Uri url;
-    if (useDemo) {
+    if (useDemo || mockCatalog) {
       url = Uri.parse(kDemoPlaybackUri);
     } else {
       url = client.livePlayUrl(channel.streamId);
     }
 
-    // Demo: every mock channel shares one HLS. Don't restart playback on zap —
-    // just change the on-screen channel name (instant, no re-buffer).
-    if (useDemo &&
+    // Shared demo HLS: zap only changes the channel name (no re-open).
+    if ((useDemo || mockCatalog) &&
         previous != null &&
         player.currentUrl == url.toString() &&
         (player.state == SdtvPlayerState.playing ||

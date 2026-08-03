@@ -204,10 +204,10 @@ class _PlayerPageState extends State<PlayerPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (widget.session.useDemo)
+                    if (widget.session.useDemo || widget.session.mockCatalog)
                       Text(
                         canZap
-                            ? 'Demo · same test stream · name zaps only'
+                            ? 'Demo stream · channel name zaps only'
                             : 'Demo stream · only channel in this category',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: Colors.white54,

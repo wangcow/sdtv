@@ -16,7 +16,7 @@ Future<MockXtreamClient> loadMockXtreamClient({
     liveCategoriesJson: cats,
     liveStreamsJson: streams,
     credentials: credentials ??
-        const XtreamCredentials(
+        XtreamCredentials(
           baseUrl: 'http://mock.sdtv.local',
           username: 'mock_user',
           password: 'mock_pass',
