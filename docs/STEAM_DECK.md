@@ -54,28 +54,45 @@ source tool/bazzite-flutter-env.sh
 bash tool/package-deck.sh
 ```
 
-That script builds a release, stages brew `libmpv` + transitive deps into `bundle/lib/`, rewrites absolute Homebrew `DT_NEEDED` paths (e.g. mujs Cellar) to plain sonames, sets `RPATH=$ORIGIN`, and writes `run-sdtv.sh`.
+That produces:
 
-**Copy the entire folder** to the Deck:
+- `apps/sdtv/build/linux/x64/release/bundle/` — full tree with brew `libmpv` + deps, soname links, absolute `DT_NEEDED` rewritten, `run-sdtv.sh`
+- `dist/sdtv-deck.tar.gz` — same tree as a single archive (preferred for transfer)
 
-```text
-apps/sdtv/build/linux/x64/release/bundle/   →   e.g. ~/sdtv/
-```
+#### Deploy (recommended)
 
-On the Deck (Desktop Mode):
+**Do not** `scp -r` over a previous install. Old brew libs are often read-only (`555`), so scp hits **Permission denied**, leaves a half-updated tree, and you still get `libmujs` / Cellar errors.
+
+On the **Deck** (ssh or Konsole):
 
 ```bash
-cd ~/sdtv
-chmod +x run-sdtv.sh sdtv
-./run-sdtv.sh
+rm -rf ~/sdtv ~/Documents/sdtv
+mkdir -p ~/sdtv
 ```
 
-Always launch with **`./run-sdtv.sh`**, not `./sdtv` directly — the wrapper sets `LD_LIBRARY_PATH` to the bundled `lib/` only so the Deck never looks for `/home/linuxbrew/...` paths from the build machine.
+On the **build machine**:
 
-**Game Mode:** Steam → Add a Non-Steam Game → pick `run-sdtv.sh` (or a small `.desktop` that runs it).
+```bash
+scp dist/sdtv-deck.tar.gz deck@DECK_IP:~/sdtv-deck.tar.gz
+```
 
-If you see `libmujs.so` / Cellar path errors, the bundle is stale or incomplete — re-run `package-deck.sh` and recopy the **whole** `bundle/` folder (including `lib/`).
-### Bazzite vs regular Fedora
+On the **Deck**:
+
+```bash
+tar -xzf ~/sdtv-deck.tar.gz -C ~/sdtv
+chmod +x ~/sdtv/run-sdtv.sh ~/sdtv/sdtv
+cd ~/sdtv && ./run-sdtv.sh
+```
+
+Always launch with **`./run-sdtv.sh`**, not `./sdtv` — the wrapper sets `LD_LIBRARY_PATH` to the bundled `lib/` only.
+
+**Game Mode:** Steam → Add a Non-Steam Game → pick `~/sdtv/run-sdtv.sh`.
+
+If you still see `libmujs.so` / Cellar path errors:
+
+1. Confirm you wiped the old dir (`rm -rf`) before extract.
+2. Check `ls -la ~/sdtv/lib/libmpv* ~/sdtv/lib/libmujs*` — both must exist.
+3. Re-run `package-deck.sh` and redeploy the tarball.### Bazzite vs regular Fedora
 
 | | Bazzite (immutable) | Fedora Workstation |
 |--|---------------------|--------------------|
