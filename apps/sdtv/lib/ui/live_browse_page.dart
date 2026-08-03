@@ -144,7 +144,17 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
   }
 
+  DateTime? _lastActivateAt;
+
   Future<void> _activate() async {
+    // Belt-and-suspenders vs dual js+Enter on Deck.
+    final now = DateTime.now();
+    if (_lastActivateAt != null &&
+        now.difference(_lastActivateAt!) < const Duration(milliseconds: 280)) {
+      return;
+    }
+    _lastActivateAt = now;
+
     if (_aboutOpen) {
       setState(() => _aboutOpen = false);
       return;

@@ -30,7 +30,9 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
   Timer? _startTimer;
   bool _acquired = false;
   DateTime? _lastDirAt;
+  DateTime? _lastConfirmAt;
   static const _dirCooldown = Duration(milliseconds: 250);
+  static const _confirmCooldown = Duration(milliseconds: 280);
 
   @override
   void initState() {
@@ -152,14 +154,27 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding> {
 
     try {
       if (edge == GamepadEdge.confirm) {
+        // One physical A often arrives as js button + keyboard Enter/Space.
+        final now = DateTime.now();
+        if (_lastConfirmAt != null &&
+            now.difference(_lastConfirmAt!) < _confirmCooldown) {
+          return;
+        }
+        _lastConfirmAt = now;
+
+        // Prefer focused control (tiles). Do NOT also call onConfirm — that
+        // double-fired menu (About open then close, Cancel then play, etc.).
         final focusCtx =
             FocusManager.instance.primaryFocus?.context ?? context;
         final activated =
             Actions.maybeInvoke(focusCtx, const ActivateIntent());
-        if (activated == null) {
-          Actions.maybeInvoke(context, intent);
-          SdtvInputCallbacks.maybeOf(context)?.onConfirm?.call();
-        }
+        if (activated != null) return;
+
+        final viaIntent =
+            Actions.maybeInvoke(context, const SdtvConfirmIntent());
+        if (viaIntent != null) return;
+
+        SdtvInputCallbacks.maybeOf(context)?.onConfirm?.call();
         return;
       }
 
