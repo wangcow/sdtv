@@ -26,8 +26,10 @@ class LinuxJoystickReader {
   LinuxJoystickReader({
     this.devicePath,
     this.axisDeadzone = 16000,
-    this.repeatInitial = const Duration(milliseconds: 320),
-    this.repeatPeriod = const Duration(milliseconds: 140),
+    /// Longer initial delay so a short Deck D-pad tap is only one step
+    /// (Steam often also injects a keyboard arrow for the same press).
+    this.repeatInitial = const Duration(milliseconds: 400),
+    this.repeatPeriod = const Duration(milliseconds: 200),
   });
 
   final String? devicePath;

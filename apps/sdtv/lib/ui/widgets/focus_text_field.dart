@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:sdtv_input/sdtv_input.dart';
 
-/// Focusable text field for couch login (keyboard, Deck OSK, or gamepad).
+/// Focusable text field for couch login.
 class SdtvFocusTextField extends StatefulWidget {
   const SdtvFocusTextField({
     super.key,
@@ -14,6 +14,9 @@ class SdtvFocusTextField extends StatefulWidget {
     this.focusNode,
     this.onSubmitted,
     this.textInputAction = TextInputAction.next,
+    /// When false, arrows are left to the parent form (avoids double-steps with
+    /// Steam injecting both js D-pad and keyboard arrows).
+    this.handleArrowKeys = true,
   });
 
   final TextEditingController controller;
@@ -24,6 +27,7 @@ class SdtvFocusTextField extends StatefulWidget {
   final FocusNode? focusNode;
   final VoidCallback? onSubmitted;
   final TextInputAction textInputAction;
+  final bool handleArrowKeys;
 
   @override
   State<SdtvFocusTextField> createState() => _SdtvFocusTextFieldState();
@@ -56,18 +60,28 @@ class _SdtvFocusTextFieldState extends State<SdtvFocusTextField> {
     }
     final key = event.logicalKey;
 
+    // Tab always advances (Deck OSK). Do not also let it bubble.
     if (key == LogicalKeyboardKey.tab) {
-      if (HardwareKeyboard.instance.isShiftPressed) {
+      final shift = HardwareKeyboard.instance.isShiftPressed;
+      if (shift) {
         node.previousFocus();
       } else {
-        _goNext(node);
+        final moved = node.nextFocus();
+        if (!moved) widget.onSubmitted?.call();
       }
       return KeyEventResult.handled;
     }
 
+    if (!widget.handleArrowKeys) {
+      // Parent form owns D-pad / arrows (with debounce). Ignore here so we
+      // don't double-step when Steam sends js + keyboard for one press.
+      return KeyEventResult.ignored;
+    }
+
     if (key == LogicalKeyboardKey.arrowDown ||
         key == LogicalKeyboardKey.arrowRight) {
-      _goNext(node);
+      final moved = node.nextFocus();
+      if (!moved) widget.onSubmitted?.call();
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.arrowUp ||
@@ -77,11 +91,6 @@ class _SdtvFocusTextFieldState extends State<SdtvFocusTextField> {
     }
 
     return KeyEventResult.ignored;
-  }
-
-  void _goNext(FocusNode node) {
-    final moved = node.nextFocus();
-    if (!moved) widget.onSubmitted?.call();
   }
 
   @override
@@ -132,62 +141,15 @@ class _SdtvFocusTextFieldState extends State<SdtvFocusTextField> {
               const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
         ),
         textInputAction: widget.textInputAction,
-        onEditingComplete: () => _goNext(_focus),
+        onEditingComplete: () {
+          final moved = _focus.nextFocus();
+          if (!moved) widget.onSubmitted?.call();
+        },
         onSubmitted: (_) {
-          _goNext(_focus);
+          final moved = _focus.nextFocus();
+          if (!moved) widget.onSubmitted?.call();
           widget.onSubmitted?.call();
         },
-      ),
-    );
-  }
-}
-
-/// Login form: **linear** focus only (no geometric DirectionalFocus).
-///
-/// Deck D-pad uses DirectionalFocus by default, which skips fields. We force
-/// Tab-order for every direction here.
-class SdtvLoginFormScope extends StatelessWidget {
-  const SdtvLoginFormScope({
-    super.key,
-    required this.child,
-    this.onSubmit,
-    this.onBack,
-  });
-
-  final Widget child;
-  final VoidCallback? onSubmit;
-  final VoidCallback? onBack;
-
-  @override
-  Widget build(BuildContext context) {
-    return SdtvInputScope(
-      onConfirm: () {
-        if (SdtvTextFocusRegistry.primaryIsTextField) {
-          FocusManager.instance.primaryFocus?.nextFocus();
-          return;
-        }
-        onSubmit?.call();
-      },
-      onBack: onBack,
-      // Override geometric focus — always linear for this form.
-      extraActions: {
-        DirectionalFocusIntent: CallbackAction<DirectionalFocusIntent>(
-          onInvoke: (intent) {
-            final forward = intent.direction == TraversalDirection.down ||
-                intent.direction == TraversalDirection.right;
-            final node = FocusManager.instance.primaryFocus;
-            if (forward) {
-              node?.nextFocus();
-            } else {
-              node?.previousFocus();
-            }
-            return null;
-          },
-        ),
-      },
-      child: FocusTraversalGroup(
-        policy: OrderedTraversalPolicy(),
-        child: child,
       ),
     );
   }

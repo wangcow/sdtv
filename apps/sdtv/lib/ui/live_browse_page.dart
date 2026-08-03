@@ -31,6 +31,18 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   final List<FocusNode> _chanNodes = [];
   String? _lastCategoryId;
 
+  DateTime? _lastNavAt;
+  static const _navCooldown = Duration(milliseconds: 160);
+
+  bool _acceptNav() {
+    final now = DateTime.now();
+    if (_lastNavAt != null && now.difference(_lastNavAt!) < _navCooldown) {
+      return false;
+    }
+    _lastNavAt = now;
+    return true;
+  }
+
   SessionController get session => widget.session;
 
   @override
@@ -112,6 +124,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   void _moveVertical(int delta) {
+    if (!_acceptNav()) return;
     if (_column == 0) {
       if (_catNodes.isEmpty) return;
       _catIndex = (_catIndex + delta).clamp(0, _catNodes.length - 1);
@@ -128,6 +141,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   void _moveHorizontal(int delta) {
+    if (!_acceptNav()) return;
     if (delta > 0 && _column == 0) {
       _column = 1;
       if (_chanNodes.isEmpty) _rebuildChanNodes();
