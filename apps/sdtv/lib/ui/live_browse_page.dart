@@ -369,7 +369,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             borderRadius: BorderRadius.circular(999),
                           ),
                           child: Text(
-                            session.useDemo ? 'DEMO / MOCK' : 'LIVE TV',
+                            session.useDemo
+                                ? 'DEMO'
+                                : session.mockCatalog
+                                    ? 'MOCK CATALOG'
+                                    : 'LIVE TV',
                             style: theme.textTheme.labelSmall?.copyWith(
                               color: theme.colorScheme.primary,
                               fontWeight: FontWeight.w700,
@@ -599,11 +603,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             ),
                             const SizedBox(height: 12),
                             Text(
-                              'Live TV browse (Phase 1).\n'
-                              'Demo/mock catalog — no real streams until '
-                              'SDTV_ALLOW_LIVE=1.\n\n'
+                              'Live TV browse (MVP).\n'
+                              'Without SDTV_ALLOW_LIVE=1, Connect uses the '
+                              'mock catalog + public demo stream (not your '
+                              'provider).\n\n'
                               'Signed in as $user'
-                              '${session.useDemo ? ' (demo)' : ''}\n\n'
+                              '${session.useDemo ? ' (demo)' : session.mockCatalog ? ' (mock)' : ' (live)'}\n\n'
                               'Product of the Wangcow Corporation\n'
                               'Apache License 2.0',
                               style: theme.textTheme.bodyMedium,

@@ -79,7 +79,7 @@ void main() {
 
     test('builds live play URL without exposing secrets in toString of creds',
         () {
-      const creds = XtreamCredentials(
+      final creds = XtreamCredentials(
         baseUrl: 'http://example.com:8080',
         username: 'u',
         password: 'secret',

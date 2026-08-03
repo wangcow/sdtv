@@ -13,12 +13,13 @@ class MockXtreamClient implements XtreamClient {
     required this.authJson,
     required this.liveCategoriesJson,
     required this.liveStreamsJson,
-    this.credentials = const XtreamCredentials(
-      baseUrl: 'http://mock.sdtv.local',
-      username: 'mock',
-      password: 'mock',
-    ),
-  });
+    XtreamCredentials? credentials,
+  }) : credentials = credentials ??
+            XtreamCredentials(
+              baseUrl: 'http://mock.sdtv.local',
+              username: 'mock',
+              password: 'mock',
+            );
 
   /// Build from already-decoded maps/lists (handy in tests).
   factory MockXtreamClient.fromDecoded({
@@ -32,7 +33,7 @@ class MockXtreamClient implements XtreamClient {
       liveCategoriesJson: jsonEncode(liveCategories),
       liveStreamsJson: jsonEncode(liveStreams),
       credentials: credentials ??
-          const XtreamCredentials(
+          XtreamCredentials(
             baseUrl: 'http://mock.sdtv.local',
             username: 'mock',
             password: 'mock',
@@ -73,9 +74,15 @@ class MockXtreamClient implements XtreamClient {
     return all.where((c) => c.categoryId == categoryId).toList();
   }
 
+  /// Public demo HLS — mock catalog must never hand mpv a fake relative path
+  /// like `t/live/t/t/103.ts` from placeholder form fields.
+  static final Uri mockPlaybackUri = Uri.parse(
+    'https://devstreaming-cdn.apple.com/videos/streaming/examples/'
+    'img_bipbop_adv_example_fmp4/master.m3u8',
+  );
+
   @override
-  Uri livePlayUrl(int streamId, {String extension = 'ts'}) =>
-      credentials.liveStreamUri(streamId, extension: extension);
+  Uri livePlayUrl(int streamId, {String extension = 'ts'}) => mockPlaybackUri;
 
   List<MediaCategory> _parseCategories(String raw) {
     final json = jsonDecode(raw);
