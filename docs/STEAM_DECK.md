@@ -45,19 +45,36 @@ flutter run -d linux
 
 ### Shipping a release bundle to another Deck
 
+On the **build machine** (Bazzite + Homebrew mpv):
+
 ```bash
+cd ~/Documents/Programming/projects/sdtv
 source tool/bazzite-flutter-env.sh
-cd apps/sdtv && flutter build linux --release
-# Copy whole: build/linux/x64/release/bundle/
+# Needs: brew install mpv patchelf
+bash tool/package-deck.sh
 ```
 
-The binary links `libmpv.so.2`. On the target machine either:
+That script builds a release, stages brew `libmpv` + transitive deps into `bundle/lib/`, rewrites absolute Homebrew `DT_NEEDED` paths (e.g. mujs Cellar) to plain sonames, sets `RPATH=$ORIGIN`, and writes `run-sdtv.sh`.
 
-- install `mpv` / libmpv, or  
-- copy brew’s `libmpv.so*` next to `bundle/lib/` and run with  
-  `LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH ./sdtv`  
-  (prefer bundling only mpv libs, not full brew mesa — see NVIDIA notes).
+**Copy the entire folder** to the Deck:
 
+```text
+apps/sdtv/build/linux/x64/release/bundle/   →   e.g. ~/sdtv/
+```
+
+On the Deck (Desktop Mode):
+
+```bash
+cd ~/sdtv
+chmod +x run-sdtv.sh sdtv
+./run-sdtv.sh
+```
+
+Always launch with **`./run-sdtv.sh`**, not `./sdtv` directly — the wrapper sets `LD_LIBRARY_PATH` to the bundled `lib/` only so the Deck never looks for `/home/linuxbrew/...` paths from the build machine.
+
+**Game Mode:** Steam → Add a Non-Steam Game → pick `run-sdtv.sh` (or a small `.desktop` that runs it).
+
+If you see `libmujs.so` / Cellar path errors, the bundle is stale or incomplete — re-run `package-deck.sh` and recopy the **whole** `bundle/` folder (including `lib/`).
 ### Bazzite vs regular Fedora
 
 | | Bazzite (immutable) | Fedora Workstation |
