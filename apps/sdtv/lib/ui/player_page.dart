@@ -31,9 +31,10 @@ class _PlayerPageState extends State<PlayerPage> {
     super.dispose();
   }
 
-  Future<void> _back() async {
-    await widget.session.stopPlayback();
-    if (mounted) Navigator.of(context).pop();
+  /// B leaves the player immediately (do not sit on IDLE).
+  void _exit() {
+    if (!mounted) return;
+    Navigator.of(context).pop();
   }
 
   @override
@@ -45,11 +46,14 @@ class _PlayerPageState extends State<PlayerPage> {
     final url = player.currentUrl ?? '';
 
     return SdtvInputScope(
-      onBack: _back,
+      onBack: _exit,
+      onMenu: _exit,
       onConfirm: () async {
+        // A = pause / resume only (not B).
         if (state == SdtvPlayerState.playing) {
           await player.pause();
-        } else {
+        } else if (state == SdtvPlayerState.paused ||
+            state == SdtvPlayerState.idle) {
           await player.play();
         }
       },
@@ -78,13 +82,23 @@ class _PlayerPageState extends State<PlayerPage> {
             return null;
           },
         ),
+        // D-pad up/down = channel zap while watching.
+        DirectionalFocusIntent: CallbackAction<DirectionalFocusIntent>(
+          onInvoke: (intent) {
+            if (intent.direction == TraversalDirection.up) {
+              widget.session.playAdjacent(-1);
+            } else if (intent.direction == TraversalDirection.down) {
+              widget.session.playAdjacent(1);
+            }
+            return null;
+          },
+        ),
       },
       child: Scaffold(
         backgroundColor: Colors.black,
         body: SafeArea(
           child: Stack(
             children: [
-              // Video surface placeholder
               Positioned.fill(
                 child: Container(
                   color: const Color(0xFF0A0A0C),
@@ -95,7 +109,8 @@ class _PlayerPageState extends State<PlayerPage> {
                         Icon(
                           Icons.live_tv,
                           size: 96,
-                          color: theme.colorScheme.primary.withValues(alpha: 0.7),
+                          color:
+                              theme.colorScheme.primary.withValues(alpha: 0.7),
                         ),
                         const SizedBox(height: 16),
                         Text(
@@ -117,7 +132,6 @@ class _PlayerPageState extends State<PlayerPage> {
                   ),
                 ),
               ),
-              // OSD top
               Positioned(
                 left: 24,
                 right: 24,
@@ -142,7 +156,6 @@ class _PlayerPageState extends State<PlayerPage> {
                   ],
                 ),
               ),
-              // OSD bottom
               Positioned(
                 left: 24,
                 right: 24,
@@ -160,43 +173,12 @@ class _PlayerPageState extends State<PlayerPage> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      children: [
-                        SdtvFocusTile(
-                          label: 'Previous ch',
-                          icon: Icons.skip_previous,
-                          onActivate: () => widget.session.playAdjacent(-1),
-                        ),
-                        SdtvFocusTile(
-                          label: state == SdtvPlayerState.paused
-                              ? 'Play'
-                              : 'Pause',
-                          icon: state == SdtvPlayerState.paused
-                              ? Icons.play_arrow
-                              : Icons.pause,
-                          autofocus: true,
-                          onActivate: () async {
-                            if (state == SdtvPlayerState.playing) {
-                              await player.pause();
-                            } else {
-                              await player.play();
-                            }
-                          },
-                        ),
-                        SdtvFocusTile(
-                          label: 'Next ch',
-                          icon: Icons.skip_next,
-                          onActivate: () => widget.session.playAdjacent(1),
-                        ),
-                        SdtvFocusTile(
-                          label: 'Back to list',
-                          icon: Icons.list,
-                          onActivate: _back,
-                        ),
-                      ],
-                ),
+                    Text(
+                      'A pause/play · ↑↓ channel · B back to list',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: Colors.white70,
+                      ),
+                    ),
                   ],
                 ),
               ),

@@ -5,11 +5,7 @@ import 'package:sdtv_input/sdtv_input.dart';
 import '../state/session_controller.dart';
 import 'player_page.dart';
 
-/// Two-column live browser with **explicit** column navigation.
-///
-/// Flutter's geometric [DirectionalFocus] is wrong for TiviMate-style grids
-/// (Down jumps sideways into channels, Left/Right walk categories). We own
-/// the D-pad: Up/Down within a column, Left/Right switch columns.
+/// Two-column live browser with explicit index navigation (TV / Deck).
 class LiveBrowsePage extends StatefulWidget {
   const LiveBrowsePage({super.key, required this.session});
 
@@ -27,12 +23,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   final _catScroll = ScrollController();
   final _chanScroll = ScrollController();
-  final List<FocusNode> _catNodes = [];
-  final List<FocusNode> _chanNodes = [];
-  String? _lastCategoryId;
 
   DateTime? _lastNavAt;
-  static const _navCooldown = Duration(milliseconds: 160);
+  static const _navCooldown = Duration(milliseconds: 200);
+
+  SessionController get session => widget.session;
 
   bool _acceptNav() {
     final now = DateTime.now();
@@ -43,25 +38,23 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     return true;
   }
 
-  SessionController get session => widget.session;
-
   @override
   void initState() {
     super.initState();
     session.addListener(_onSession);
-    _rebuildCatNodes();
-    _rebuildChanNodes();
-    _lastCategoryId = session.selectedCategoryId;
+    // Defer so we never notify during build.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_catNodes.isNotEmpty) _catNodes[0].requestFocus();
+      if (!mounted) return;
+      if (session.categories.isNotEmpty &&
+          session.selectedCategoryId == null) {
+        session.selectCategory(session.categories.first.categoryId);
+      }
     });
   }
 
   @override
   void dispose() {
     session.removeListener(_onSession);
-    _disposeNodes(_catNodes);
-    _disposeNodes(_chanNodes);
     _catScroll.dispose();
     _chanScroll.dispose();
     super.dispose();
@@ -69,120 +62,106 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   void _onSession() {
     if (!mounted) return;
-    if (_catNodes.length != session.categories.length) {
-      _rebuildCatNodes();
+    final cats = session.categories.length;
+    final chans = session.channelsInCategory.length;
+    if (cats > 0) {
+      _catIndex = _catIndex.clamp(0, cats - 1);
+    } else {
+      _catIndex = 0;
     }
-    // Always rebuild channel focus nodes when category changes (counts may match).
-    if (session.selectedCategoryId != _lastCategoryId ||
-        _chanNodes.length != session.channelsInCategory.length) {
-      _lastCategoryId = session.selectedCategoryId;
-      _rebuildChanNodes();
+    if (chans > 0) {
+      _chanIndex = _chanIndex.clamp(0, chans - 1);
+    } else {
       _chanIndex = 0;
     }
     setState(() {});
   }
 
-  void _disposeNodes(List<FocusNode> nodes) {
-    for (final n in nodes) {
-      n.dispose();
-    }
-    nodes.clear();
-  }
-
-  void _rebuildCatNodes() {
-    _disposeNodes(_catNodes);
-    for (var i = 0; i < session.categories.length; i++) {
-      _catNodes.add(FocusNode(debugLabel: 'cat-$i'));
-    }
-    _catIndex = _catIndex.clamp(0, (_catNodes.length - 1).clamp(0, 9999));
-  }
-
-  void _rebuildChanNodes() {
-    _disposeNodes(_chanNodes);
-    for (var i = 0; i < session.channelsInCategory.length; i++) {
-      _chanNodes.add(FocusNode(debugLabel: 'chan-$i'));
-    }
-    _chanIndex = _chanIndex.clamp(0, (_chanNodes.length - 1).clamp(0, 9999));
-  }
-
-  void _focusCurrent() {
-    final nodes = _column == 0 ? _catNodes : _chanNodes;
-    final idx = _column == 0 ? _catIndex : _chanIndex;
-    if (nodes.isEmpty) return;
-    final i = idx.clamp(0, nodes.length - 1);
-    nodes[i].requestFocus();
-    // Keep focused row visible.
-    final controller = _column == 0 ? _catScroll : _chanScroll;
-    if (controller.hasClients) {
-      final offset = (i * 72.0).clamp(0.0, controller.position.maxScrollExtent);
-      controller.animateTo(
-        offset,
-        duration: const Duration(milliseconds: 120),
-        curve: Curves.easeOut,
-      );
-    }
+  void _scrollTo(ScrollController c, int index) {
+    if (!c.hasClients) return;
+    final offset = (index * 72.0).clamp(0.0, c.position.maxScrollExtent);
+    c.animateTo(
+      offset,
+      duration: const Duration(milliseconds: 120),
+      curve: Curves.easeOut,
+    );
   }
 
   void _moveVertical(int delta) {
     if (!_acceptNav()) return;
+    final cats = session.categories;
+    final chans = session.channelsInCategory;
+
     if (_column == 0) {
-      if (_catNodes.isEmpty) return;
-      _catIndex = (_catIndex + delta).clamp(0, _catNodes.length - 1);
-      final cat = session.categories[_catIndex];
-      session.selectCategory(cat.categoryId);
-      // Channels rebuild via listener.
-      WidgetsBinding.instance.addPostFrameCallback((_) => _focusCurrent());
+      if (cats.isEmpty) return;
+      setState(() {
+        _catIndex = (_catIndex + delta).clamp(0, cats.length - 1);
+      });
+      session.selectCategory(cats[_catIndex].categoryId);
+      _chanIndex = 0;
+      _scrollTo(_catScroll, _catIndex);
     } else {
-      if (_chanNodes.isEmpty) return;
-      _chanIndex = (_chanIndex + delta).clamp(0, _chanNodes.length - 1);
-      _focusCurrent();
+      if (chans.isEmpty) return;
+      setState(() {
+        _chanIndex = (_chanIndex + delta).clamp(0, chans.length - 1);
+      });
+      _scrollTo(_chanScroll, _chanIndex);
     }
-    setState(() {});
   }
 
   void _moveHorizontal(int delta) {
     if (!_acceptNav()) return;
     if (delta > 0 && _column == 0) {
-      _column = 1;
-      if (_chanNodes.isEmpty) _rebuildChanNodes();
-      _chanIndex = _chanIndex.clamp(0, (_chanNodes.length - 1).clamp(0, 9999));
+      setState(() {
+        _column = 1;
+        _chanIndex = 0;
+      });
+      _scrollTo(_chanScroll, 0);
     } else if (delta < 0 && _column == 1) {
-      _column = 0;
+      setState(() => _column = 0);
+      _scrollTo(_catScroll, _catIndex);
     }
-    setState(() {});
-    WidgetsBinding.instance.addPostFrameCallback((_) => _focusCurrent());
   }
 
-  Future<void> _activateCurrent() async {
+  /// A: categories → enter channel list; channels → play.
+  Future<void> _activate() async {
     if (_column == 0) {
-      if (_catNodes.isEmpty) return;
-      final cat = session.categories[_catIndex];
-      session.selectCategory(cat.categoryId);
-      _column = 1;
-      _chanIndex = 0;
-      setState(() {});
-      WidgetsBinding.instance.addPostFrameCallback((_) => _focusCurrent());
+      final cats = session.categories;
+      if (cats.isEmpty) return;
+      session.selectCategory(cats[_catIndex].categoryId);
+      setState(() {
+        _column = 1;
+        _chanIndex = 0;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scrollTo(_chanScroll, 0);
+      });
       return;
     }
+
     final chans = session.channelsInCategory;
     if (chans.isEmpty) return;
     final ch = chans[_chanIndex.clamp(0, chans.length - 1)];
     await session.playChannel(ch);
     if (!mounted) return;
+
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => PlayerPage(session: session),
       ),
     );
-    await session.stopPlayback();
-    if (mounted) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _focusCurrent());
-    }
+
+    // Back from player: stay on channel list, don't jump columns.
+    if (!mounted) return;
+    await session.stopPlayback(notify: false);
+    setState(() {
+      // Keep column on channels so user continues browsing this category.
+      _column = 1;
+    });
   }
 
-  /// System menu — no nested gamepad scope (avoids freeze / stuck barrier).
   Future<void> _openSystemMenu() async {
-    // If a route is already up, B closes it.
+    // Close an existing dialog first.
     if (Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
       return;
@@ -192,48 +171,15 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     final action = await showDialog<String>(
       context: context,
       barrierDismissible: true,
-      builder: (ctx) {
-        return AlertDialog(
-          title: const Text('Menu'),
-          content: Text(
-            'Signed in as $user${session.useDemo ? ' (demo)' : ''}\n\n'
-            'D-pad: move · A: select · B: close',
-          ),
-          actionsAlignment: MainAxisAlignment.center,
-          actions: [
-            // Column of focusables — parent page keeps pad; focus moves here.
-            SizedBox(
-              width: 320,
-              child: FocusTraversalGroup(
-                policy: OrderedTraversalPolicy(),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SdtvFocusTile(
-                      label: 'About',
-                      autofocus: true,
-                      icon: Icons.info_outline,
-                      onActivate: () => Navigator.of(ctx).pop('about'),
-                    ),
-                    const SizedBox(height: 8),
-                    SdtvFocusTile(
-                      label: 'Sign out',
-                      icon: Icons.logout,
-                      onActivate: () => Navigator.of(ctx).pop('signout'),
-                    ),
-                    const SizedBox(height: 8),
-                    SdtvFocusTile(
-                      label: 'Cancel',
-                      icon: Icons.close,
-                      onActivate: () => Navigator.of(ctx).pop('cancel'),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        );
-      },
+      builder: (ctx) => _IndexMenuDialog(
+        title: 'Menu',
+        subtitle: 'Signed in as $user${session.useDemo ? ' (demo)' : ''}',
+        items: const [
+          (id: 'about', label: 'About', icon: Icons.info_outline),
+          (id: 'signout', label: 'Sign out', icon: Icons.logout),
+          (id: 'cancel', label: 'Cancel', icon: Icons.close),
+        ],
+      ),
     );
 
     if (!mounted) return;
@@ -241,32 +187,19 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (action == 'about') {
       await showDialog<void>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('About sdtv'),
-          content: Text(
-            'Live TV browse (Phase 1).\n'
-            'Demo/mock catalog — no real streams until SDTV_ALLOW_LIVE=1.\n\n'
-            'Signed in as $user'
-            '${session.useDemo ? ' (demo)' : ''}\n\n'
-            'Product of the Wangcow Corporation\n'
-            'Apache License 2.0',
-          ),
-          actions: [
-            TextButton(
-              autofocus: true,
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Close'),
-            ),
+        builder: (ctx) => _IndexMenuDialog(
+          title: 'About sdtv',
+          subtitle:
+              'Live TV browse (Phase 1).\nDemo/mock catalog.\n\nSigned in as $user'
+              '${session.useDemo ? ' (demo)' : ''}\n\n'
+              'Product of the Wangcow Corporation',
+          items: const [
+            (id: 'close', label: 'Close', icon: Icons.close),
           ],
         ),
       );
     } else if (action == 'signout') {
-      // Pop is already done; tear down session.
       await session.signOut();
-    }
-
-    if (mounted) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _focusCurrent());
     }
   }
 
@@ -275,22 +208,15 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     final theme = Theme.of(context);
     final cats = session.categories;
     final channels = session.channelsInCategory;
-    final selectedId = session.selectedCategoryId;
     final user = session.userInfo?.username ?? 'user';
+    final catTitle = cats.isEmpty
+        ? 'All'
+        : cats[_catIndex.clamp(0, cats.length - 1)].categoryName;
 
     return SdtvInputScope(
       onBack: _openSystemMenu,
       onMenu: _openSystemMenu,
-      onConfirm: () {
-        // Prefer tile ActivateIntent; fallback activate current index.
-        final focusCtx = FocusManager.instance.primaryFocus?.context;
-        if (focusCtx != null) {
-          final handled =
-              Actions.maybeInvoke(focusCtx, const ActivateIntent());
-          if (handled != null) return;
-        }
-        _activateCurrent();
-      },
+      onConfirm: _activate,
       extraActions: {
         DirectionalFocusIntent: CallbackAction<DirectionalFocusIntent>(
           onInvoke: (intent) {
@@ -309,7 +235,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         ),
       },
       extraShortcuts: {
-        // When Steam injects arrows as keys
         const SingleActivator(LogicalKeyboardKey.arrowUp):
             const DirectionalFocusIntent(TraversalDirection.up),
         const SingleActivator(LogicalKeyboardKey.arrowDown):
@@ -366,6 +291,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    // Categories
                     SizedBox(
                       width: 280,
                       child: ListView.builder(
@@ -386,23 +312,20 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             );
                           }
                           final i = index - 1;
+                          final selected = _column == 0 && _catIndex == i;
                           return Padding(
                             padding: const EdgeInsets.only(bottom: 10),
-                            child: SdtvFocusTile(
+                            child: _BrowseTile(
                               label: cats[i].categoryName,
-                              focusNode: _catNodes[i],
-                              autofocus: i == 0,
                               icon: Icons.folder_outlined,
-                              onActivate: () {
-                                _catIndex = i;
-                                _column = 1;
-                                session.selectCategory(cats[i].categoryId);
-                                setState(() {});
-                                WidgetsBinding.instance
-                                    .addPostFrameCallback((_) {
-                                  _chanIndex = 0;
-                                  _focusCurrent();
+                              selected: selected,
+                              onTap: () {
+                                setState(() {
+                                  _catIndex = i;
+                                  _column = 0;
                                 });
+                                session.selectCategory(cats[i].categoryId);
+                                _chanIndex = 0;
                               },
                             ),
                           );
@@ -413,25 +336,18 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                       width: 1,
                       color: theme.colorScheme.outline.withValues(alpha: 0.3),
                     ),
+                    // Channels
                     Expanded(
                       child: ListView.builder(
                         controller: _chanScroll,
                         padding: const EdgeInsets.fromLTRB(16, 8, 24, 24),
-                        itemCount: channels.length + 1,
+                        itemCount: channels.isEmpty ? 2 : channels.length + 1,
                         itemBuilder: (context, index) {
                           if (index == 0) {
-                            final title = () {
-                              for (final c in cats) {
-                                if (c.categoryId == selectedId) {
-                                  return c.categoryName;
-                                }
-                              }
-                              return 'All';
-                            }();
                             return Padding(
                               padding: const EdgeInsets.only(bottom: 12),
                               child: Text(
-                                'CHANNELS · $title',
+                                'CHANNELS · $catTitle',
                                 style: theme.textTheme.labelSmall?.copyWith(
                                   color: theme.colorScheme.outline,
                                   letterSpacing: 1.1,
@@ -439,19 +355,27 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                               ),
                             );
                           }
+                          if (channels.isEmpty) {
+                            return Text(
+                              'No channels in this category.\nPress ← to go back.',
+                              style: theme.textTheme.bodyLarge,
+                            );
+                          }
                           final i = index - 1;
                           final ch = channels[i];
+                          final selected = _column == 1 && _chanIndex == i;
                           return Padding(
                             padding: const EdgeInsets.only(bottom: 10),
-                            child: SdtvFocusTile(
+                            child: _BrowseTile(
                               label:
                                   '${ch.num > 0 ? '${ch.num}. ' : ''}${ch.name}',
-                              focusNode:
-                                  i < _chanNodes.length ? _chanNodes[i] : null,
                               icon: Icons.live_tv_outlined,
-                              onActivate: () async {
-                                _chanIndex = i;
-                                _column = 1;
+                              selected: selected,
+                              onTap: () async {
+                                setState(() {
+                                  _column = 1;
+                                  _chanIndex = i;
+                                });
                                 await session.playChannel(ch);
                                 if (!context.mounted) return;
                                 await Navigator.of(context).push(
@@ -460,12 +384,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                         PlayerPage(session: session),
                                   ),
                                 );
-                                await session.stopPlayback();
-                                if (mounted) {
-                                  WidgetsBinding.instance
-                                      .addPostFrameCallback(
-                                          (_) => _focusCurrent());
-                                }
+                                if (!mounted) return;
+                                await session.stopPlayback(notify: false);
+                                setState(() => _column = 1);
                               },
                             ),
                           );
@@ -484,30 +405,154 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                     ),
                   ),
                 ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        '↑↓ list · ←→ columns · A open · B menu',
-                        style: theme.textTheme.bodySmall,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    Flexible(
-                      child: Text(
-                        'Product of the Wangcow Corporation',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.outline,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.end,
-                      ),
-                    ),
-                  ],
+                child: Text(
+                  '↑↓ list · ←→ columns · A open · B menu',
+                  style: theme.textTheme.bodySmall,
                 ),
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BrowseTile extends StatelessWidget {
+  const _BrowseTile({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.icon,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final IconData? icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final bg = selected
+        ? theme.colorScheme.primary
+        : theme.colorScheme.surfaceContainerHighest;
+    final fg =
+        selected ? theme.colorScheme.onPrimary : theme.colorScheme.onSurface;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 100),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected
+                ? theme.colorScheme.primaryContainer
+                : Colors.transparent,
+            width: 3,
+          ),
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.45),
+                    blurRadius: 16,
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          children: [
+            if (icon != null) ...[
+              Icon(icon, color: fg, size: 28),
+              const SizedBox(width: 12),
+            ],
+            Expanded(
+              child: Text(
+                label,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: fg,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Index-based dialog (same pattern as login). D-pad works; A selects; B closes.
+class _IndexMenuDialog extends StatefulWidget {
+  const _IndexMenuDialog({
+    required this.title,
+    required this.subtitle,
+    required this.items,
+  });
+
+  final String title;
+  final String subtitle;
+  final List<({String id, String label, IconData icon})> items;
+
+  @override
+  State<_IndexMenuDialog> createState() => _IndexMenuDialogState();
+}
+
+class _IndexMenuDialogState extends State<_IndexMenuDialog> {
+  int _index = 0;
+  DateTime? _lastNav;
+  static const _cooldown = Duration(milliseconds: 200);
+
+  void _nav(int delta) {
+    final now = DateTime.now();
+    if (_lastNav != null && now.difference(_lastNav!) < _cooldown) return;
+    _lastNav = now;
+    setState(() {
+      _index = (_index + delta).clamp(0, widget.items.length - 1);
+    });
+  }
+
+  void _choose() {
+    Navigator.of(context).pop(widget.items[_index].id);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SdtvInputScope(
+      enableGamepad: true,
+      onBack: () => Navigator.of(context).pop('cancel'),
+      onConfirm: _choose,
+      extraActions: {
+        DirectionalFocusIntent: CallbackAction<DirectionalFocusIntent>(
+          onInvoke: (intent) {
+            final forward = intent.direction == TraversalDirection.down ||
+                intent.direction == TraversalDirection.right;
+            _nav(forward ? 1 : -1);
+            return null;
+          },
+        ),
+      },
+      child: AlertDialog(
+        title: Text(widget.title),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(widget.subtitle),
+            const SizedBox(height: 20),
+            for (var i = 0; i < widget.items.length; i++) ...[
+              if (i > 0) const SizedBox(height: 8),
+              _BrowseTile(
+                label: widget.items[i].label,
+                icon: widget.items[i].icon,
+                selected: _index == i,
+                onTap: () => Navigator.of(context).pop(widget.items[i].id),
+              ),
+            ],
+          ],
         ),
       ),
     );
