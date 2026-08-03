@@ -15,7 +15,14 @@ enum SessionPhase {
   error,
 }
 
-/// App-wide session: Xtream client, live catalog, stub player.
+/// Public HLS used in demo mode so the player can show real video without a provider.
+const kDemoPlaybackUri = String.fromEnvironment(
+  'SDTV_DEMO_STREAM',
+  defaultValue:
+      'https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8',
+);
+
+/// App-wide session: Xtream client, live catalog, player.
 class SessionController extends ChangeNotifier {
   SessionController({
     required SettingsStore settings,
@@ -164,7 +171,14 @@ class SessionController extends ChangeNotifier {
     final client = _client;
     if (client == null) return;
     nowPlaying = channel;
-    final url = client.livePlayUrl(channel.streamId);
+    // Demo/mock playlists use a public test stream (real video, no provider).
+    // Live Xtream uses the provider URL when SDTV_ALLOW_LIVE=1.
+    final Uri url;
+    if (useDemo) {
+      url = Uri.parse(kDemoPlaybackUri);
+    } else {
+      url = client.livePlayUrl(channel.streamId);
+    }
     await player.open(url);
     notifyListeners();
   }

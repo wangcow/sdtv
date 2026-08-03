@@ -3,7 +3,7 @@
 # Usage:  source tool/bazzite-flutter-env.sh
 #
 # One-time brew packages:
-#   brew install cmake ninja llvm gtk+3 xorgproto
+#   brew install cmake ninja llvm gtk+3 xorgproto mpv
 #
 # IMPORTANT: Do NOT put Homebrew's lib/ on LD_LIBRARY_PATH when running the app.
 # That forces brew's Mesa/EGL over the system NVIDIA drivers and the window
@@ -16,8 +16,12 @@ if command -v brew >/dev/null 2>&1; then
   BREW="$(brew --prefix)"
   XORGPROTO="$(brew --prefix xorgproto 2>/dev/null || true)"
   LIBFFI="$(brew --prefix libffi 2>/dev/null || true)"
-  export PKG_CONFIG_PATH="${BREW}/lib/pkgconfig:${BREW}/share/pkgconfig${XORGPROTO:+:${XORGPROTO}/share/pkgconfig}${LIBFFI:+:${LIBFFI}/lib/pkgconfig}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+  MPV="$(brew --prefix mpv 2>/dev/null || true)"
+  export PKG_CONFIG_PATH="${BREW}/lib/pkgconfig:${BREW}/share/pkgconfig${XORGPROTO:+:${XORGPROTO}/share/pkgconfig}${LIBFFI:+:${LIBFFI}/lib/pkgconfig}${MPV:+:${MPV}/lib/pkgconfig}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
   export CMAKE_PREFIX_PATH="${BREW}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
+  # Runtime: prefer system GL/EGL, but allow brew libmpv resolution.
+  # Do not set LD_LIBRARY_PATH globally (breaks NVIDIA); rpath from the
+  # flutter/media_kit build should find brew mpv when linked.
 fi
 
 export CC="${CC:-clang}"

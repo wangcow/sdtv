@@ -1,6 +1,6 @@
 name: sdtv_player
-description: media_kit / libmpv playback wrapper for sdtv (stub until Phase 1).
-version: 0.1.0
+description: media_kit / libmpv playback for sdtv.
+version: 0.2.0
 publish_to: none
 repository: https://github.com/wangcow/sdtv
 
@@ -13,6 +13,9 @@ resolution: workspace
 dependencies:
   flutter:
     sdk: flutter
+  media_kit: ^1.2.6
+  media_kit_video: ^2.0.1
+  media_kit_libs_video: ^1.0.7
 
 dev_dependencies:
   flutter_test:

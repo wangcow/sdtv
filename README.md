@@ -25,7 +25,7 @@ Import your Xtream Codes URL, username, and password → browse Live TV (Movies 
 
 ## Status
 
-**Phase 1 (in progress).** Login → demo/mock live categories & channels → stub player (channel zap). Real libmpv decode and live Xtream (`SDTV_ALLOW_LIVE=1`) come next.
+**Phase 2 (playback).** Login → demo browse → **real video** via media_kit/libmpv. Demo uses a public test HLS stream. Live Xtream still behind `SDTV_ALLOW_LIVE=1`.
 
 ### Run (Phase 1)
 
@@ -70,7 +70,7 @@ sdtv/
 Host packages are locked; use **Homebrew** for the Flutter Linux toolchain (already proven on this project):
 
 ```bash
-brew install cmake ninja llvm gtk+3 xorgproto
+brew install cmake ninja llvm gtk+3 xorgproto mpv
 # Flutter SDK (if needed):
 # git clone https://github.com/flutter/flutter.git -b stable ~/sdk/flutter
 ```
