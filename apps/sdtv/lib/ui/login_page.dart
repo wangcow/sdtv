@@ -18,21 +18,41 @@ class _LoginPageState extends State<LoginPage> {
   final _url = TextEditingController();
   final _user = TextEditingController();
   final _pass = TextEditingController();
+
+  // Explicit ring so we never skip a field (geometry focus is disabled in form).
+  final _demoFocus = FocusNode(debugLabel: 'demo');
   final _urlFocus = FocusNode(debugLabel: 'url');
   final _userFocus = FocusNode(debugLabel: 'user');
   final _passFocus = FocusNode(debugLabel: 'pass');
+  final _connectFocus = FocusNode(debugLabel: 'connect');
+
+  late final List<FocusNode> _ring;
+
   bool _busy = false;
   String? _localError;
+
+  @override
+  void initState() {
+    super.initState();
+    _ring = [_demoFocus, _urlFocus, _userFocus, _passFocus, _connectFocus];
+  }
 
   @override
   void dispose() {
     _url.dispose();
     _user.dispose();
     _pass.dispose();
-    _urlFocus.dispose();
-    _userFocus.dispose();
-    _passFocus.dispose();
+    for (final n in _ring) {
+      n.dispose();
+    }
     super.dispose();
+  }
+
+  void _move(int delta) {
+    var i = _ring.indexWhere((n) => n.hasFocus);
+    if (i < 0) i = 0;
+    final next = (i + delta).clamp(0, _ring.length - 1);
+    _ring[next].requestFocus();
   }
 
   Future<void> _demo() async {
@@ -71,8 +91,42 @@ class _LoginPageState extends State<LoginPage> {
     final sessionError = widget.session.errorMessage;
     final err = _localError ?? sessionError;
 
-    return SdtvLoginFormScope(
-      onSubmit: _busy ? null : _connect,
+    return SdtvInputScope(
+      onConfirm: () {
+        if (_urlFocus.hasFocus || _userFocus.hasFocus) {
+          _move(1);
+          return;
+        }
+        if (_passFocus.hasFocus) {
+          _connect();
+          return;
+        }
+        // Tiles handle their own confirm via FocusTile actions.
+      },
+      onBack: null,
+      extraActions: {
+        // Absolute linear nav — never geometric skip.
+        DirectionalFocusIntent: CallbackAction<DirectionalFocusIntent>(
+          onInvoke: (intent) {
+            final forward = intent.direction == TraversalDirection.down ||
+                intent.direction == TraversalDirection.right;
+            _move(forward ? 1 : -1);
+            return null;
+          },
+        ),
+        NextFocusIntent: CallbackAction<NextFocusIntent>(
+          onInvoke: (_) {
+            _move(1);
+            return null;
+          },
+        ),
+        PreviousFocusIntent: CallbackAction<PreviousFocusIntent>(
+          onInvoke: (_) {
+            _move(-1);
+            return null;
+          },
+        ),
+      },
       child: Scaffold(
         body: SafeArea(
           child: Column(
@@ -108,14 +162,12 @@ class _LoginPageState extends State<LoginPage> {
                           style: theme.textTheme.bodyMedium,
                         ),
                         const SizedBox(height: 28),
-                        FocusTraversalOrder(
-                          order: const NumericFocusOrder(0),
-                          child: SdtvFocusTile(
-                            label: 'Continue with demo playlist',
-                            icon: Icons.play_circle_outline,
-                            autofocus: true,
-                            onActivate: _busy ? null : _demo,
-                          ),
+                        SdtvFocusTile(
+                          label: 'Continue with demo playlist',
+                          icon: Icons.play_circle_outline,
+                          focusNode: _demoFocus,
+                          autofocus: true,
+                          onActivate: _busy ? null : _demo,
                         ),
                         const SizedBox(height: 28),
                         Text(
@@ -126,44 +178,33 @@ class _LoginPageState extends State<LoginPage> {
                           ),
                         ),
                         const SizedBox(height: 12),
-                        FocusTraversalOrder(
-                          order: const NumericFocusOrder(1),
-                          child: SdtvFocusTextField(
-                            controller: _url,
-                            focusNode: _urlFocus,
-                            label: 'Server URL (http://host:port)',
-                            keyboardType: TextInputType.url,
-                          ),
+                        SdtvFocusTextField(
+                          controller: _url,
+                          focusNode: _urlFocus,
+                          label: 'Server URL (http://host:port)',
+                          keyboardType: TextInputType.url,
                         ),
                         const SizedBox(height: 12),
-                        FocusTraversalOrder(
-                          order: const NumericFocusOrder(2),
-                          child: SdtvFocusTextField(
-                            controller: _user,
-                            focusNode: _userFocus,
-                            label: 'Username',
-                          ),
+                        SdtvFocusTextField(
+                          controller: _user,
+                          focusNode: _userFocus,
+                          label: 'Username',
                         ),
                         const SizedBox(height: 12),
-                        FocusTraversalOrder(
-                          order: const NumericFocusOrder(3),
-                          child: SdtvFocusTextField(
-                            controller: _pass,
-                            focusNode: _passFocus,
-                            label: 'Password',
-                            obscureText: true,
-                            textInputAction: TextInputAction.done,
-                            onSubmitted: _busy ? null : _connect,
-                          ),
+                        SdtvFocusTextField(
+                          controller: _pass,
+                          focusNode: _passFocus,
+                          label: 'Password',
+                          obscureText: true,
+                          textInputAction: TextInputAction.done,
+                          onSubmitted: _busy ? null : _connect,
                         ),
                         const SizedBox(height: 20),
-                        FocusTraversalOrder(
-                          order: const NumericFocusOrder(4),
-                          child: SdtvFocusTile(
-                            label: _busy ? 'Connecting…' : 'Connect',
-                            icon: Icons.login,
-                            onActivate: _busy ? null : _connect,
-                          ),
+                        SdtvFocusTile(
+                          label: _busy ? 'Connecting…' : 'Connect',
+                          icon: Icons.login,
+                          focusNode: _connectFocus,
+                          onActivate: _busy ? null : _connect,
                         ),
                         if (err != null) ...[
                           const SizedBox(height: 20),

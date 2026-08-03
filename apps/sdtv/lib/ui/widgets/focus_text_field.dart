@@ -56,10 +56,8 @@ class _SdtvFocusTextFieldState extends State<SdtvFocusTextField> {
     }
     final key = event.logicalKey;
 
-    // Deck OSK / hardware Tab
     if (key == LogicalKeyboardKey.tab) {
-      final shift = HardwareKeyboard.instance.isShiftPressed;
-      if (shift) {
+      if (HardwareKeyboard.instance.isShiftPressed) {
         node.previousFocus();
       } else {
         _goNext(node);
@@ -67,7 +65,6 @@ class _SdtvFocusTextFieldState extends State<SdtvFocusTextField> {
       return KeyEventResult.handled;
     }
 
-    // Arrows leave the field (couch form navigation)
     if (key == LogicalKeyboardKey.arrowDown ||
         key == LogicalKeyboardKey.arrowRight) {
       _goNext(node);
@@ -84,9 +81,7 @@ class _SdtvFocusTextFieldState extends State<SdtvFocusTextField> {
 
   void _goNext(FocusNode node) {
     final moved = node.nextFocus();
-    if (!moved) {
-      widget.onSubmitted?.call();
-    }
+    if (!moved) widget.onSubmitted?.call();
   }
 
   @override
@@ -147,7 +142,10 @@ class _SdtvFocusTextFieldState extends State<SdtvFocusTextField> {
   }
 }
 
-/// Login form scope with ordered focus + Tab.
+/// Login form: **linear** focus only (no geometric DirectionalFocus).
+///
+/// Deck D-pad uses DirectionalFocus by default, which skips fields. We force
+/// Tab-order for every direction here.
 class SdtvLoginFormScope extends StatelessWidget {
   const SdtvLoginFormScope({
     super.key,
@@ -171,6 +169,22 @@ class SdtvLoginFormScope extends StatelessWidget {
         onSubmit?.call();
       },
       onBack: onBack,
+      // Override geometric focus — always linear for this form.
+      extraActions: {
+        DirectionalFocusIntent: CallbackAction<DirectionalFocusIntent>(
+          onInvoke: (intent) {
+            final forward = intent.direction == TraversalDirection.down ||
+                intent.direction == TraversalDirection.right;
+            final node = FocusManager.instance.primaryFocus;
+            if (forward) {
+              node?.nextFocus();
+            } else {
+              node?.previousFocus();
+            }
+            return null;
+          },
+        ),
+      },
       child: FocusTraversalGroup(
         policy: OrderedTraversalPolicy(),
         child: child,
