@@ -103,6 +103,17 @@ void main() {
       expect(ch.streamId, 99);
       expect(ch.categoryId, '1');
       expect(ch.num, 5);
+      expect(ch.favoriteKey, 'i:99');
+    });
+
+    test('LiveChannel favoriteKey prefers stream URL for M3U', () {
+      const ch = LiveChannel(
+        streamId: 1,
+        name: 'News',
+        categoryId: 'g1',
+        streamUrl: 'https://example.com/live.ts',
+      );
+      expect(ch.favoriteKey, 'u:https://example.com/live.ts');
     });
   });
 }

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sdtv_core/sdtv_core.dart';
 
@@ -14,6 +16,8 @@ class SettingsStore {
   static const _kHasSession = 'xtream.hasSession';
   static const _kUseM3u = 'playlist.useM3u';
   static const _kM3uUrl = 'playlist.m3uUrl';
+  /// JSON map: scope → list of [LiveChannel.favoriteKey] strings.
+  static const _kFavorites = 'favorites.v1';
 
   static Future<SettingsStore> open() async {
     final prefs = await SharedPreferences.getInstance();
@@ -78,5 +82,64 @@ class SettingsStore {
     await _prefs.remove(_kBaseUrl);
     await _prefs.remove(_kUsername);
     await _prefs.remove(_kPassword);
+    // Favorites intentionally kept across sign-out (per-scope keys remain).
+  }
+
+  // —— Favorites (scoped by playlist / panel) ——
+
+  Map<String, List<String>> _favoritesMap() {
+    final raw = _prefs.getString(_kFavorites);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return {};
+      final out = <String, List<String>>{};
+      for (final e in decoded.entries) {
+        final key = '${e.key}';
+        final val = e.value;
+        if (val is List) {
+          out[key] = val.map((x) => '$x').where((s) => s.isNotEmpty).toList();
+        }
+      }
+      return out;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// Favorite channel keys for a provider scope (see [SessionController.favoritesScope]).
+  List<String> favoriteKeys(String scope) {
+    if (scope.isEmpty) return const [];
+    return List<String>.from(_favoritesMap()[scope] ?? const []);
+  }
+
+  Future<void> setFavoriteKeys(String scope, List<String> keys) async {
+    if (scope.isEmpty) return;
+    final map = _favoritesMap();
+    // Preserve order; drop empties / dups.
+    final seen = <String>{};
+    final cleaned = <String>[];
+    for (final k in keys) {
+      if (k.isEmpty || !seen.add(k)) continue;
+      cleaned.add(k);
+    }
+    if (cleaned.isEmpty) {
+      map.remove(scope);
+    } else {
+      map[scope] = cleaned;
+    }
+    await _prefs.setString(_kFavorites, jsonEncode(map));
+  }
+
+  Future<bool> toggleFavoriteKey(String scope, String key) async {
+    final list = favoriteKeys(scope);
+    final had = list.contains(key);
+    if (had) {
+      list.remove(key);
+    } else {
+      list.add(key);
+    }
+    await setFavoriteKeys(scope, list);
+    return !had;
   }
 }

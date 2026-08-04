@@ -13,6 +13,8 @@ enum GamepadEdge {
   confirm,
   back,
   menu,
+  /// Y / North — toggle channel favorite.
+  favorite,
   pageUp,
   pageDown,
 }
@@ -73,8 +75,8 @@ class LinuxJoystickReader {
         return GamepadEdge.confirm;
       case 1: // B / East
         return GamepadEdge.back;
-      case 3: // Y / North — secondary "menu/about" (handy on Deck)
-        return GamepadEdge.menu;
+      case 3: // Y / North — favorite (Start/Select still open menu)
+        return GamepadEdge.favorite;
       case 4: // LB
         return GamepadEdge.pageUp;
       case 5: // RB

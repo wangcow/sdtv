@@ -15,7 +15,14 @@ Couch navigation is the core product requirement. Every screen must work with a 
 | Page up/down | LB / RB | L1 / R1 | PageUp / PageDown |
 | Pause (external mpv) | A | Cross | Space |
 | Quit video (external mpv) | B | Circle | Esc |
+| Favorite channel | Y | Triangle | F |
 | Channel ± (player, later) | D-pad U/D or LB/RB | same | ↑ / ↓ |
+
+### Favorites
+
+- **Y** (or **F** on keyboard, long-press on touch) toggles a star on the focused channel.
+- **★ Favorites** is pinned at the top of the category list (survives reconnect for the same M3U URL / Xtream account).
+- Stars are stored locally (SharedPreferences), scoped per playlist/panel so Demo and M3U do not mix.
 
 ## Steam Input
 
