@@ -20,6 +20,8 @@ class SettingsStore {
   static const _kFavorites = 'favorites.v1';
   /// JSON map: scope → list of hidden category_id strings.
   static const _kHiddenCategories = 'hidden_categories.v1';
+  /// JSON map: scope → { categoryId, favoriteKey, name }.
+  static const _kLastPlayed = 'last_played.v1';
 
   static Future<SettingsStore> open() async {
     final prefs = await SharedPreferences.getInstance();
@@ -84,7 +86,7 @@ class SettingsStore {
     await _prefs.remove(_kBaseUrl);
     await _prefs.remove(_kUsername);
     await _prefs.remove(_kPassword);
-    // Favorites + hidden categories intentionally kept across sign-out.
+    // Favorites, hidden categories, last-played intentionally kept across sign-out.
   }
 
   // —— Scoped string-list maps (favorites, hidden categories) ——
@@ -178,5 +180,53 @@ class SettingsStore {
     }
     await setHiddenCategoryIds(scope, list);
     return !had;
+  }
+
+  // —— Last played channel (scoped by playlist / panel) ——
+
+  /// Returns map with keys: categoryId, favoriteKey, name (all optional strings).
+  Map<String, String> lastPlayed(String scope) {
+    if (scope.isEmpty) return const {};
+    final raw = _prefs.getString(_kLastPlayed);
+    if (raw == null || raw.isEmpty) return const {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return const {};
+      final entry = decoded[scope];
+      if (entry is! Map) return const {};
+      final out = <String, String>{};
+      for (final e in entry.entries) {
+        final v = '${e.value}';
+        if (v.isNotEmpty) out['${e.key}'] = v;
+      }
+      return out;
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  Future<void> setLastPlayed(
+    String scope, {
+    required String categoryId,
+    required String favoriteKey,
+    String name = '',
+  }) async {
+    if (scope.isEmpty || favoriteKey.isEmpty) return;
+    final raw = _prefs.getString(_kLastPlayed);
+    Map<String, dynamic> root = {};
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          root = Map<String, dynamic>.from(decoded);
+        }
+      } catch (_) {}
+    }
+    root[scope] = {
+      'categoryId': categoryId,
+      'favoriteKey': favoriteKey,
+      if (name.isNotEmpty) 'name': name,
+    };
+    await _prefs.setString(_kLastPlayed, jsonEncode(root));
   }
 }

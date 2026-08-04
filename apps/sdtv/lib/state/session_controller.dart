@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
@@ -114,9 +115,61 @@ class SessionController extends ChangeNotifier {
         _settings.hiddenCategoryIds(prefsScope).toSet();
   }
 
+  /// Last played (restored on connect for this [prefsScope]).
+  String? lastPlayedCategoryId;
+  String? lastPlayedFavoriteKey;
+  String? lastPlayedName;
+
   void _reloadGuidePrefs() {
     _reloadFavorites();
     _reloadHiddenCategories();
+    _reloadLastPlayed();
+  }
+
+  void _reloadLastPlayed() {
+    final m = _settings.lastPlayed(prefsScope);
+    lastPlayedCategoryId = m['categoryId'];
+    lastPlayedFavoriteKey = m['favoriteKey'];
+    lastPlayedName = m['name'];
+  }
+
+  /// Persist last played for relaunch (category + channel key).
+  Future<void> rememberLastPlayed(LiveChannel channel) async {
+    // Prefer the channel's real category so we can land in that list later.
+    // If user was in ★ Favorites, still store provider categoryId from channel.
+    var catId = channel.categoryId;
+    if (catId.isEmpty) {
+      catId = selectedCategoryId ?? '';
+    }
+    // When playing from favorites, keep favorites as the guide landing spot
+    // if that was the selected column — better "where I left off" UX.
+    if (selectedCategoryId == kFavoritesCategoryId) {
+      catId = kFavoritesCategoryId;
+    }
+    lastPlayedCategoryId = catId;
+    lastPlayedFavoriteKey = channel.favoriteKey;
+    lastPlayedName = channel.name;
+    await _settings.setLastPlayed(
+      prefsScope,
+      categoryId: catId,
+      favoriteKey: channel.favoriteKey,
+      name: channel.name,
+    );
+  }
+
+  /// Channel for last-played key, if still in the catalog.
+  LiveChannel? get lastPlayedChannel {
+    final key = lastPlayedFavoriteKey;
+    if (key == null || key.isEmpty) return null;
+    return channelForFavoriteKey(key);
+  }
+
+  /// Index of last-played channel in [channelsInCategory], or -1.
+  int get lastPlayedChannelIndex {
+    final key = lastPlayedFavoriteKey;
+    if (key == null || key.isEmpty) return -1;
+    final list = channelsInCategory;
+    return list.indexWhere((c) => c.favoriteKey == key);
   }
 
   /// Star / unstar [channel]. Returns true if now favorited.
@@ -394,6 +447,7 @@ class SessionController extends ChangeNotifier {
     _watchIndex = i;
     nowPlaying = ch;
     notifyListeners();
+    unawaited(rememberLastPlayed(ch));
 
     // Live IPTV: always loadfile. playlist-pos often updates OSD index only and
     // does not re-open the stream (especially HLS/ts).
@@ -585,6 +639,7 @@ class SessionController extends ChangeNotifier {
       );
       categories = pl.categories;
       allChannels = pl.channels;
+      // Scope depends on m3uPlaylistUrl — already set above.
       _reloadGuidePrefs();
       selectedCategoryId = _defaultCategoryId(pl.categories);
 
@@ -757,8 +812,32 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Prefer ★ Favorites when starred; else first *visible* provider category.
+  /// Last played category if still valid; else ★ Favorites if starred; else
+  /// first visible provider category.
   String? _defaultCategoryId(List<MediaCategory> cats) {
+    final lastCat = lastPlayedCategoryId;
+    final lastKey = lastPlayedFavoriteKey;
+    if (lastCat != null && lastCat.isNotEmpty) {
+      if (lastCat == kFavoritesCategoryId) {
+        // Land on favorites if we still have that key (or any favorites).
+        if (lastKey != null &&
+            (channelForFavoriteKey(lastKey) != null ||
+                _favoriteKeys.isNotEmpty)) {
+          return kFavoritesCategoryId;
+        }
+      } else {
+        final exists = cats.any((c) => c.categoryId == lastCat);
+        if (exists) {
+          // Prefer last cat even if hidden so "resume" still works.
+          if (lastKey == null ||
+              lastKey.isEmpty ||
+              channelForFavoriteKey(lastKey) != null ||
+              allChannels.any((c) => c.categoryId == lastCat)) {
+            return lastCat;
+          }
+        }
+      }
+    }
     if (_favoriteKeys.isNotEmpty) return kFavoritesCategoryId;
     for (final c in cats) {
       if (!_hiddenCategoryIds.contains(c.categoryId)) {
@@ -807,6 +886,8 @@ class SessionController extends ChangeNotifier {
     _watchInFlight = true;
     nowPlaying = channel;
     notifyListeners();
+    // Fire-and-forget persist (don't block spawn on disk).
+    unawaited(rememberLastPlayed(channel));
 
     try {
       final uri = resolvePlayUri(channel);
@@ -972,6 +1053,9 @@ class SessionController extends ChangeNotifier {
     selectedCategoryId = null;
     _favoriteKeys = const [];
     _hiddenCategoryIds = {};
+    lastPlayedCategoryId = null;
+    lastPlayedFavoriteKey = null;
+    lastPlayedName = null;
     useDemo = true;
     mockCatalog = true;
     useM3u = false;
