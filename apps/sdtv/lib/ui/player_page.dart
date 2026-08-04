@@ -254,6 +254,15 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                           color: Colors.white54,
                         ),
                       )
+                    else if (widget.session.useM3u)
+                      Text(
+                        'M3U · ${ch?.name ?? "channel"}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: Colors.white54,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      )
                     else
                       Text(
                         'Live · ${ch?.name ?? "channel"}',

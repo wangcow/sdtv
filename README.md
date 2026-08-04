@@ -25,8 +25,10 @@ Import your Xtream Codes URL, username, and password → browse Live TV (Movies 
 
 ## Status
 
-**Phase 3 (live Xtream).** Deck MVP complete: demo/mock couch playback + packaging.  
-**Connect** uses your real Xtream Codes server (catalog + stream URLs). **Demo** stays offline fixtures + public test HLS.
+**Phase 3+.** Deck MVP + live Xtream + **M3U playlists**.  
+- **Demo** — offline fixtures + public test HLS  
+- **M3U** — paste a public/legal playlist URL (`#EXTINF` catalog)  
+- **Connect** — real Xtream Codes panel  
 
 ### Run
 

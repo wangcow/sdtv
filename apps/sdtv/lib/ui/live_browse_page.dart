@@ -371,9 +371,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                           child: Text(
                             session.useDemo
                                 ? 'DEMO'
-                                : session.mockCatalog
-                                    ? 'MOCK'
-                                    : 'LIVE',
+                                : session.useM3u
+                                    ? 'M3U'
+                                    : session.mockCatalog
+                                        ? 'MOCK'
+                                        : 'LIVE',
                             style: theme.textTheme.labelSmall?.copyWith(
                               color: theme.colorScheme.primary,
                               fontWeight: FontWeight.w700,
@@ -604,11 +606,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             const SizedBox(height: 12),
                             Text(
                               'sdtv — Steam Deck IPTV player.\n'
-                              'Demo = offline mock. Connect = your Xtream '
-                              'provider (real catalog + streams).\n'
-                              'Media player only — you supply credentials.\n\n'
+                              'Demo = offline mock. M3U = playlist URL. '
+                              'Connect = Xtream panel.\n'
+                              'You supply legal playlists/credentials only.\n\n'
                               'Signed in as $user'
-                              '${session.useDemo ? ' (demo)' : session.mockCatalog ? ' (mock)' : ' (live)'}\n'
+                              '${session.useDemo ? ' (demo)' : session.useM3u ? ' (m3u)' : session.mockCatalog ? ' (mock)' : ' (live)'}\n'
                               'Channels: ${session.allChannels.length}\n\n'
                               'Product of the Wangcow Corporation\n'
                               'Apache License 2.0',
