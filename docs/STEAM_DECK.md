@@ -47,10 +47,17 @@ flutter run -d linux
 
 Selecting a channel **starts fullscreen `mpv`**, then returns to the channel list when mpv quits.
 
-- Install **mpv** on the Deck if needed (Desktop Mode: Discover search “mpv”, or distro package).
+- Install **mpv** on the Deck (Desktop Mode → **Discover** → search **mpv** → install Flathub app `io.mpv.Mpv`).  
+  Discover installs a **Flatpak**, not `/usr/bin/mpv` — that is normal; sdtv looks for Flatpak too.
 - Quit video: **Esc**, **q**, or Steam keyboard **B** if mapped to Esc.
 - If mpv is missing, sdtv shows an error snack with optional **Embedded** fallback (old Flutter texture path).
-- Override binary: `SDTV_MPV_PATH=/path/to/mpv` in `~/sdtv/sdtv.env`.
+- Override: create `~/sdtv/sdtv.env` with one of:
+  ```bash
+  SDTV_MPV_PATH=flatpak:io.mpv.Mpv
+  # or system package:
+  # SDTV_MPV_PATH=/usr/bin/mpv
+  ```
+- Debug: after launch, check `~/sdtv/.sdtv-runtime.txt` for `SDTV_MPV_PATH=…`.
 
 ### Smooth video (VAAPI)
 

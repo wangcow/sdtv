@@ -369,6 +369,7 @@ fi
 #   SDTV_FORCE_MOCK=1
 #   SDTV_FORCE_BUNDLED_MPV=1
 #   SDTV_MPV_PATH=/usr/bin/mpv
+#   SDTV_MPV_PATH=flatpak:io.mpv.Mpv
 if [ -f "${DIR}/sdtv.env" ]; then
   # shellcheck disable=SC1091
   set -a
@@ -376,12 +377,53 @@ if [ -f "${DIR}/sdtv.env" ]; then
   set +a
 fi
 
+# Phase A: resolve external mpv for channel handoff (Discover = Flatpak).
+# Steam Game Mode often has a short PATH; pin an absolute path / flatpak id.
+if [ -z "${SDTV_MPV_PATH:-}" ]; then
+  for c in \
+    /usr/bin/mpv \
+    /usr/local/bin/mpv \
+    /bin/mpv \
+    "${HOME}/.local/bin/mpv" \
+    /var/lib/flatpak/exports/bin/io.mpv.Mpv \
+    "${HOME}/.local/share/flatpak/exports/bin/io.mpv.Mpv" \
+    /var/lib/flatpak/exports/bin/org.mpv.Mpv \
+    "${HOME}/.local/share/flatpak/exports/bin/org.mpv.Mpv"
+  do
+    if [ -e "$c" ]; then
+      case "$c" in
+        *io.mpv.Mpv) export SDTV_MPV_PATH=flatpak:io.mpv.Mpv ;;
+        *org.mpv.Mpv) export SDTV_MPV_PATH=flatpak:org.mpv.Mpv ;;
+        *) export SDTV_MPV_PATH="$c" ;;
+      esac
+      break
+    fi
+  done
+fi
+if [ -z "${SDTV_MPV_PATH:-}" ] && command -v mpv >/dev/null 2>&1; then
+  export SDTV_MPV_PATH="$(command -v mpv)"
+fi
+if [ -z "${SDTV_MPV_PATH:-}" ] && command -v flatpak >/dev/null 2>&1; then
+  if flatpak info io.mpv.Mpv >/dev/null 2>&1; then
+    export SDTV_MPV_PATH=flatpak:io.mpv.Mpv
+  elif flatpak info org.mpv.Mpv >/dev/null 2>&1; then
+    export SDTV_MPV_PATH=flatpak:org.mpv.Mpv
+  fi
+fi
+
 # Tiny debug breadcrumb (safe to ignore / share when debugging decode)
 {
   echo "SDTV_MPV_SOURCE=${SDTV_MPV_SOURCE:-}"
+  echo "SDTV_MPV_PATH=${SDTV_MPV_PATH:-not found}"
   echo "LIBVA_DRIVER_NAME=${LIBVA_DRIVER_NAME:-}"
   echo "LIBVA_DRIVERS_PATH=${LIBVA_DRIVERS_PATH:-}"
   echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}"
+  echo "--- external mpv probes ---"
+  ls -la /usr/bin/mpv /usr/local/bin/mpv \
+    /var/lib/flatpak/exports/bin/io.mpv.Mpv \
+    "${HOME}/.local/share/flatpak/exports/bin/io.mpv.Mpv" 2>/dev/null || true
+  command -v mpv 2>/dev/null || echo "command -v mpv: none"
+  command -v flatpak >/dev/null 2>&1 && flatpak info io.mpv.Mpv 2>&1 | head -5 || true
   echo "--- libmpv ---"
   ls -la /usr/lib64/libmpv.so* /usr/lib/libmpv.so* "${DIR}/lib"/libmpv.so* 2>/dev/null || true
   echo "--- libva (should prefer system) ---"
