@@ -121,10 +121,10 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
       _player,
       configuration: const VideoControllerConfiguration(
         enableHardwareAcceleration: true,
-        // Prefer GPU decode (VAAPI on Deck when libmpv supports it).
-        hwdec: 'auto',
-        // Cap texture size to ~720p output for software-decode fallback;
-        // full bitstream still demuxed, but upload/composite is lighter.
+        // Prefer VAAPI on Steam Deck; fall back to auto/software.
+        // (Homebrew libmpv often has no VAAPI — run-sdtv.sh prefers system libmpv.)
+        hwdec: 'vaapi,auto',
+        // Cap texture size so software fallback is less brutal.
         height: 720,
       ),
     );
@@ -183,7 +183,10 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
       if (native.setProperty is! Function) return;
 
       const props = <String, String>{
-        'hwdec': 'auto',
+        // Comma = priority list (mpv). Needs libmpv built with VAAPI.
+        'hwdec': 'vaapi,vaapi-copy,auto-safe,auto',
+        'vo': 'libmpv',
+        'gpu-context': 'auto',
         'cache': 'yes',
         'demuxer-max-bytes': '104857600', // 100 MiB
         'demuxer-max-back-bytes': '52428800',
@@ -244,9 +247,10 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
       } catch (_) {}
     }
 
-    final hwPart = hw.isEmpty ? 'cpu?' : hw;
+    final src = Platform.environment['SDTV_MPV_SOURCE'] ?? '?';
+    final hwPart = hw.isEmpty || hw == 'no' ? 'cpu/software' : hw;
     final codecPart = codec.isEmpty ? '' : ' · $codec';
-    _decodeLabel = 'decode: $hwPart$codecPart';
+    _decodeLabel = 'decode: $hwPart$codecPart · mpv=$src';
     debugPrint('sdtv_player $_decodeLabel');
     if (!_disposed) notifyListeners();
   }

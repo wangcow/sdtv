@@ -310,10 +310,26 @@ cat > "${BUNDLE}/run-sdtv.sh" <<'EOF'
 #!/bin/sh
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Bundled libmpv + codecs first. System dirs after so GTK/X11/mesa come from Deck.
-export LD_LIBRARY_PATH="${DIR}/lib:${LD_LIBRARY_PATH:-}"
+# Prefer *system* libmpv when present (Steam Deck / SteamOS VAAPI).
+# Homebrew libmpv is often built *without* VAAPI → software decode → stutter / ~7fps.
+# DT_RUNPATH is $ORIGIN/lib; with RUNPATH, LD_LIBRARY_PATH is searched first.
+SYS_LIB=""
+if [ -e /usr/lib64/libmpv.so.2 ] || [ -e /usr/lib64/libmpv.so ]; then
+  SYS_LIB="/usr/lib64"
+elif [ -e /usr/lib/libmpv.so.2 ] || [ -e /usr/lib/libmpv.so ]; then
+  SYS_LIB="/usr/lib"
+fi
 
-# Homebrew libxkbcommon/fontconfig bake Cellar *data* prefixes. Point at Deck OS.
+if [ -n "$SYS_LIB" ] && [ "${SDTV_FORCE_BUNDLED_MPV:-0}" != "1" ]; then
+  # System mpv + mesa first; bundled codecs/ffmpeg still available after.
+  export LD_LIBRARY_PATH="${SYS_LIB}:/usr/lib64:/usr/lib:${DIR}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  export SDTV_MPV_SOURCE=system
+else
+  export LD_LIBRARY_PATH="${DIR}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  export SDTV_MPV_SOURCE=bundled
+fi
+
+# Point fontconfig/xkb at Deck OS (never Homebrew data prefixes).
 if [ -d /usr/share/X11/xkb ]; then
   export XKB_CONFIG_ROOT=/usr/share/X11/xkb
 fi
@@ -326,6 +342,7 @@ fi
 
 # Optional overrides (create yourself; not in the tarball), e.g.:
 #   echo 'SDTV_FORCE_MOCK=1' > sdtv.env
+#   echo 'SDTV_FORCE_BUNDLED_MPV=1' >> sdtv.env   # debug only
 if [ -f "${DIR}/sdtv.env" ]; then
   # shellcheck disable=SC1091
   set -a
