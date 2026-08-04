@@ -13,6 +13,8 @@ Couch navigation is the core product requirement. Every screen must work with a 
 | Back | B (right) | Circle | Escape |
 | Menu | Start (☰) | Options | Context menu |
 | Page up/down | LB / RB | L1 / R1 | PageUp / PageDown |
+| Pause (external mpv) | A | Cross | Space |
+| Quit video (external mpv) | B | Circle | Esc |
 | Channel ± (player, later) | D-pad U/D or LB/RB | same | ↑ / ↓ |
 
 ## Steam Input

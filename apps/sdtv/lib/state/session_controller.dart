@@ -60,9 +60,30 @@ class SessionController extends ChangeNotifier {
   /// True while [watchChannel] is in flight (before/during external mpv).
   bool _watchInFlight = false;
 
-  /// External (or in-flight) watch session — ignore A / re-activate.
-  bool get isWatchingExternal =>
-      _watchInFlight || externalMpv.isRunning || nowPlaying != null;
+  /// External watch session active (mpv running or handoff in progress).
+  ///
+  /// Use for **player** pad routing (pause/quit). Do **not** freeze the whole
+  /// browse UI with this — menu / Cancel must always work.
+  bool get isWatchingExternal => _watchInFlight || externalMpv.isRunning;
+
+  /// Pause/unpause the external mpv session (IPC). No-op if not watching.
+  Future<void> watchCyclePause() async {
+    if (!isWatchingExternal) return;
+    await externalMpv.cyclePause();
+  }
+
+  /// Quit external mpv and return to guide (B while watching).
+  Future<void> watchQuit() async {
+    if (!isWatchingExternal) return;
+    debugPrint('sdtv: watchQuit');
+    await externalMpv.quit();
+    // exitCode path clears _watchInFlight; if kill raced, force-clear.
+    if (_watchInFlight && !externalMpv.isRunning) {
+      _watchInFlight = false;
+      nowPlaying = null;
+      notifyListeners();
+    }
+  }
 
   List<LiveChannel> get channelsInCategory {
     final id = selectedCategoryId;
@@ -460,6 +481,7 @@ class SessionController extends ChangeNotifier {
     } catch (e, st) {
       debugPrint('sdtv: stopPlayback error: $e\n$st');
     }
+    _watchInFlight = false;
     nowPlaying = null;
     if (notify) notifyListeners();
   }

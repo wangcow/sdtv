@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
@@ -41,9 +43,8 @@ class _MpvInvoke {
 /// Spawns system/bundled **mpv** fullscreen for a single URL and waits until exit.
 ///
 /// Phase A handoff: Flutter keeps the guide; mpv owns the picture.
-///
-/// On Steam Deck, Discover usually installs **Flatpak** mpv (`io.mpv.Mpv`), not
-/// `/usr/bin/mpv`. We look for both.
+/// Couch control while watching: [quit] / [cyclePause] via JSON IPC (Flutter still
+/// reads `/dev/input/js*` under the fullscreen child).
 class ExternalMpvLauncher {
   ExternalMpvLauncher({this.extraArgs = const []});
 
@@ -52,8 +53,10 @@ class ExternalMpvLauncher {
 
   Process? _process;
 
-  /// True from spawn begin until process exit (covers the gap before PID exists).
+  /// True only while finding binary / Process.start (not for the whole play).
   bool _launching = false;
+
+  String? _ipcPath;
 
   bool get isRunning => _process != null || _launching;
 
@@ -87,7 +90,6 @@ class ExternalMpvLauncher {
       if (home != null) '$home/.local/bin/mpv',
     ];
 
-    // Flatpak export scripts are named after the app id, not "mpv".
     for (final id in flatpakAppIds) {
       candidates.add('/var/lib/flatpak/exports/bin/$id');
       if (home != null) {
@@ -177,6 +179,56 @@ class ExternalMpvLauncher {
     return env;
   }
 
+  String _newIpcPath() {
+    final n = Random().nextInt(0x7fffffff);
+    return '/tmp/sdtv-mpv-$n.sock';
+  }
+
+  /// Send a JSON IPC command to the running mpv (newline-delimited).
+  Future<bool> sendCommand(List<Object?> command) async {
+    final path = _ipcPath;
+    if (path == null || !isRunning) return false;
+    try {
+      final addr = InternetAddress(path, type: InternetAddressType.unix);
+      final socket = await Socket.connect(addr, 0)
+          .timeout(const Duration(milliseconds: 400));
+      final payload = jsonEncode({'command': command});
+      socket.write('$payload\n');
+      await socket.flush().timeout(const Duration(milliseconds: 400));
+      await socket.close();
+      return true;
+    } catch (e) {
+      debugPrint('sdtv_player: mpv ipc failed ($command): $e');
+      return false;
+    }
+  }
+
+  /// Pause / unpause via IPC.
+  Future<void> cyclePause() async {
+    final ok = await sendCommand(['cycle', 'pause']);
+    if (!ok) {
+      debugPrint('sdtv_player: cyclePause — no ipc');
+    }
+  }
+
+  /// Ask mpv to quit (falls back to [stop] kill).
+  Future<void> quit() async {
+    final ok = await sendCommand(['quit']);
+    if (!ok) {
+      await stop();
+      return;
+    }
+    // Give it a moment, then force-kill if still alive.
+    try {
+      final p = _process;
+      if (p != null) {
+        await p.exitCode.timeout(const Duration(milliseconds: 800));
+      }
+    } catch (_) {
+      await stop();
+    }
+  }
+
   /// Play [url] fullscreen until the user quits mpv (or process dies).
   ///
   /// Re-entrant: if a session is already launching/running, returns
@@ -203,8 +255,10 @@ class ExternalMpvLauncher {
 
       confDir = await Directory.systemTemp.createTemp('sdtv_mpv_');
       final confFile = File('${confDir.path}/input.conf');
+      // Keyboard + SDL gamepad names (when mpv gets the pad) + mouse.
+      // Flutter also drives pause/quit via IPC from /dev/input/js*.
       await confFile.writeAsString('''
-# sdtv Phase A — quit back to guide
+# sdtv — quit back to guide
 ESC quit
 q quit
 Q quit
@@ -212,9 +266,24 @@ BS quit
 MOUSE_BTN2 quit
 b quit
 B quit
+# Pause
 SPACE cycle pause
 p cycle pause
+# SDL gamepad (if mpv owns the pad)
+GAMEPAD_ACTION_DOWN cycle pause
+GAMEPAD_ACTION_RIGHT quit
+GAMEPAD_ACTION_EAST quit
+GAMEPAD_BACK quit
+GAMEPAD_START quit
+GAMEPAD_GUIDE quit
 ''');
+
+      final ipcPath = _newIpcPath();
+      _ipcPath = ipcPath;
+      try {
+        final stale = File(ipcPath);
+        if (await stale.exists()) await stale.delete();
+      } catch (_) {}
 
       final mpvArgs = <String>[
         '--fullscreen',
@@ -225,8 +294,12 @@ p cycle pause
         '--msg-level=all=warn',
         '--title=sdtv',
         '--input-conf=${confFile.path}',
+        '--input-ipc-server=$ipcPath',
         '--osc=yes',
         '--osd-level=1',
+        // Brief on-screen hint (Deck has no keyboard)
+        '--osd-playing-msg=A pause · B back',
+        '--osd-duration=2500',
         '--hwdec=vaapi,vaapi-copy,auto-copy,auto',
         '--profile=fast',
         '--framedrop=vo',
@@ -240,9 +313,9 @@ p cycle pause
         finalExec = 'flatpak';
         finalArgv = <String>[
           'run',
-          // Temp input.conf + any local playlist files.
           '--filesystem=/tmp',
           '--filesystem=host',
+          '--device=all',
           inv.appId!,
           ...mpvArgs,
         ];
@@ -262,6 +335,8 @@ p cycle pause
         environment: _childEnvironment(),
       );
       _process = proc;
+      // Launch complete — playback wait is not "launching".
+      _launching = false;
 
       unawaited(proc.stdout.drain<void>());
       unawaited(proc.stderr.transform(SystemEncoding().decoder).forEach((line) {
@@ -270,8 +345,15 @@ p cycle pause
         }
       }));
 
+      // Soft hint after window is up (in case osd-playing-msg is skipped).
+      unawaited(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 600));
+        await sendCommand(['show-text', 'A pause · B back', 2500]);
+      }());
+
       final code = await proc.exitCode;
       _process = null;
+      _cleanupIpc();
 
       return ExternalMpvResult(
         started: true,
@@ -280,6 +362,7 @@ p cycle pause
       );
     } catch (e, st) {
       _process = null;
+      _cleanupIpc();
       debugPrint('sdtv_player: mpv spawn failed: $e\n$st');
       return ExternalMpvResult(
         started: false,
@@ -296,20 +379,37 @@ p cycle pause
     }
   }
 
-  /// Kill a session we started (sign-out / app exit).
+  void _cleanupIpc() {
+    final path = _ipcPath;
+    _ipcPath = null;
+    if (path == null) return;
+    try {
+      final f = File(path);
+      if (f.existsSync()) f.deleteSync();
+    } catch (_) {}
+  }
+
+  /// Kill a session we started (sign-out / app exit / B while watching).
   Future<void> stop() async {
     final p = _process;
-    _process = null;
-    if (p == null) return;
-    try {
-      p.kill(ProcessSignal.sigterm);
-    } catch (_) {}
-    try {
-      await p.exitCode.timeout(const Duration(seconds: 2));
-    } catch (_) {
+    _launching = false;
+    if (p != null) {
+      // Prefer graceful quit (IPC while process still "running") then SIGTERM.
       try {
-        p.kill(ProcessSignal.sigkill);
+        await sendCommand(['quit']);
       } catch (_) {}
+      try {
+        p.kill(ProcessSignal.sigterm);
+      } catch (_) {}
+      try {
+        await p.exitCode.timeout(const Duration(seconds: 2));
+      } catch (_) {
+        try {
+          p.kill(ProcessSignal.sigkill);
+        } catch (_) {}
+      }
     }
+    _process = null;
+    _cleanupIpc();
   }
 }

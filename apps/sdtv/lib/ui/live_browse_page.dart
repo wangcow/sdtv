@@ -150,7 +150,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   DateTime? _lastActivateAt;
-  bool _activateInFlight = false;
 
   Future<void> _activate() async {
     // Belt-and-suspenders vs dual js+Enter on Deck.
@@ -161,8 +160,14 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     _lastActivateAt = now;
 
-    // Do not spawn a second mpv / re-enter while a watch session is live.
-    if (_activateInFlight || session.isWatchingExternal) {
+    // While mpv is up, A = pause (never freeze the guide / menu).
+    if (session.isWatchingExternal) {
+      if (_menuOpen || _aboutOpen) {
+        // Overlays still need A; if we somehow have UI + watch flag, clear watch.
+        await session.watchQuit();
+      } else {
+        await session.watchCyclePause();
+      }
       return;
     }
 
@@ -192,35 +197,30 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
 
     // Channels: hand off to external fullscreen mpv (Phase A).
+    // Re-entry while watching is handled above + session.watchChannel guard.
     final chans = session.channelsInCategory;
     if (chans.isEmpty) return;
     final ch = chans[_chanIndex.clamp(0, chans.length - 1)];
 
-    _activateInFlight = true;
-    try {
-      final err = await session.watchChannel(ch);
-      if (!mounted) return;
+    final err = await session.watchChannel(ch);
+    if (!mounted) return;
 
-      if (err != null) {
-        // Surface spawn errors in About-style snack; keep channel column.
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(err),
-            duration: const Duration(seconds: 6),
-            action: SnackBarAction(
-              label: 'Embedded',
-              onPressed: () {
-                unawaited(_playEmbedded(ch));
-              },
-            ),
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(err),
+          duration: const Duration(seconds: 6),
+          action: SnackBarAction(
+            label: 'Embedded',
+            onPressed: () {
+              unawaited(_playEmbedded(ch));
+            },
           ),
-        );
-      }
-
-      setState(() => _column = 1);
-    } finally {
-      _activateInFlight = false;
+        ),
+      );
     }
+
+    if (mounted) setState(() => _column = 1);
   }
 
   /// Fallback: old Flutter texture player (debug / no system mpv).
@@ -243,9 +243,13 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (mounted) setState(() => _column = 1);
   }
 
-  /// Hierarchical back: about → menu → categories ← channels ← (player pops itself).
-  /// Menu only when already on the category column.
+  /// Hierarchical back: about → menu → categories ← channels.
+  /// While external mpv is up: B quits video (does not open the guide menu).
   void _onBack() {
+    if (session.isWatchingExternal) {
+      unawaited(session.watchQuit());
+      return;
+    }
     if (_aboutOpen) {
       setState(() => _aboutOpen = false);
       return;
