@@ -53,14 +53,31 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   static const _rowExtent = 78.0;
   static const _listHeaderExtent = 44.0;
 
-  static const _menuItems = <({String id, String label, IconData icon})>[
-    (id: 'search', label: 'Search', icon: Icons.search),
-    (id: 'hide_cat', label: 'Hide category', icon: Icons.visibility_off_outlined),
-    (id: 'manage_cats', label: 'Manage categories', icon: Icons.category_outlined),
-    (id: 'about', label: 'About', icon: Icons.info_outline),
-    (id: 'signout', label: 'Sign out', icon: Icons.logout),
-    (id: 'exit', label: 'Exit sdtv', icon: Icons.power_settings_new),
-    (id: 'cancel', label: 'Cancel', icon: Icons.close),
+  /// Sign out sits just above Cancel and is marked [danger] (red) to avoid misclicks.
+  static const _menuItems =
+      <({String id, String label, IconData icon, bool danger})>[
+    (id: 'search', label: 'Search', icon: Icons.search, danger: false),
+    (
+      id: 'hide_cat',
+      label: 'Hide category',
+      icon: Icons.visibility_off_outlined,
+      danger: false
+    ),
+    (
+      id: 'manage_cats',
+      label: 'Manage categories',
+      icon: Icons.category_outlined,
+      danger: false
+    ),
+    (id: 'about', label: 'About', icon: Icons.info_outline, danger: false),
+    (
+      id: 'exit',
+      label: 'Exit sdtv',
+      icon: Icons.power_settings_new,
+      danger: false
+    ),
+    (id: 'signout', label: 'Sign out', icon: Icons.logout, danger: true),
+    (id: 'cancel', label: 'Cancel', icon: Icons.close, danger: false),
   ];
 
   SessionController get session => widget.session;
@@ -1088,6 +1105,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                 label: _menuItems[i].label,
                                 icon: _menuItems[i].icon,
                                 selected: _menuIndex == i,
+                                danger: _menuItems[i].danger,
                                 onTap: () =>
                                     _runMenuAction(_menuItems[i].id),
                               ),
@@ -1398,6 +1416,7 @@ class _BrowseTile extends StatelessWidget {
     this.onLongPress,
     this.icon,
     this.dimSelected = false,
+    this.danger = false,
   });
 
   final String label;
@@ -1409,18 +1428,38 @@ class _BrowseTile extends StatelessWidget {
   /// Soft highlight when this row is the cursor but the other column is focused.
   final bool dimSelected;
 
+  /// Destructive action (e.g. Sign out) — red styling so it is harder to mis-hit.
+  final bool danger;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final active = selected || dimSelected;
-    final bg = selected
-        ? theme.colorScheme.primary
-        : dimSelected
-            ? theme.colorScheme.primary.withValues(alpha: 0.28)
-            : theme.colorScheme.surfaceContainerHighest;
-    final fg = selected
-        ? theme.colorScheme.onPrimary
-        : theme.colorScheme.onSurface;
+    final dangerColor = theme.colorScheme.error;
+    final Color bg;
+    final Color fg;
+    if (danger && selected) {
+      bg = dangerColor;
+      fg = theme.colorScheme.onError;
+    } else if (danger) {
+      bg = dangerColor.withValues(alpha: 0.18);
+      fg = dangerColor;
+    } else if (selected) {
+      bg = theme.colorScheme.primary;
+      fg = theme.colorScheme.onPrimary;
+    } else if (dimSelected) {
+      bg = theme.colorScheme.primary.withValues(alpha: 0.28);
+      fg = theme.colorScheme.onSurface;
+    } else {
+      bg = theme.colorScheme.surfaceContainerHighest;
+      fg = theme.colorScheme.onSurface;
+    }
+
+    final borderColor = danger
+        ? (selected ? dangerColor : dangerColor.withValues(alpha: 0.7))
+        : (active
+            ? theme.colorScheme.primaryContainer
+            : Colors.transparent);
 
     return GestureDetector(
       onTap: onTap,
@@ -1432,15 +1471,14 @@ class _BrowseTile extends StatelessWidget {
           color: bg,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: active
-                ? theme.colorScheme.primaryContainer
-                : Colors.transparent,
+            color: borderColor,
             width: 3,
           ),
           boxShadow: selected
               ? [
                   BoxShadow(
-                    color: theme.colorScheme.primary.withValues(alpha: 0.45),
+                    color: (danger ? dangerColor : theme.colorScheme.primary)
+                        .withValues(alpha: 0.45),
                     blurRadius: 16,
                   ),
                 ]
@@ -1459,7 +1497,9 @@ class _BrowseTile extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: theme.textTheme.titleMedium?.copyWith(
                   color: fg,
-                  fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                  fontWeight: active || danger
+                      ? FontWeight.w700
+                      : FontWeight.w500,
                 ),
               ),
             ),
