@@ -265,31 +265,27 @@ class ExternalMpvLauncher {
     return res['data'];
   }
 
-  /// Pause / unpause via IPC.
-  ///
-  /// When [pausedHud] is set and we end up paused, show a short transport
-  /// hint (channel name + keys). OSC visibility is also driven by the
-  /// sdtv-pause-osc.lua script so keyboard Space behaves the same.
-  Future<void> cyclePause({String? pausedHud}) async {
-    final ok = await sendCommand(['cycle', 'pause']);
-    if (!ok) {
-      debugPrint('sdtv_player: cyclePause — no ipc');
-      return;
-    }
-    final paused = await getProperty('pause');
-    final isPaused = paused == true || paused == 'yes';
-    // Best-effort: force OSC on pause even if the lua script is missing.
-    if (isPaused) {
-      await sendCommand(['script-message', 'osc-visibility', 'always', 'no-osd']);
-      if (pausedHud != null && pausedHud.isNotEmpty) {
-        await showText(
-          '❚❚  $pausedHud\nA resume · B guide · LB/RB ch · ↑↓ vol · X mute',
-          durationMs: 4500,
-        );
-      }
-    } else {
-      await sendCommand(['script-message', 'osc-visibility', 'auto', 'no-osd']);
-    }
+  /// Pause / unpause via IPC. Prefer [setPaused] when driving a watch menu.
+  Future<void> cyclePause() async {
+    await sendCommand(['cycle', 'pause']);
+  }
+
+  Future<void> setPaused(bool paused) async {
+    await sendCommand(['set', 'pause', paused ? 'yes' : 'no']);
+  }
+
+  Future<bool> isPaused() async {
+    final p = await getProperty('pause');
+    return p == true || p == 'yes';
+  }
+
+  Future<void> setOscVisible(bool always) async {
+    await sendCommand([
+      'script-message',
+      'osc-visibility',
+      always ? 'always' : 'auto',
+      'no-osd',
+    ]);
   }
 
   /// Set the window / OSC title (channel name).
@@ -297,6 +293,42 @@ class ExternalMpvLauncher {
     final t = title.trim();
     if (t.isEmpty) return;
     await sendCommand(['set', 'force-media-title', t]);
+  }
+
+  /// Cycle subtitle track (includes “no” on many builds).
+  Future<void> cycleSubtitleTrack() async {
+    await sendCommand(['cycle', 'sid']);
+  }
+
+  Future<void> cycleAudioTrack() async {
+    await sendCommand(['cycle', 'aid']);
+  }
+
+  Future<void> cycleSubVisibility() async {
+    await sendCommand(['cycle', 'sub-visibility']);
+  }
+
+  /// Human label for current subtitles (best-effort).
+  Future<String> subtitleLabel() async {
+    final sid = await getProperty('sid');
+    if (sid == false || sid == 'no' || sid == null) return 'Off';
+    final vis = await getProperty('sub-visibility');
+    if (vis == false || vis == 'no') return 'Hidden';
+    final title = await getProperty('current-tracks/sub/title');
+    final lang = await getProperty('current-tracks/sub/lang');
+    if (title is String && title.trim().isNotEmpty) return title.trim();
+    if (lang is String && lang.trim().isNotEmpty) return lang.trim();
+    return 'Track $sid';
+  }
+
+  Future<String> audioLabel() async {
+    final aid = await getProperty('aid');
+    if (aid == false || aid == 'no' || aid == null) return 'Off';
+    final title = await getProperty('current-tracks/audio/title');
+    final lang = await getProperty('current-tracks/audio/lang');
+    if (title is String && title.trim().isNotEmpty) return title.trim();
+    if (lang is String && lang.trim().isNotEmpty) return lang.trim();
+    return 'Track $aid';
   }
 
   /// Relative volume change with OSD bar + numeric readout.

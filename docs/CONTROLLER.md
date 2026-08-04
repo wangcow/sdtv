@@ -35,15 +35,26 @@ Flutter keeps reading the pad (Deck); mpv also has keyboard maps when it has foc
 
 Zap walks the **current list** (★ Favorites or the category you played from).
 
-### Pause chrome (transport bar)
+### Watch menu (navigable pause UI)
 
-External mpv is fullscreen for performance, so the “YouTube bar” is **mpv’s OSC**, not a Flutter overlay:
+mpv’s OSC is mostly **mouse**-oriented; D-pad does not “focus” its buttons well.  
+sdtv uses a **mode switch** instead:
 
-- **A / Space** pauses → OSC stays visible (title + transport) and a short HUD lists controls
-- **A / Space** again resumes → OSC returns to auto-hide
-- On **live** streams the seek bar is often empty or non-seekable (no end time); that is normal. VOD / catch-up later can use a real scrubber when duration is known.
+| Mode | How you enter | D-pad / shoulders | A | B |
+|------|----------------|-------------------|---|---|
+| **Playing** | Start channel / Resume | Volume ↑↓ · Channel ←→ / LB RB | Open menu (pauses) | Quit to guide |
+| **Watch menu** | A while playing | Move selection · ←→ change subs/audio | Activate row | Close menu (stay paused) |
 
-A full Flutter guide-over-video menu would need a different compositing model; OSC is the right layer for Phase B.
+Menu rows (OSD list with ▶ cursor):
+
+1. **Resume** — unpause, hide menu  
+2. **Subtitles** — A / ←→ cycle tracks (Off when none)  
+3. **Audio** — A / ←→ cycle tracks  
+4. **Mute** — toggle  
+5. **Back to guide** — quit mpv  
+
+While the menu is open, channel zap and volume on the D-pad are **disabled** so you are clearly “in the menu.”  
+Live streams may still show a weak OSC seek bar (no duration); that is expected.
 
 ## Steam Input
 
