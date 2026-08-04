@@ -10,6 +10,7 @@ class ExternalMpvResult {
     this.exitCode,
     this.error,
     this.mpvPath,
+    this.busy = false,
   });
 
   final bool started;
@@ -17,7 +18,10 @@ class ExternalMpvResult {
   final String? error;
   final String? mpvPath;
 
-  bool get ok => started && error == null;
+  /// True when a session was already in flight (re-entry ignored).
+  final bool busy;
+
+  bool get ok => started && error == null && !busy;
 }
 
 /// How to invoke mpv (native binary vs Flatpak app).
@@ -47,7 +51,11 @@ class ExternalMpvLauncher {
   final List<String> extraArgs;
 
   Process? _process;
-  bool get isRunning => _process != null;
+
+  /// True from spawn begin until process exit (covers the gap before PID exists).
+  bool _launching = false;
+
+  bool get isRunning => _process != null || _launching;
 
   /// Common Flatpak app IDs for mpv (Discover / Flathub).
   static const flatpakAppIds = <String>[
@@ -170,28 +178,32 @@ class ExternalMpvLauncher {
   }
 
   /// Play [url] fullscreen until the user quits mpv (or process dies).
+  ///
+  /// Re-entrant: if a session is already launching/running, returns
+  /// [ExternalMpvResult.busy] and does **not** spawn another process.
   Future<ExternalMpvResult> playFullscreen(Uri url) async {
-    if (_process != null) {
-      try {
-        _process!.kill();
-      } catch (_) {}
-      _process = null;
+    if (_launching || _process != null) {
+      debugPrint('sdtv_player: playFullscreen ignored (already running)');
+      return const ExternalMpvResult(started: false, busy: true);
     }
 
-    final inv = await _findMpv();
-    if (inv == null) {
-      return const ExternalMpvResult(
-        started: false,
-        error:
-            'mpv not found. On Deck: Desktop → Discover → install “mpv” '
-            '(Flatpak io.mpv.Mpv), or set SDTV_MPV_PATH in ~/sdtv/sdtv.env '
-            '(e.g. flatpak:io.mpv.Mpv or /usr/bin/mpv).',
-      );
-    }
+    _launching = true;
+    Directory? confDir;
+    try {
+      final inv = await _findMpv();
+      if (inv == null) {
+        return const ExternalMpvResult(
+          started: false,
+          error:
+              'mpv not found. On Deck: Desktop → Discover → install “mpv” '
+              '(Flatpak io.mpv.Mpv), or set SDTV_MPV_PATH in ~/sdtv/sdtv.env '
+              '(e.g. flatpak:io.mpv.Mpv or /usr/bin/mpv).',
+        );
+      }
 
-    final confDir = await Directory.systemTemp.createTemp('sdtv_mpv_');
-    final confFile = File('${confDir.path}/input.conf');
-    await confFile.writeAsString('''
+      confDir = await Directory.systemTemp.createTemp('sdtv_mpv_');
+      final confFile = File('${confDir.path}/input.conf');
+      await confFile.writeAsString('''
 # sdtv Phase A — quit back to guide
 ESC quit
 q quit
@@ -204,46 +216,45 @@ SPACE cycle pause
 p cycle pause
 ''');
 
-    final mpvArgs = <String>[
-      '--fullscreen',
-      '--force-window=immediate',
-      '--keep-open=no',
-      '--idle=no',
-      '--no-terminal',
-      '--msg-level=all=warn',
-      '--title=sdtv',
-      '--input-conf=${confFile.path}',
-      '--osc=yes',
-      '--osd-level=1',
-      '--hwdec=vaapi,vaapi-copy,auto-copy,auto',
-      '--profile=fast',
-      '--framedrop=vo',
-      ...extraArgs,
-      url.toString(),
-    ];
-
-    late final String finalExec;
-    late final List<String> finalArgv;
-    if (inv.isFlatpak) {
-      finalExec = 'flatpak';
-      finalArgv = <String>[
-        'run',
-        // Temp input.conf + any local playlist files.
-        '--filesystem=/tmp',
-        '--filesystem=host',
-        inv.appId!,
-        ...mpvArgs,
+      final mpvArgs = <String>[
+        '--fullscreen',
+        '--force-window=immediate',
+        '--keep-open=no',
+        '--idle=no',
+        '--no-terminal',
+        '--msg-level=all=warn',
+        '--title=sdtv',
+        '--input-conf=${confFile.path}',
+        '--osc=yes',
+        '--osd-level=1',
+        '--hwdec=vaapi,vaapi-copy,auto-copy,auto',
+        '--profile=fast',
+        '--framedrop=vo',
+        ...extraArgs,
+        url.toString(),
       ];
-    } else {
-      finalExec = inv.executable;
-      finalArgv = mpvArgs;
-    }
 
-    debugPrint(
-      'sdtv_player: external mpv ${inv.label} → $finalExec ${finalArgv.join(' ')}',
-    );
+      late final String finalExec;
+      late final List<String> finalArgv;
+      if (inv.isFlatpak) {
+        finalExec = 'flatpak';
+        finalArgv = <String>[
+          'run',
+          // Temp input.conf + any local playlist files.
+          '--filesystem=/tmp',
+          '--filesystem=host',
+          inv.appId!,
+          ...mpvArgs,
+        ];
+      } else {
+        finalExec = inv.executable;
+        finalArgv = mpvArgs;
+      }
 
-    try {
+      debugPrint(
+        'sdtv_player: external mpv ${inv.label} → $finalExec ${finalArgv.join(' ')}',
+      );
+
       final proc = await Process.start(
         finalExec,
         finalArgv,
@@ -261,9 +272,6 @@ p cycle pause
 
       final code = await proc.exitCode;
       _process = null;
-      try {
-        await confDir.delete(recursive: true);
-      } catch (_) {}
 
       return ExternalMpvResult(
         started: true,
@@ -273,14 +281,18 @@ p cycle pause
     } catch (e, st) {
       _process = null;
       debugPrint('sdtv_player: mpv spawn failed: $e\n$st');
-      try {
-        await confDir.delete(recursive: true);
-      } catch (_) {}
       return ExternalMpvResult(
         started: false,
-        error: 'Failed to start mpv (${inv.label}): $e',
-        mpvPath: inv.label,
+        error: 'Failed to start mpv: $e',
       );
+    } finally {
+      _launching = false;
+      final dir = confDir;
+      if (dir != null) {
+        try {
+          await dir.delete(recursive: true);
+        } catch (_) {}
+      }
     }
   }
 
