@@ -108,8 +108,9 @@ class HttpXtreamClient implements XtreamClient {
       if (response.statusCode == 403 && body.isEmpty) {
         throw XtreamException(
           'HTTP 403 forbidden (empty body). Often Cloudflare/bot filter or '
-          'IP block — not always a wrong password. Confirm this panel works '
-          'in another app on this same network, or try later / another DNS.',
+          'IP block — not always a wrong password. Do not keep retrying '
+          '(can flag the account). Confirm TiviMate on this network; if that '
+          'also fails, contact the provider and wait before trying again.',
           statusCode: 403,
         );
       }
