@@ -43,6 +43,20 @@ flutter pub get
 flutter run -d linux
 ```
 
+### Smooth video (VAAPI)
+
+If the player HUD shows `decode: cpu/software` and video stutters, the app is using **software decode**.
+
+Homebrew’s `libmpv` is often built **without VAAPI**. `run-sdtv.sh` prefers **system** `libmpv` on SteamOS (`/usr/lib64`) so Deck hardware decode can work.
+
+| HUD | Meaning |
+|-----|---------|
+| `decode: vaapi · … · mpv=system` | Good — hardware path |
+| `decode: cpu/software · mpv=bundled` | Still on brew mpv — check system libmpv exists |
+| `decode: cpu/software · mpv=system` | System mpv but no VAAPI for this codec |
+
+Debug force bundled brew mpv: `echo SDTV_FORCE_BUNDLED_MPV=1 >> ~/sdtv/sdtv.env`
+
 ### Live Xtream on Deck
 
 **Connect to provider** uses your real panel (not demo). Enter:
