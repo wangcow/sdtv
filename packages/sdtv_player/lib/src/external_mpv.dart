@@ -295,13 +295,80 @@ class ExternalMpvLauncher {
     await sendCommand(['set', 'force-media-title', t]);
   }
 
-  /// Cycle subtitle track (includes “no” on many builds).
+  /// Cycle subtitle track (includes “no” / Off — intentional for subs).
   Future<void> cycleSubtitleTrack() async {
     await sendCommand(['cycle', 'sid']);
   }
 
-  Future<void> cycleAudioTrack() async {
-    await sendCommand(['cycle', 'aid']);
+  /// Cycle **audio** among real tracks only.
+  ///
+  /// Never leaves [aid]=no: mpv's plain `cycle aid` includes "no", and on many
+  /// live streams returning from "no" does not restore sound until reload.
+  /// Mute is a separate control ([cycleMute]).
+  Future<void> cycleAudioTrack({int direction = 1}) async {
+    final ids = await _trackIds('audio');
+    if (ids.isEmpty) {
+      // No track-list (or empty) — try soft recover then bail.
+      await ensureAudioOn();
+      return;
+    }
+
+    final current = await getProperty('aid');
+    final curKey = _trackIdKey(current);
+    var idx = ids.indexWhere((id) => _trackIdKey(id) == curKey);
+
+    if (ids.length == 1) {
+      // Single track: re-select it (recovers from accidental aid=no).
+      await sendCommand(['set', 'aid', ids.first]);
+      await sendCommand(['set', 'mute', 'no']);
+      return;
+    }
+
+    if (idx < 0) {
+      // Off or unknown → first track.
+      idx = 0;
+    } else {
+      idx = (idx + direction) % ids.length;
+      if (idx < 0) idx += ids.length;
+    }
+    await sendCommand(['set', 'aid', ids[idx]]);
+    // Ensure we didn't mute earlier while "off".
+    await sendCommand(['set', 'mute', 'no']);
+  }
+
+  /// If audio is disabled (aid=no), select the first audio track again.
+  Future<void> ensureAudioOn() async {
+    final aid = await getProperty('aid');
+    if (aid != false && aid != 'no' && aid != null) return;
+    final ids = await _trackIds('audio');
+    if (ids.isNotEmpty) {
+      await sendCommand(['set', 'aid', ids.first]);
+    } else {
+      await sendCommand(['set', 'aid', 'auto']);
+      await sendCommand(['cycle', 'aid']);
+    }
+    await sendCommand(['set', 'mute', 'no']);
+  }
+
+  Future<List<Object>> _trackIds(String type) async {
+    final raw = await getProperty('track-list');
+    if (raw is! List) return const [];
+    final ids = <Object>[];
+    for (final item in raw) {
+      if (item is! Map) continue;
+      final map = Map<Object?, Object?>.from(item);
+      if ('${map['type']}' != type) continue;
+      // Skip external-only weirdness; require an id.
+      final id = map['id'];
+      if (id == null) continue;
+      ids.add(id);
+    }
+    return ids;
+  }
+
+  static String _trackIdKey(Object? id) {
+    if (id == null || id == false) return 'no';
+    return '$id';
   }
 
   Future<void> cycleSubVisibility() async {
@@ -323,7 +390,7 @@ class ExternalMpvLauncher {
 
   Future<String> audioLabel() async {
     final aid = await getProperty('aid');
-    if (aid == false || aid == 'no' || aid == null) return 'Off';
+    if (aid == false || aid == 'no' || aid == null) return 'Off (fixing…)';
     final title = await getProperty('current-tracks/audio/title');
     final lang = await getProperty('current-tracks/audio/lang');
     if (title is String && title.trim().isNotEmpty) return title.trim();
