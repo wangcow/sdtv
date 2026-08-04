@@ -115,5 +115,20 @@ void main() {
       );
       expect(ch.favoriteKey, 'u:https://example.com/live.ts');
     });
+
+    test('LiveChannel favoriteKey avoids i:0 collisions', () {
+      const a = LiveChannel(
+        streamId: 0,
+        name: 'Forensic Files',
+        categoryId: 'doc',
+      );
+      const b = LiveChannel(
+        streamId: 0,
+        name: 'Other Show',
+        categoryId: 'doc',
+      );
+      expect(a.favoriteKey, isNot(b.favoriteKey));
+      expect(a.favoriteKey, startsWith('n:'));
+    });
   });
 }

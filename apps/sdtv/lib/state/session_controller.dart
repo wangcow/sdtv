@@ -431,7 +431,7 @@ class SessionController extends ChangeNotifier {
   }
 
   /// Guide search (categories + channels). EPG can append later via same hits.
-  List<GuideSearchHit> searchGuide(String query, {int maxResults = 80}) {
+  List<GuideSearchHit> searchGuide(String query, {int maxResults = 120}) {
     return GuideSearch.search(
       query: query,
       categories: [
@@ -439,8 +439,36 @@ class SessionController extends ChangeNotifier {
       ],
       channels: allChannels,
       hiddenCategoryIds: _hiddenCategoryIds,
+      favoriteKeys: _favoriteKeys.toSet(),
       maxResults: maxResults,
     );
+  }
+
+  /// Resolve a stored favorite key to a live catalog channel (best-effort).
+  LiveChannel? channelForFavoriteKey(String key) {
+    for (final c in allChannels) {
+      if (c.favoriteKey == key) return c;
+    }
+    // Legacy keys / collisions: try stream id or name prefix.
+    if (key.startsWith('i:')) {
+      final id = int.tryParse(key.substring(2));
+      if (id != null && id != 0) {
+        for (final c in allChannels) {
+          if (c.streamId == id) return c;
+        }
+      }
+    }
+    if (key.startsWith('n:')) {
+      final rest = key.substring(2);
+      final pipe = rest.lastIndexOf('|');
+      final name = pipe >= 0 ? rest.substring(0, pipe) : rest;
+      final cat = pipe >= 0 ? rest.substring(pipe + 1) : null;
+      for (final c in allChannels) {
+        if (c.name.trim().toLowerCase() != name) continue;
+        if (cat == null || cat.isEmpty || c.categoryId == cat) return c;
+      }
+    }
+    return null;
   }
 
   /// Jump guide selection to a category (and optional channel).
@@ -458,14 +486,15 @@ class SessionController extends ChangeNotifier {
   List<LiveChannel> get channelsInCategory {
     final id = selectedCategoryId;
     if (id == kFavoritesCategoryId) {
-      // Preserve star order from prefs.
-      final byKey = <String, LiveChannel>{
-        for (final c in allChannels) c.favoriteKey: c,
-      };
+      // Preserve star order from prefs; resolve keys robustly (not map-by-key
+      // only — duplicate favoriteKey used to drop channels silently).
       final out = <LiveChannel>[];
+      final seen = <String>{};
       for (final k in _favoriteKeys) {
-        final ch = byKey[k];
-        if (ch != null) out.add(ch);
+        final ch = channelForFavoriteKey(k);
+        if (ch == null) continue;
+        if (!seen.add(ch.favoriteKey)) continue;
+        out.add(ch);
       }
       return out;
     }

@@ -70,7 +70,10 @@ class GuideSearch {
     return 0;
   }
 
-  /// Search visible categories + channels. [hiddenCategoryIds] are skipped.
+  /// Search categories + channels.
+  ///
+  /// Hidden categories still appear (marked) so a favorited show in a hidden
+  /// group remains findable. [favoriteKeys] get a score boost.
   ///
   /// [maxResults] caps list length for huge catalogs.
   static List<GuideSearchHit> search({
@@ -78,7 +81,8 @@ class GuideSearch {
     required List<({String id, String name})> categories,
     required List<LiveChannel> channels,
     Set<String> hiddenCategoryIds = const {},
-    int maxResults = 80,
+    Set<String> favoriteKeys = const {},
+    int maxResults = 120,
   }) {
     final q = query.trim();
     if (q.isEmpty) return const [];
@@ -90,14 +94,14 @@ class GuideSearch {
     final hits = <GuideSearchHit>[];
 
     for (final c in categories) {
-      if (hiddenCategoryIds.contains(c.id)) continue;
+      final hidden = hiddenCategoryIds.contains(c.id);
       final s = scoreText(q, c.name);
       if (s <= 0) continue;
       hits.add(
         GuideSearchHit(
           kind: GuideSearchKind.category,
           title: c.name,
-          subtitle: 'Category',
+          subtitle: hidden ? 'Category · hidden' : 'Category',
           categoryId: c.id,
           categoryName: c.name,
           score: s + 5, // slight boost so cats surface among channels
@@ -106,18 +110,26 @@ class GuideSearch {
     }
 
     for (final ch in channels) {
-      if (hiddenCategoryIds.contains(ch.categoryId)) continue;
+      final hidden = hiddenCategoryIds.contains(ch.categoryId);
       final sName = scoreText(q, ch.name);
       final catName = catNameById[ch.categoryId] ?? '';
       final sCat = catName.isEmpty ? 0 : (scoreText(q, catName) ~/ 2);
-      final s = sName >= sCat ? sName : sCat;
+      var s = sName >= sCat ? sName : sCat;
       if (s <= 0) continue;
+      if (favoriteKeys.contains(ch.favoriteKey)) {
+        s += 15; // boost ★ so favorited channels stay easy to re-find
+      }
       final numPrefix = ch.num > 0 ? '${ch.num}. ' : '';
+      final bits = <String>[
+        if (catName.isNotEmpty) catName else 'Channel',
+        if (hidden) 'hidden',
+        if (favoriteKeys.contains(ch.favoriteKey)) '★',
+      ];
       hits.add(
         GuideSearchHit(
           kind: GuideSearchKind.channel,
           title: '$numPrefix${ch.name}',
-          subtitle: catName.isEmpty ? 'Channel' : catName,
+          subtitle: bits.join(' · '),
           categoryId: ch.categoryId,
           categoryName: catName.isEmpty ? null : catName,
           channel: ch,

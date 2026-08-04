@@ -25,11 +25,14 @@ class LiveChannel {
 
   /// Stable id for favorites across reconnects.
   ///
-  /// M3U: prefer stream URL (playlist order can change). Xtream: stream id.
+  /// Prefer URL (M3U), then Xtream stream id, then name+category when id is
+  /// missing/0 (some panels send stream_id 0 for many rows — `i:0` collided).
   String get favoriteKey {
     final url = streamUrl?.trim();
     if (url != null && url.isNotEmpty) return 'u:$url';
-    return 'i:$streamId';
+    if (streamId != 0) return 'i:$streamId';
+    final n = name.trim().toLowerCase();
+    return 'n:$n|${categoryId.trim()}';
   }
 
   factory LiveChannel.fromJson(Map<String, dynamic> json) {
