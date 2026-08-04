@@ -150,6 +150,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   DateTime? _lastActivateAt;
+  bool _activateInFlight = false;
 
   Future<void> _activate() async {
     // Belt-and-suspenders vs dual js+Enter on Deck.
@@ -159,6 +160,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
     _lastActivateAt = now;
+
+    // Do not spawn a second mpv / re-enter while a watch session is live.
+    if (_activateInFlight || session.isWatchingExternal) {
+      return;
+    }
 
     if (_aboutOpen) {
       setState(() => _aboutOpen = false);
@@ -190,26 +196,31 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (chans.isEmpty) return;
     final ch = chans[_chanIndex.clamp(0, chans.length - 1)];
 
-    final err = await session.watchChannel(ch);
-    if (!mounted) return;
+    _activateInFlight = true;
+    try {
+      final err = await session.watchChannel(ch);
+      if (!mounted) return;
 
-    if (err != null) {
-      // Surface spawn errors in About-style snack; keep channel column.
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(err),
-          duration: const Duration(seconds: 6),
-          action: SnackBarAction(
-            label: 'Embedded',
-            onPressed: () {
-              unawaited(_playEmbedded(ch));
-            },
+      if (err != null) {
+        // Surface spawn errors in About-style snack; keep channel column.
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(err),
+            duration: const Duration(seconds: 6),
+            action: SnackBarAction(
+              label: 'Embedded',
+              onPressed: () {
+                unawaited(_playEmbedded(ch));
+              },
+            ),
           ),
-        ),
-      );
-    }
+        );
+      }
 
-    setState(() => _column = 1);
+      setState(() => _column = 1);
+    } finally {
+      _activateInFlight = false;
+    }
   }
 
   /// Fallback: old Flutter texture player (debug / no system mpv).

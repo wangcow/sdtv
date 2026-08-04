@@ -57,6 +57,13 @@ class SessionController extends ChangeNotifier {
   /// Phase A: fullscreen external mpv for watch sessions.
   final ExternalMpvLauncher externalMpv = ExternalMpvLauncher();
 
+  /// True while [watchChannel] is in flight (before/during external mpv).
+  bool _watchInFlight = false;
+
+  /// External (or in-flight) watch session — ignore A / re-activate.
+  bool get isWatchingExternal =>
+      _watchInFlight || externalMpv.isRunning || nowPlaying != null;
+
   List<LiveChannel> get channelsInCategory {
     final id = selectedCategoryId;
     if (id == null) return allChannels;
@@ -338,25 +345,43 @@ class SessionController extends ChangeNotifier {
 
   /// Phase A: mark channel now-playing and run **external mpv** until quit.
   ///
-  /// Returns an error string if mpv could not start; null on normal exit.
+  /// Returns an error string if mpv could not start; null on normal exit
+  /// or when a session is already watching (re-entry ignored).
   Future<String?> watchChannel(LiveChannel channel) async {
+    // Synchronous re-entry guard: A still fires while Flutter is under mpv.
+    if (_watchInFlight || externalMpv.isRunning) {
+      debugPrint(
+        'sdtv: watchChannel ignored (inFlight=$_watchInFlight '
+        'mpv=${externalMpv.isRunning})',
+      );
+      return null;
+    }
+
+    _watchInFlight = true;
     nowPlaying = channel;
     notifyListeners();
 
-    final uri = resolvePlayUri(channel);
-    if (uri == null) {
-      return 'No playable URL for this channel.';
-    }
+    try {
+      final uri = resolvePlayUri(channel);
+      if (uri == null) {
+        return 'No playable URL for this channel.';
+      }
 
-    final result = await externalMpv.playFullscreen(uri);
-    nowPlaying = null;
-    notifyListeners();
-
-    if (!result.started) {
-      return result.error ?? 'mpv failed to start';
+      final result = await externalMpv.playFullscreen(uri);
+      if (result.busy) {
+        // Second path: launcher also guards; treat as no-op.
+        return null;
+      }
+      if (!result.started) {
+        return result.error ?? 'mpv failed to start';
+      }
+      // Non-zero exit is normal (user quit); only surface spawn errors.
+      return null;
+    } finally {
+      _watchInFlight = false;
+      nowPlaying = null;
+      notifyListeners();
     }
-    // Non-zero exit is normal (user quit); only surface spawn errors.
-    return null;
   }
 
   /// Legacy embedded media_kit open (fallback / debug). Prefer [watchChannel].
