@@ -53,7 +53,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   static const _rowExtent = 78.0;
   static const _listHeaderExtent = 44.0;
 
-  /// Sign out sits just above Cancel and is marked [danger] (red) to avoid misclicks.
+  /// Sign out is red, between Cancel and Exit, so destructive actions sit at the bottom.
   static const _menuItems =
       <({String id, String label, IconData icon, bool danger})>[
     (id: 'search', label: 'Search', icon: Icons.search, danger: false),
@@ -70,14 +70,14 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       danger: false
     ),
     (id: 'about', label: 'About', icon: Icons.info_outline, danger: false),
+    (id: 'cancel', label: 'Cancel', icon: Icons.close, danger: false),
+    (id: 'signout', label: 'Sign out', icon: Icons.logout, danger: true),
     (
       id: 'exit',
       label: 'Exit sdtv',
       icon: Icons.power_settings_new,
       danger: false
     ),
-    (id: 'signout', label: 'Sign out', icon: Icons.logout, danger: true),
-    (id: 'cancel', label: 'Cancel', icon: Icons.close, danger: false),
   ];
 
   SessionController get session => widget.session;
