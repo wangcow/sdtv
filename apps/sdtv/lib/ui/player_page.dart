@@ -272,6 +272,13 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
+                    if (player.hwdecCurrent.isNotEmpty)
+                      Text(
+                        'decode: ${player.hwdecCurrent}',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: Colors.white38,
+                        ),
+                      ),
                     Text(
                       canZap
                           ? 'A pause · D-pad/LB RB channel · B back'
