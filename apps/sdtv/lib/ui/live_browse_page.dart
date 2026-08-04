@@ -32,18 +32,25 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   bool _menuOpen = false;
   bool _aboutOpen = false;
   bool _manageCatsOpen = false;
+  bool _searchOpen = false;
   int _menuIndex = 0;
   int _manageIndex = 0;
+  int _searchIndex = 0;
 
   final _catScroll = ScrollController();
   final _chanScroll = ScrollController();
   final _manageScroll = ScrollController();
+  final _searchScroll = ScrollController();
+  final _searchCtrl = TextEditingController();
+  final _searchFocus = FocusNode();
+  List<GuideSearchHit> _searchHits = const [];
 
   DateTime? _lastNavAt;
   // Allow accelerated hold-scroll from the joystick reader (~40ms + bursts).
   static const _navCooldown = Duration(milliseconds: 28);
 
   static const _menuItems = <({String id, String label, IconData icon})>[
+    (id: 'search', label: 'Search', icon: Icons.search),
     (id: 'hide_cat', label: 'Hide category', icon: Icons.visibility_off_outlined),
     (id: 'manage_cats', label: 'Manage categories', icon: Icons.category_outlined),
     (id: 'about', label: 'About', icon: Icons.info_outline),
@@ -67,6 +74,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   void initState() {
     super.initState();
     session.addListener(_onSession);
+    _searchCtrl.addListener(_onSearchQueryChanged);
+    SdtvTextFocusRegistry.register(_searchFocus);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (session.browseCategories.isNotEmpty &&
@@ -86,10 +95,24 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   @override
   void dispose() {
     session.removeListener(_onSession);
+    _searchCtrl.removeListener(_onSearchQueryChanged);
+    SdtvTextFocusRegistry.unregister(_searchFocus);
+    _searchCtrl.dispose();
+    _searchFocus.dispose();
     _catScroll.dispose();
     _chanScroll.dispose();
     _manageScroll.dispose();
+    _searchScroll.dispose();
     super.dispose();
+  }
+
+  void _onSearchQueryChanged() {
+    if (!_searchOpen) return;
+    final hits = session.searchGuide(_searchCtrl.text);
+    setState(() {
+      _searchHits = hits;
+      _searchIndex = hits.isEmpty ? 0 : _searchIndex.clamp(0, hits.length - 1);
+    });
   }
 
   void _onSession() {
@@ -166,7 +189,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (session.isWatchMenuActive &&
         !_menuOpen &&
         !_aboutOpen &&
-        !_manageCatsOpen) {
+        !_manageCatsOpen &&
+        !_searchOpen) {
       unawaited(session.watchMenuMove(delta));
       return;
     }
@@ -175,15 +199,27 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (session.isWatchingExternal &&
         !_menuOpen &&
         !_aboutOpen &&
-        !_manageCatsOpen) {
+        !_manageCatsOpen &&
+        !_searchOpen) {
       unawaited(session.watchVolumeDelta(delta < 0 ? 5 : -5));
       return;
     }
 
     if (!_acceptNav()) return;
 
-    // Menu / about / manage overlays own the D-pad.
+    // Menu / about / manage / search overlays own the D-pad.
     if (_aboutOpen) return;
+    if (_searchOpen) {
+      if (_searchHits.isEmpty) return;
+      // Leave the text field so arrows move results, not caret.
+      _searchFocus.unfocus();
+      setState(() {
+        _searchIndex =
+            (_searchIndex + delta).clamp(0, _searchHits.length - 1);
+      });
+      _scrollTo(_searchScroll, _searchIndex);
+      return;
+    }
     if (_manageCatsOpen) {
       final n = session.categories.length;
       if (n == 0) return;
@@ -225,7 +261,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (session.isWatchMenuActive &&
         !_menuOpen &&
         !_aboutOpen &&
-        !_manageCatsOpen) {
+        !_manageCatsOpen &&
+        !_searchOpen) {
       unawaited(session.watchMenuAdjust(delta));
       return;
     }
@@ -233,12 +270,13 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (session.isWatchingExternal &&
         !_menuOpen &&
         !_aboutOpen &&
-        !_manageCatsOpen) {
+        !_manageCatsOpen &&
+        !_searchOpen) {
       unawaited(session.watchChannelAdjacent(delta));
       return;
     }
 
-    if (_menuOpen || _aboutOpen || _manageCatsOpen) return;
+    if (_menuOpen || _aboutOpen || _manageCatsOpen || _searchOpen) return;
     if (!_acceptNav()) return;
     if (delta > 0 && _column == 0) {
       _enterChannelColumn();
@@ -280,7 +318,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
     // While mpv is up: A opens/activates the watch menu (not the guide menu).
     if (session.isWatchingExternal) {
-      if (_menuOpen || _aboutOpen || _manageCatsOpen) {
+      if (_menuOpen || _aboutOpen || _manageCatsOpen || _searchOpen) {
         await session.watchQuit();
       } else {
         await session.watchActivate();
@@ -290,6 +328,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
     if (_aboutOpen) {
       setState(() => _aboutOpen = false);
+      return;
+    }
+
+    if (_searchOpen) {
+      await _activateSearchHit();
       return;
     }
 
@@ -374,6 +417,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       setState(() => _aboutOpen = false);
       return;
     }
+    if (_searchOpen) {
+      _closeSearch();
+      return;
+    }
     if (_manageCatsOpen) {
       setState(() => _manageCatsOpen = false);
       return;
@@ -403,6 +450,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       setState(() => _aboutOpen = false);
       return;
     }
+    if (_searchOpen) {
+      _closeSearch();
+      return;
+    }
     if (_manageCatsOpen) {
       setState(() => _manageCatsOpen = false);
       return;
@@ -417,9 +468,123 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     });
   }
 
+  void _openSearch() {
+    if (session.isWatchingExternal) return;
+    setState(() {
+      _menuOpen = false;
+      _aboutOpen = false;
+      _manageCatsOpen = false;
+      _searchOpen = true;
+      _searchIndex = 0;
+      _searchHits = session.searchGuide(_searchCtrl.text);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _searchFocus.requestFocus();
+      // Opening via `/` can insert a slash into the field — strip it.
+      final t = _searchCtrl.text;
+      if (t.startsWith('/')) {
+        _searchCtrl.text = t.substring(1);
+        _searchCtrl.selection = TextSelection.collapsed(
+          offset: _searchCtrl.text.length,
+        );
+      }
+    });
+  }
+
+  void _closeSearch() {
+    _searchFocus.unfocus();
+    setState(() {
+      _searchOpen = false;
+      _searchIndex = 0;
+    });
+  }
+
+  Future<void> _activateSearchHit() async {
+    if (_searchHits.isEmpty) return;
+    final hit = _searchHits[_searchIndex.clamp(0, _searchHits.length - 1)];
+    await _applySearchHit(hit);
+  }
+
+  Future<void> _applySearchHit(GuideSearchHit hit) async {
+    // EPG hits: navigate when implemented; for now no-op with room to extend.
+    if (hit.isEpg) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('EPG search coming later'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    final catId = hit.categoryId;
+    if (catId == null || catId.isEmpty) return;
+
+    // Jump guide to this category / channel.
+    final cats = session.browseCategories;
+    var catIdx = cats.indexWhere((c) => c.categoryId == catId);
+    // Hidden cat shouldn't appear in search; if only channel matched via
+    // allChannels, still select raw id.
+    if (catIdx < 0 && catId != kFavoritesCategoryId) {
+      // Category hidden or missing — still try to select for channel play.
+      session.selectCategory(catId);
+    } else if (catIdx >= 0) {
+      _selectCategoryKeepingChanPos(catId);
+      catIdx = session.browseCategories
+          .indexWhere((c) => c.categoryId == catId);
+    } else if (catId == kFavoritesCategoryId) {
+      _selectCategoryKeepingChanPos(kFavoritesCategoryId);
+      catIdx = 0;
+    }
+
+    final browse = session.browseCategories;
+    final resolvedCat = browse.indexWhere((c) => c.categoryId == catId);
+    if (resolvedCat >= 0) {
+      _catIndex = resolvedCat;
+    }
+
+    if (hit.isChannel && hit.channel != null) {
+      final list = session.channelsInCategory;
+      var chIdx = list.indexWhere(
+        (c) => c.favoriteKey == hit.channel!.favoriteKey,
+      );
+      if (chIdx < 0) {
+        // Channel may live in another group; use allChannels position in cat.
+        chIdx = list.indexWhere((c) => c.streamId == hit.channel!.streamId);
+      }
+      if (chIdx < 0) chIdx = 0;
+      _chanIndex = chIdx;
+      _chanIndexByCategory[catId] = chIdx;
+      _closeSearch();
+      setState(() => _column = 1);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scrollTo(_chanScroll, chIdx);
+      });
+      // Play immediately — search is for getting to content fast.
+      final err = await session.watchChannel(hit.channel!);
+      if (!mounted) return;
+      if (err != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(err), duration: const Duration(seconds: 5)),
+        );
+      }
+      return;
+    }
+
+    // Category hit: open that list at remembered/top position.
+    _closeSearch();
+    _enterChannelColumn();
+  }
+
   Future<void> _runMenuAction(String id) async {
     setState(() => _menuOpen = false);
     if (id == 'cancel') return;
+    if (id == 'search') {
+      _openSearch();
+      return;
+    }
     if (id == 'hide_cat') {
       await _hideFocusedCategory();
       return;
@@ -547,12 +712,15 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     return SdtvInputScope(
       onBack: _onBack,
       onMenu: _openMenu,
+      onSearch: _openSearch,
       onFavorite: () {
         unawaited(_toggleFavorite());
       },
       onMute: () {
         if (session.isWatchingExternal) {
           unawaited(session.watchCycleMute());
+        } else if (_searchOpen) {
+          // Don't hide cats while typing search.
         } else if (_manageCatsOpen) {
           unawaited(_toggleManageRow());
         } else if (!_menuOpen && !_aboutOpen) {
@@ -795,8 +963,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                     ),
                     child: Text(
                       _column == 1
-                          ? '↑↓ channels · A play · Y favorite · X hide cat · ☰ menu'
-                          : '↑↓ categories · A open · X hide · ☰ Manage cats · Y star on channel',
+                          ? '↑↓ channels · A play · Y favorite · / search · ☰ menu'
+                          : '↑↓ cats · A open · / search · X hide · ☰ menu',
                       style: theme.textTheme.bodySmall,
                     ),
                   ),
@@ -852,6 +1020,124 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             const SizedBox(height: 12),
                             Text(
                               '↑↓ move · A select · B close',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.outline,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+
+              // —— Guide search (categories + channels; EPG later) ——
+              if (_searchOpen) ...[
+                Positioned.fill(
+                  child: GestureDetector(
+                    onTap: _closeSearch,
+                    child: ColoredBox(
+                      color: Colors.black.withValues(alpha: 0.55),
+                    ),
+                  ),
+                ),
+                Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(
+                      maxWidth: 560,
+                      maxHeight: 560,
+                    ),
+                    child: Material(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(16),
+                      elevation: 12,
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text(
+                              'Search',
+                              style: theme.textTheme.headlineSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Categories & channels'
+                              '${session.hiddenCategoryCount > 0 ? ' · hidden cats excluded' : ''}'
+                              ' · EPG later',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.outline,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            TextField(
+                              controller: _searchCtrl,
+                              focusNode: _searchFocus,
+                              autofocus: true,
+                              style: theme.textTheme.titleMedium,
+                              decoration: InputDecoration(
+                                hintText: 'e.g. bloomberg, espn, usa…',
+                                prefixIcon: const Icon(Icons.search),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                filled: true,
+                              ),
+                              textInputAction: TextInputAction.search,
+                              onSubmitted: (_) {
+                                unawaited(_activateSearchHit());
+                              },
+                            ),
+                            const SizedBox(height: 12),
+                            Expanded(
+                              child: _searchCtrl.text.trim().isEmpty
+                                  ? Text(
+                                      'Type to filter. ↑↓ results · A open/play · B close',
+                                      style: theme.textTheme.bodyLarge,
+                                    )
+                                  : _searchHits.isEmpty
+                                      ? Text(
+                                          'No matches for “${_searchCtrl.text.trim()}”',
+                                          style: theme.textTheme.bodyLarge,
+                                        )
+                                      : ListView.builder(
+                                          controller: _searchScroll,
+                                          itemCount: _searchHits.length,
+                                          itemBuilder: (context, i) {
+                                            final hit = _searchHits[i];
+                                            final selected = _searchIndex == i;
+                                            final icon = hit.isCategory
+                                                ? Icons.folder_outlined
+                                                : hit.isEpg
+                                                    ? Icons.event_outlined
+                                                    : Icons.live_tv_outlined;
+                                            return Padding(
+                                              padding: const EdgeInsets.only(
+                                                bottom: 8,
+                                              ),
+                                              child: _BrowseTile(
+                                                label: hit.subtitle.isEmpty
+                                                    ? hit.title
+                                                    : '${hit.title}\n${hit.subtitle}',
+                                                icon: icon,
+                                                selected: selected,
+                                                onTap: () async {
+                                                  setState(
+                                                    () => _searchIndex = i,
+                                                  );
+                                                  await _applySearchHit(hit);
+                                                },
+                                              ),
+                                            );
+                                          },
+                                        ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              '↑↓ results · A select · B close · Steam+X OSK on Deck',
                               style: theme.textTheme.bodySmall?.copyWith(
                                 color: theme.colorScheme.outline,
                               ),

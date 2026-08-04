@@ -42,3 +42,8 @@ class SdtvFavoriteIntent extends Intent {
 class SdtvMuteIntent extends Intent {
   const SdtvMuteIntent();
 }
+
+/// Open guide search (/, Ctrl+F).
+class SdtvSearchIntent extends Intent {
+  const SdtvSearchIntent();
+}

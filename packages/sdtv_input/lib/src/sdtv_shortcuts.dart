@@ -74,6 +74,13 @@ Map<ShortcutActivator, Intent> sdtvNavigationShortcuts() {
     const SingleActivator(LogicalKeyboardKey.keyM):
         const SdtvMuteIntent(),
 
+    // Search guide
+    const SingleActivator(LogicalKeyboardKey.slash): const SdtvSearchIntent(),
+    const SingleActivator(LogicalKeyboardKey.keyF, control: true):
+        const SdtvSearchIntent(),
+    const SingleActivator(LogicalKeyboardKey.keyF, meta: true):
+        const SdtvSearchIntent(),
+
     const SingleActivator(LogicalKeyboardKey.gameButtonLeft1):
         const SdtvPageUpIntent(),
     const SingleActivator(LogicalKeyboardKey.gameButtonRight1):
@@ -90,6 +97,7 @@ Map<Type, Action<Intent>> sdtvDefaultActions({
   VoidCallback? onMenu,
   VoidCallback? onFavorite,
   VoidCallback? onMute,
+  VoidCallback? onSearch,
 }) {
   return <Type, Action<Intent>>{
     DirectionalFocusIntent: DirectionalFocusAction(),
@@ -141,6 +149,12 @@ Map<Type, Action<Intent>> sdtvDefaultActions({
         return null;
       },
     ),
+    SdtvSearchIntent: CallbackAction<SdtvSearchIntent>(
+      onInvoke: (_) {
+        onSearch?.call();
+        return null;
+      },
+    ),
     SdtvPageUpIntent: CallbackAction<SdtvPageUpIntent>(
       onInvoke: (_) {
         // Overridden by SdtvInputScope when onPageUp is set.
@@ -167,6 +181,7 @@ class SdtvInputScope extends StatefulWidget {
     this.onMenu,
     this.onFavorite,
     this.onMute,
+    this.onSearch,
     this.onDirection,
     this.onPageUp,
     this.onPageDown,
@@ -181,6 +196,7 @@ class SdtvInputScope extends StatefulWidget {
   final VoidCallback? onMenu;
   final VoidCallback? onFavorite;
   final VoidCallback? onMute;
+  final VoidCallback? onSearch;
   final void Function(TraversalDirection direction)? onDirection;
   final VoidCallback? onPageUp;
   final VoidCallback? onPageDown;
@@ -252,6 +268,7 @@ class _SdtvInputScopeState extends State<SdtvInputScope> {
               onMenu: widget.onMenu,
               onFavorite: widget.onFavorite,
               onMute: widget.onMute,
+              onSearch: widget.onSearch,
             ),
             SdtvPageUpIntent: CallbackAction<SdtvPageUpIntent>(
               onInvoke: (_) {
