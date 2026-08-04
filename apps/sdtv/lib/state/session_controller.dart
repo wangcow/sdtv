@@ -238,6 +238,8 @@ class SessionController extends ChangeNotifier {
     watchMenuIndex = 0;
     await externalMpv.setPaused(true);
     await externalMpv.setOscVisible(true);
+    // Recover audio if a previous menu pass left aid=no (silent channel).
+    await externalMpv.ensureAudioOn();
     await _paintWatchMenu();
     notifyListeners();
   }
@@ -277,7 +279,9 @@ class SessionController extends ChangeNotifier {
       case 'subtitles':
         if (delta != 0) await externalMpv.cycleSubtitleTrack();
       case 'audio':
-        if (delta != 0) await externalMpv.cycleAudioTrack();
+        if (delta != 0) {
+          await externalMpv.cycleAudioTrack(direction: delta > 0 ? 1 : -1);
+        }
       case 'mute':
         await externalMpv.cycleMute();
       default:
@@ -291,6 +295,7 @@ class SessionController extends ChangeNotifier {
     final id = watchMenuItems[watchMenuIndex];
     switch (id) {
       case 'resume':
+        await externalMpv.ensureAudioOn();
         await watchCloseMenu(resume: true);
       case 'subtitles':
         await externalMpv.cycleSubtitleTrack();
