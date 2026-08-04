@@ -60,9 +60,16 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     session.addListener(_onSession);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (session.categories.isNotEmpty &&
+      if (session.browseCategories.isNotEmpty &&
           session.selectedCategoryId == null) {
-        session.selectCategory(session.categories.first.categoryId);
+        session.selectCategory(session.browseCategories.first.categoryId);
+      }
+      // Align index with session selection (e.g. open on Favorites).
+      final sel = session.selectedCategoryId;
+      if (sel != null) {
+        final i =
+            session.browseCategories.indexWhere((c) => c.categoryId == sel);
+        if (i >= 0) setState(() => _catIndex = i);
       }
     });
   }
@@ -77,10 +84,16 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   void _onSession() {
     if (!mounted) return;
-    final catCount = session.categories.length;
+    final catCount = session.browseCategories.length;
     final chanCount = session.channelsInCategory.length;
     if (catCount > 0) {
       _catIndex = _catIndex.clamp(0, catCount - 1);
+      // Keep catIndex aligned with selectedCategoryId when session changes.
+      final sel = session.selectedCategoryId;
+      if (sel != null) {
+        final i = session.browseCategories.indexWhere((c) => c.categoryId == sel);
+        if (i >= 0) _catIndex = i;
+      }
     } else {
       _catIndex = 0;
     }
@@ -114,7 +127,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
 
-    final cats = session.categories;
+    final cats = session.browseCategories;
     final chans = session.channelsInCategory;
 
     if (_column == 0) {
@@ -183,7 +196,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
     // Categories: enter channel column only.
     if (_column == 0) {
-      final cats = session.categories;
+      final cats = session.browseCategories;
       if (cats.isEmpty) return;
       session.selectCategory(cats[_catIndex].categoryId);
       setState(() {
@@ -304,6 +317,35 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
   }
 
+  /// Y / F: star or unstar the focused channel (channel column only).
+  Future<void> _toggleFavorite() async {
+    if (session.isWatchingExternal) return;
+    if (_menuOpen || _aboutOpen) return;
+    if (_column != 1) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Move to a channel, then press Y to favorite'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    final chans = session.channelsInCategory;
+    if (chans.isEmpty) return;
+    final ch = chans[_chanIndex.clamp(0, chans.length - 1)];
+    final nowFav = await session.toggleFavorite(ch);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(nowFav ? '★ ${ch.name}' : '☆ Removed ${ch.name}'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+    // If we unstarred the last item while in Favorites, index may be empty.
+    setState(() {});
+  }
+
   /// Quit the process so Game Mode returns to Steam (no STEAM → Exit game).
   Future<void> _exitApp() async {
     try {
@@ -325,7 +367,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final cats = session.categories;
+    final cats = session.browseCategories;
     final channels = session.channelsInCategory;
     final user = session.userInfo?.username ?? 'user';
     final catTitle = cats.isEmpty
@@ -335,6 +377,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     return SdtvInputScope(
       onBack: _onBack,
       onMenu: _openMenu,
+      onFavorite: () {
+        unawaited(_toggleFavorite());
+      },
       onConfirm: () {
         unawaited(_activate());
       },
@@ -454,11 +499,18 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                               }
                               final i = index - 1;
                               final selected = _column == 0 && _catIndex == i;
+                              final isFavCat =
+                                  cats[i].categoryId == kFavoritesCategoryId;
                               return Padding(
                                 padding: const EdgeInsets.only(bottom: 10),
                                 child: _BrowseTile(
-                                  label: cats[i].categoryName,
-                                  icon: Icons.folder_outlined,
+                                  label: isFavCat
+                                      ? '${cats[i].categoryName}'
+                                          '${session.favoriteCount > 0 ? ' (${session.favoriteCount})' : ''}'
+                                      : cats[i].categoryName,
+                                  icon: isFavCat
+                                      ? Icons.star_rounded
+                                      : Icons.folder_outlined,
                                   selected: selected,
                                   onTap: () {
                                     setState(() {
@@ -499,8 +551,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                 );
                               }
                               if (channels.isEmpty) {
+                                final emptyMsg = session.isFavoritesCategory
+                                    ? 'No favorites yet.\n'
+                                        'Open any category · highlight a channel · Y to star'
+                                    : 'No channels.\n→ not needed · A opens list · ← back';
                                 return Text(
-                                  'No channels.\n→ not needed · A opens list · ← back',
+                                  emptyMsg,
                                   style: theme.textTheme.bodyLarge,
                                 );
                               }
@@ -508,12 +564,15 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                               final ch = channels[i];
                               final selected =
                                   _column == 1 && _chanIndex == i;
+                              final fav = session.isFavorite(ch);
                               return Padding(
                                 padding: const EdgeInsets.only(bottom: 10),
                                 child: _BrowseTile(
                                   label:
                                       '${ch.num > 0 ? '${ch.num}. ' : ''}${ch.name}',
-                                  icon: Icons.live_tv_outlined,
+                                  icon: fav
+                                      ? Icons.star_rounded
+                                      : Icons.live_tv_outlined,
                                   selected: selected,
                                   onTap: () async {
                                     setState(() {
@@ -521,6 +580,13 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                       _chanIndex = i;
                                     });
                                     await _activate();
+                                  },
+                                  onLongPress: () async {
+                                    setState(() {
+                                      _column = 1;
+                                      _chanIndex = i;
+                                    });
+                                    await _toggleFavorite();
                                   },
                                 ),
                               );
@@ -542,8 +608,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                     ),
                     child: Text(
                       _column == 1
-                          ? '↑↓ channels · ← or B categories · A play · ☰ menu'
-                          : '↑↓ categories · → or A channels · B menu',
+                          ? '↑↓ channels · A play · Y favorite · ← or B categories · ☰ menu'
+                          : '↑↓ categories · → or A channels · B menu · Y = star channel',
                       style: theme.textTheme.bodySmall,
                     ),
                   ),
@@ -688,12 +754,14 @@ class _BrowseTile extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onTap,
+    this.onLongPress,
     this.icon,
   });
 
   final String label;
   final bool selected;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
   final IconData? icon;
 
   @override
@@ -707,6 +775,7 @@ class _BrowseTile extends StatelessWidget {
 
     return GestureDetector(
       onTap: onTap,
+      onLongPress: onLongPress,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 100),
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),

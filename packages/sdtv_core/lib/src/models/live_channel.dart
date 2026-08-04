@@ -23,6 +23,15 @@ class LiveChannel {
   bool get hasDirectUrl =>
       streamUrl != null && streamUrl!.trim().isNotEmpty;
 
+  /// Stable id for favorites across reconnects.
+  ///
+  /// M3U: prefer stream URL (playlist order can change). Xtream: stream id.
+  String get favoriteKey {
+    final url = streamUrl?.trim();
+    if (url != null && url.isNotEmpty) return 'u:$url';
+    return 'i:$streamId';
+  }
+
   factory LiveChannel.fromJson(Map<String, dynamic> json) {
     return LiveChannel(
       streamId: _asInt(json['stream_id']),

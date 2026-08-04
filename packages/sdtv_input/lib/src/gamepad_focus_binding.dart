@@ -133,9 +133,11 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
         k == LogicalKeyboardKey.gameButtonRight1) {
       edge = GamepadEdge.pageDown;
     } else if (k == LogicalKeyboardKey.gameButtonStart ||
-        k == LogicalKeyboardKey.gameButtonY ||
         k == LogicalKeyboardKey.contextMenu) {
       edge = GamepadEdge.menu;
+    } else if (k == LogicalKeyboardKey.gameButtonY ||
+        k == LogicalKeyboardKey.keyF) {
+      edge = GamepadEdge.favorite;
     }
 
     if (edge == null) return false;
@@ -186,6 +188,8 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
         cbs.onBack?.call();
       case GamepadEdge.menu:
         cbs.onMenu?.call();
+      case GamepadEdge.favorite:
+        cbs.onFavorite?.call();
       case GamepadEdge.confirm:
         cbs.onConfirm?.call();
       case GamepadEdge.pageUp:

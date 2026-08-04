@@ -60,9 +60,13 @@ Map<ShortcutActivator, Intent> sdtvNavigationShortcuts() {
         const SdtvMenuIntent(),
     const SingleActivator(LogicalKeyboardKey.gameButtonMode):
         const SdtvMenuIntent(),
-    const SingleActivator(LogicalKeyboardKey.gameButtonY):
-        const SdtvMenuIntent(),
     const SingleActivator(LogicalKeyboardKey.f1): const SdtvMenuIntent(),
+
+    // Y / F — favorite (not menu)
+    const SingleActivator(LogicalKeyboardKey.gameButtonY):
+        const SdtvFavoriteIntent(),
+    const SingleActivator(LogicalKeyboardKey.keyF):
+        const SdtvFavoriteIntent(),
 
     const SingleActivator(LogicalKeyboardKey.gameButtonLeft1):
         const SdtvPageUpIntent(),
@@ -78,6 +82,7 @@ Map<Type, Action<Intent>> sdtvDefaultActions({
   VoidCallback? onConfirm,
   VoidCallback? onBack,
   VoidCallback? onMenu,
+  VoidCallback? onFavorite,
 }) {
   return <Type, Action<Intent>>{
     DirectionalFocusIntent: DirectionalFocusAction(),
@@ -117,6 +122,12 @@ Map<Type, Action<Intent>> sdtvDefaultActions({
         return null;
       },
     ),
+    SdtvFavoriteIntent: CallbackAction<SdtvFavoriteIntent>(
+      onInvoke: (_) {
+        onFavorite?.call();
+        return null;
+      },
+    ),
     SdtvPageUpIntent: CallbackAction<SdtvPageUpIntent>(
       onInvoke: (_) => null,
     ),
@@ -138,6 +149,7 @@ class SdtvInputScope extends StatefulWidget {
     this.onConfirm,
     this.onBack,
     this.onMenu,
+    this.onFavorite,
     this.onDirection,
     this.onPageUp,
     this.onPageDown,
@@ -150,6 +162,7 @@ class SdtvInputScope extends StatefulWidget {
   final VoidCallback? onConfirm;
   final VoidCallback? onBack;
   final VoidCallback? onMenu;
+  final VoidCallback? onFavorite;
   final void Function(TraversalDirection direction)? onDirection;
   final VoidCallback? onPageUp;
   final VoidCallback? onPageDown;
@@ -190,6 +203,7 @@ class _SdtvInputScopeState extends State<SdtvInputScope> {
       ..onConfirm = widget.onConfirm
       ..onBack = widget.onBack
       ..onMenu = widget.onMenu
+      ..onFavorite = widget.onFavorite
       ..onDirection = widget.onDirection
       ..onPageUp = widget.onPageUp
       ..onPageDown = widget.onPageDown;
@@ -201,6 +215,7 @@ class _SdtvInputScopeState extends State<SdtvInputScope> {
       onConfirm: widget.onConfirm,
       onBack: widget.onBack,
       onMenu: widget.onMenu,
+      onFavorite: widget.onFavorite,
       onDirection: widget.onDirection,
       onPageUp: widget.onPageUp,
       onPageDown: widget.onPageDown,
@@ -215,6 +230,7 @@ class _SdtvInputScopeState extends State<SdtvInputScope> {
               onConfirm: widget.onConfirm,
               onBack: widget.onBack,
               onMenu: widget.onMenu,
+              onFavorite: widget.onFavorite,
             ),
             ...widget.extraActions,
           },

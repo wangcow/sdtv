@@ -10,6 +10,7 @@ class SdtvPadLayer {
   VoidCallback? onConfirm;
   VoidCallback? onBack;
   VoidCallback? onMenu;
+  VoidCallback? onFavorite;
   void Function(TraversalDirection direction)? onDirection;
   VoidCallback? onPageUp;
   VoidCallback? onPageDown;
@@ -49,6 +50,10 @@ class SdtvPadRouter {
       case GamepadEdge.menu:
         if (layer.onMenu == null) return false;
         layer.onMenu!();
+        return true;
+      case GamepadEdge.favorite:
+        if (layer.onFavorite == null) return false;
+        layer.onFavorite!();
         return true;
       case GamepadEdge.confirm:
         if (layer.onConfirm == null) return false;

@@ -32,3 +32,8 @@ class SdtvChannelDownIntent extends Intent {
 class SdtvPlayPauseIntent extends Intent {
   const SdtvPlayPauseIntent();
 }
+
+/// Star / unstar focused channel (Y / F).
+class SdtvFavoriteIntent extends Intent {
+  const SdtvFavoriteIntent();
+}

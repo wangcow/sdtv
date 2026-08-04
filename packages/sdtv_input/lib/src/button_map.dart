@@ -10,6 +10,7 @@ class SdtvButtonMap {
   static const confirm = 'A (bottom face) / Enter';
   static const back = 'B (right face) / Escape';
   static const menu = 'Start / Menu key';
+  static const favorite = 'Y (top face) / F';
   static const page = 'LB / RB (shoulders)';
   static const channelZap = 'D-pad up/down in player (planned)';
 
@@ -17,6 +18,7 @@ class SdtvButtonMap {
 Move:     D-pad or left stick
 Confirm:  A / Enter
 Back:     B / Escape
+Favorite: Y / F
 Menu:     Start
 Page:     LB / RB
 ''';

@@ -22,6 +22,9 @@ const kDemoPlaybackUri = String.fromEnvironment(
       'https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8',
 );
 
+/// Virtual category id for starred channels (not from provider).
+const kFavoritesCategoryId = '__sdtv_favorites__';
+
 /// App-wide session: Xtream client, live catalog, player.
 class SessionController extends ChangeNotifier {
   SessionController({
@@ -51,8 +54,53 @@ class SessionController extends ChangeNotifier {
   String? selectedCategoryId;
   LiveChannel? nowPlaying;
 
+  /// Ordered favorite keys for the current [favoritesScope].
+  List<String> _favoriteKeys = const [];
+
   /// Real HTTP Xtream provider (not demo, not forced mock, not M3U).
   bool get isLiveProvider => !useDemo && !mockCatalog && !useM3u;
+
+  /// Prefs namespace so M3U vs Xtream vs demo don't share stars.
+  String get favoritesScope {
+    if (useDemo || mockCatalog) return 'demo';
+    if (useM3u) {
+      final u = m3uPlaylistUrl?.trim() ?? '';
+      return u.isEmpty ? 'm3u' : 'm3u:$u';
+    }
+    final creds = _settings.credentials;
+    if (creds == null) return 'xtream';
+    return 'xtream:${creds.baseUrl}|${creds.username}';
+  }
+
+  /// Provider categories with ★ Favorites pinned first.
+  List<MediaCategory> get browseCategories => [
+        const MediaCategory(
+          categoryId: kFavoritesCategoryId,
+          categoryName: '★ Favorites',
+        ),
+        ...categories,
+      ];
+
+  bool get isFavoritesCategory =>
+      selectedCategoryId == kFavoritesCategoryId;
+
+  bool isFavorite(LiveChannel channel) =>
+      _favoriteKeys.contains(channel.favoriteKey);
+
+  int get favoriteCount => _favoriteKeys.length;
+
+  void _reloadFavorites() {
+    _favoriteKeys = _settings.favoriteKeys(favoritesScope);
+  }
+
+  /// Star / unstar [channel]. Returns true if now favorited.
+  Future<bool> toggleFavorite(LiveChannel channel) async {
+    final key = channel.favoriteKey;
+    final nowFav = await _settings.toggleFavoriteKey(favoritesScope, key);
+    _reloadFavorites();
+    notifyListeners();
+    return nowFav;
+  }
 
   /// Phase A: fullscreen external mpv for watch sessions.
   final ExternalMpvLauncher externalMpv = ExternalMpvLauncher();
@@ -87,6 +135,18 @@ class SessionController extends ChangeNotifier {
 
   List<LiveChannel> get channelsInCategory {
     final id = selectedCategoryId;
+    if (id == kFavoritesCategoryId) {
+      // Preserve star order from prefs.
+      final byKey = <String, LiveChannel>{
+        for (final c in allChannels) c.favoriteKey: c,
+      };
+      final out = <LiveChannel>[];
+      for (final k in _favoriteKeys) {
+        final ch = byKey[k];
+        if (ch != null) out.add(ch);
+      }
+      return out;
+    }
     if (id == null) return allChannels;
     return allChannels.where((c) => c.categoryId == id).toList();
   }
@@ -174,8 +234,8 @@ class SessionController extends ChangeNotifier {
       );
       categories = pl.categories;
       allChannels = pl.channels;
-      selectedCategoryId =
-          pl.categories.isNotEmpty ? pl.categories.first.categoryId : null;
+      _reloadFavorites();
+      selectedCategoryId = _defaultCategoryId(pl.categories);
 
       if (save) {
         await _settings.saveSession(
@@ -329,9 +389,10 @@ class SessionController extends ChangeNotifier {
     userInfo = info;
     categories = cats;
     allChannels = streams;
-    selectedCategoryId = cats.isNotEmpty ? cats.first.categoryId : null;
     this.useDemo = useDemo;
     this.mockCatalog = mockCatalog;
+    _reloadFavorites();
+    selectedCategoryId = _defaultCategoryId(cats);
 
     if (save) {
       await _settings.saveSession(
@@ -343,6 +404,13 @@ class SessionController extends ChangeNotifier {
 
     phase = SessionPhase.browse;
     notifyListeners();
+  }
+
+  /// Prefer ★ Favorites when the user already has stars (faster testing).
+  String? _defaultCategoryId(List<MediaCategory> cats) {
+    if (_favoriteKeys.isNotEmpty) return kFavoritesCategoryId;
+    if (cats.isNotEmpty) return cats.first.categoryId;
+    return kFavoritesCategoryId;
   }
 
   void selectCategory(String categoryId) {
@@ -502,6 +570,7 @@ class SessionController extends ChangeNotifier {
     categories = const [];
     allChannels = const [];
     selectedCategoryId = null;
+    _favoriteKeys = const [];
     useDemo = true;
     mockCatalog = true;
     useM3u = false;
