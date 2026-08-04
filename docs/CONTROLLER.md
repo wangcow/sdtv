@@ -14,6 +14,7 @@ Couch navigation is the core product requirement. Every screen must work with a 
 | Menu | Start (☰) | Context menu / F1 |
 | Favorite channel | Y | F |
 | Hide category | X (guide) | M (guide) |
+| Search | ☰ → Search | `/` or Ctrl+F |
 | Page jump | LB / RB | PageUp / PageDown |
 
 ### Favorites
@@ -27,6 +28,13 @@ Couch navigation is the core product requirement. Every screen must work with a 
 - **X** (guide) or **☰ → Hide category** removes the focused category from the list (not ★ Favorites).
 - **☰ → Manage categories** lists every provider category; **A** toggles hidden/shown.
 - Hidden ids are stored locally, scoped per Xtream account / M3U URL (same as favorites).
+
+### Search
+
+- **☰ → Search** or **`/`** / **Ctrl+F** opens guide search.
+- Filters **visible** categories + channels (hidden cats excluded). Type with keyboard or Deck OSK (Steam+X).
+- **↑↓** move results · **A** on a channel **plays** it · **A** on a category opens that list · **B** closes.
+- Result model includes `GuideSearchKind.epg` for future program search — same UI.
 
 ## Watching (external mpv — Phase B)
 

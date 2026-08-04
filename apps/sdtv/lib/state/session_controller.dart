@@ -430,6 +430,31 @@ class SessionController extends ChangeNotifier {
     await externalMpv.cycleMute();
   }
 
+  /// Guide search (categories + channels). EPG can append later via same hits.
+  List<GuideSearchHit> searchGuide(String query, {int maxResults = 80}) {
+    return GuideSearch.search(
+      query: query,
+      categories: [
+        for (final c in categories) (id: c.categoryId, name: c.categoryName),
+      ],
+      channels: allChannels,
+      hiddenCategoryIds: _hiddenCategoryIds,
+      maxResults: maxResults,
+    );
+  }
+
+  /// Jump guide selection to a category (and optional channel).
+  void focusGuideTarget({
+    required String categoryId,
+    LiveChannel? channel,
+  }) {
+    if (categoryId == kFavoritesCategoryId ||
+        categories.any((c) => c.categoryId == categoryId)) {
+      selectedCategoryId = categoryId;
+    }
+    notifyListeners();
+  }
+
   List<LiveChannel> get channelsInCategory {
     final id = selectedCategoryId;
     if (id == kFavoritesCategoryId) {

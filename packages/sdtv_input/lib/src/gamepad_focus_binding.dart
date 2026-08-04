@@ -105,8 +105,14 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
     final k = event.logicalKey;
     final typing = SdtvTextFocusRegistry.primaryIsTextField;
 
-    // Never steal Space (or printable typing) from OSK / password fields.
+    // Never steal Space / letters used as pad shortcuts from text fields (search).
     if (typing && k == LogicalKeyboardKey.space) return false;
+    if (typing &&
+        (k == LogicalKeyboardKey.keyM ||
+            k == LogicalKeyboardKey.keyF ||
+            k == LogicalKeyboardKey.slash)) {
+      return false;
+    }
 
     GamepadEdge? edge;
     if (k == LogicalKeyboardKey.escape ||
@@ -136,11 +142,11 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
     } else if (k == LogicalKeyboardKey.gameButtonStart ||
         k == LogicalKeyboardKey.contextMenu) {
       edge = GamepadEdge.menu;
-    } else if (k == LogicalKeyboardKey.gameButtonY ||
-        k == LogicalKeyboardKey.keyF) {
+    } else if (!typing &&
+        (k == LogicalKeyboardKey.gameButtonY || k == LogicalKeyboardKey.keyF)) {
       edge = GamepadEdge.favorite;
-    } else if (k == LogicalKeyboardKey.gameButtonX ||
-        k == LogicalKeyboardKey.keyM) {
+    } else if (!typing &&
+        (k == LogicalKeyboardKey.gameButtonX || k == LogicalKeyboardKey.keyM)) {
       edge = GamepadEdge.mute;
     }
 
