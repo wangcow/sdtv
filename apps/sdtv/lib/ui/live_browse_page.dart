@@ -446,17 +446,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (all.isEmpty) return;
     final i = _manageIndex.clamp(0, all.length - 1);
     final cat = all[i];
-    final nowHidden = await session.toggleCategoryHidden(cat.categoryId);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          nowHidden ? 'Hidden: ${cat.categoryName}' : 'Shown: ${cat.categoryName}',
-        ),
-        duration: const Duration(seconds: 2),
-      ),
-    );
-    setState(() {});
+    // No SnackBar here — bulk hide would queue dozens of toasts.
+    // Tile label/icon + header counts already update in place.
+    await session.toggleCategoryHidden(cat.categoryId);
+    if (mounted) setState(() {});
   }
 
   /// Y / F: star or unstar the focused channel (channel column only).
