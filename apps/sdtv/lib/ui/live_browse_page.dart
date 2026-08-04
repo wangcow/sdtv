@@ -25,6 +25,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   int _catIndex = 0;
   int _chanIndex = 0;
 
+  /// Last channel row per category id (so ← categories → channels keeps place).
+  final Map<String, int> _chanIndexByCategory = {};
+
   /// In-page menu (no showDialog — avoids stuck modal barriers on Deck).
   bool _menuOpen = false;
   bool _aboutOpen = false;
@@ -106,6 +109,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     if (chanCount > 0) {
       _chanIndex = _chanIndex.clamp(0, chanCount - 1);
+      _rememberChanIndex();
     } else {
       _chanIndex = 0;
     }
@@ -120,6 +124,41 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       duration: const Duration(milliseconds: 120),
       curve: Curves.easeOut,
     );
+  }
+
+  void _rememberChanIndex() {
+    final id = session.selectedCategoryId;
+    if (id == null) return;
+    _chanIndexByCategory[id] = _chanIndex;
+  }
+
+  /// Restore last channel row for [categoryId] (clamped to list length).
+  int _chanIndexFor(String categoryId, int listLength) {
+    if (listLength <= 0) return 0;
+    final saved = _chanIndexByCategory[categoryId] ?? 0;
+    return saved.clamp(0, listLength - 1);
+  }
+
+  /// Switch provider category, keeping each list's remembered position.
+  void _selectCategoryKeepingChanPos(String categoryId) {
+    _rememberChanIndex();
+    session.selectCategory(categoryId);
+    final n = session.channelsInCategory.length;
+    _chanIndex = _chanIndexFor(categoryId, n);
+  }
+
+  void _enterChannelColumn() {
+    final id = session.selectedCategoryId;
+    final n = session.channelsInCategory.length;
+    final idx = id == null ? 0 : _chanIndexFor(id, n);
+    setState(() {
+      _column = 1;
+      _chanIndex = idx;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scrollTo(_chanScroll, idx);
+    });
   }
 
   void _moveVertical(int delta) {
@@ -169,14 +208,14 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       setState(() {
         _catIndex = (_catIndex + delta).clamp(0, cats.length - 1);
       });
-      session.selectCategory(cats[_catIndex].categoryId);
-      _chanIndex = 0;
+      _selectCategoryKeepingChanPos(cats[_catIndex].categoryId);
       _scrollTo(_catScroll, _catIndex);
     } else {
       if (chans.isEmpty) return;
       setState(() {
         _chanIndex = (_chanIndex + delta).clamp(0, chans.length - 1);
       });
+      _rememberChanIndex();
       _scrollTo(_chanScroll, _chanIndex);
     }
   }
@@ -202,12 +241,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (_menuOpen || _aboutOpen || _manageCatsOpen) return;
     if (!_acceptNav()) return;
     if (delta > 0 && _column == 0) {
-      setState(() {
-        _column = 1;
-        _chanIndex = 0;
-      });
-      _scrollTo(_chanScroll, 0);
+      _enterChannelColumn();
     } else if (delta < 0 && _column == 1) {
+      _rememberChanIndex();
       setState(() => _column = 0);
       _scrollTo(_catScroll, _catIndex);
     }
@@ -267,18 +303,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
 
-    // Categories: enter channel column only.
+    // Categories: enter channel column only (restore last row for this cat).
     if (_column == 0) {
       final cats = session.browseCategories;
       if (cats.isEmpty) return;
-      session.selectCategory(cats[_catIndex].categoryId);
-      setState(() {
-        _column = 1;
-        _chanIndex = 0;
-      });
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _scrollTo(_chanScroll, 0);
-      });
+      _selectCategoryKeepingChanPos(cats[_catIndex].categoryId);
+      _enterChannelColumn();
       return;
     }
 
@@ -287,6 +317,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     final chans = session.channelsInCategory;
     if (chans.isEmpty) return;
     final ch = chans[_chanIndex.clamp(0, chans.length - 1)];
+    _rememberChanIndex();
 
     final err = await session.watchChannel(ch);
     if (!mounted) return;
@@ -306,7 +337,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       );
     }
 
-    if (mounted) setState(() => _column = 1);
+    if (mounted) {
+      setState(() => _column = 1);
+      _scrollTo(_chanScroll, _chanIndex);
+    }
   }
 
   /// Fallback: old Flutter texture player (debug / no system mpv).
@@ -351,6 +385,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     // In channel list: step back to categories (don't open system menu).
     if (_column == 1) {
       if (!_acceptNav()) return;
+      _rememberChanIndex();
       setState(() => _column = 0);
       _scrollTo(_catScroll, _catIndex);
       return;
@@ -438,7 +473,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     );
     setState(() {
       _column = 0;
-      _chanIndex = 0;
     });
   }
 
@@ -668,9 +702,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                       _catIndex = i;
                                       _column = 0;
                                     });
-                                    session
-                                        .selectCategory(cats[i].categoryId);
-                                    _chanIndex = 0;
+                                    _selectCategoryKeepingChanPos(
+                                      cats[i].categoryId,
+                                    );
                                   },
                                 ),
                               );
@@ -730,6 +764,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                       _column = 1;
                                       _chanIndex = i;
                                     });
+                                    _rememberChanIndex();
                                     await _activate();
                                   },
                                   onLongPress: () async {
@@ -737,6 +772,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                       _column = 1;
                                       _chanIndex = i;
                                     });
+                                    _rememberChanIndex();
                                     await _toggleFavorite();
                                   },
                                 ),
