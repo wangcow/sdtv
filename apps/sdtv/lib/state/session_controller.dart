@@ -122,9 +122,17 @@ class SessionController extends ChangeNotifier {
   bool get isWatchingExternal => _watchInFlight || externalMpv.isRunning;
 
   /// Pause/unpause the external mpv session (IPC). No-op if not watching.
+  ///
+  /// On pause, mpv shows its OSC transport chrome + a short HUD with the
+  /// channel name (see sdtv-pause-osc.lua). This is the “web video bar”
+  /// equivalent while we keep external mpv for performance.
   Future<void> watchCyclePause() async {
     if (!isWatchingExternal) return;
-    await externalMpv.cyclePause();
+    final ch = nowPlaying;
+    final label = ch == null
+        ? null
+        : (ch.num > 0 ? '${ch.num}. ${ch.name}' : ch.name);
+    await externalMpv.cyclePause(pausedHud: label);
   }
 
   /// Quit external mpv and return to guide (B while watching).
@@ -175,10 +183,11 @@ class SessionController extends ChangeNotifier {
     // does not re-open the stream (especially HLS/ts).
     final label = ch.num > 0 ? '${ch.num}. ${ch.name}' : ch.name;
     await externalMpv.showText('→ $label', durationMs: 2200);
-    final ok = await externalMpv.loadFile(uri);
+    final ok = await externalMpv.loadFile(uri, title: label);
     if (!ok) {
       debugPrint('sdtv: loadfile failed, trying playlist-play-index $i');
       await externalMpv.playlistPlayIndex(i);
+      await externalMpv.setMediaTitle(label);
     }
   }
 
