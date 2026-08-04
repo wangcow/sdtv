@@ -266,11 +266,37 @@ class ExternalMpvLauncher {
   }
 
   /// Pause / unpause via IPC.
-  Future<void> cyclePause() async {
+  ///
+  /// When [pausedHud] is set and we end up paused, show a short transport
+  /// hint (channel name + keys). OSC visibility is also driven by the
+  /// sdtv-pause-osc.lua script so keyboard Space behaves the same.
+  Future<void> cyclePause({String? pausedHud}) async {
     final ok = await sendCommand(['cycle', 'pause']);
     if (!ok) {
       debugPrint('sdtv_player: cyclePause — no ipc');
+      return;
     }
+    final paused = await getProperty('pause');
+    final isPaused = paused == true || paused == 'yes';
+    // Best-effort: force OSC on pause even if the lua script is missing.
+    if (isPaused) {
+      await sendCommand(['script-message', 'osc-visibility', 'always', 'no-osd']);
+      if (pausedHud != null && pausedHud.isNotEmpty) {
+        await showText(
+          '❚❚  $pausedHud\nA resume · B guide · LB/RB ch · ↑↓ vol · X mute',
+          durationMs: 4500,
+        );
+      }
+    } else {
+      await sendCommand(['script-message', 'osc-visibility', 'auto', 'no-osd']);
+    }
+  }
+
+  /// Set the window / OSC title (channel name).
+  Future<void> setMediaTitle(String title) async {
+    final t = title.trim();
+    if (t.isEmpty) return;
+    await sendCommand(['set', 'force-media-title', t]);
   }
 
   /// Relative volume change with OSD bar + numeric readout.
@@ -329,12 +355,16 @@ class ExternalMpvLauncher {
   }
 
   /// Replace current playback with [url] (reliable for live channel zap).
-  Future<bool> loadFile(Uri url) async {
+  Future<bool> loadFile(Uri url, {String? title}) async {
     // Third arg "replace" clears the current item and plays immediately.
     final ok = await sendCommand(['loadfile', url.toString(), 'replace']);
     if (!ok) {
       // Some builds want append-play style flags as separate form.
-      return sendCommand(['loadfile', url.toString()]);
+      final ok2 = await sendCommand(['loadfile', url.toString()]);
+      if (!ok2) return false;
+    }
+    if (title != null && title.trim().isNotEmpty) {
+      await setMediaTitle(title.trim());
     }
     return true;
   }
@@ -398,7 +428,7 @@ q quit
 Q quit
 BS quit
 MOUSE_BTN2 quit
-# Pause
+# Pause (lua script also forces OSC on pause)
 SPACE cycle pause
 p cycle pause
 # Volume (keyboard / when mpv has focus) — bar OSD
@@ -428,6 +458,27 @@ GAMEPAD_START quit
 GAMEPAD_GUIDE quit
 ''');
 
+      // Pause chrome: keep OSC visible while paused (web-player-like transport).
+      // Works for Space/p inside mpv and for Flutter A → cycle pause.
+      final pauseScript = File('${confDir.path}/sdtv-pause-osc.lua');
+      await pauseScript.writeAsString(r'''
+-- sdtv: show on-screen controller while paused
+local function set_vis(mode)
+  -- no-osd avoids "OSC visibility: always" spam
+  pcall(function()
+    mp.commandv("script-message", "osc-visibility", mode, "no-osd")
+  end)
+end
+
+mp.observe_property("pause", "bool", function(_, paused)
+  if paused then
+    set_vis("always")
+  else
+    set_vis("auto")
+  end
+end)
+''');
+
       final ipcPath = _newIpcPath();
       _ipcPath = ipcPath;
       try {
@@ -453,6 +504,12 @@ GAMEPAD_GUIDE quit
         await File(playlistPath).writeAsString(buf.toString());
       }
 
+      final startTitle = useList
+          ? entries[start].title
+          : (playlist != null && playlist.isNotEmpty
+              ? playlist.first.title
+              : 'sdtv');
+
       final mpvArgs = <String>[
         '--fullscreen',
         '--force-window=immediate',
@@ -461,11 +518,17 @@ GAMEPAD_GUIDE quit
         '--no-terminal',
         '--msg-level=all=warn',
         '--title=sdtv',
+        '--force-media-title=$startTitle',
         '--input-conf=${confFile.path}',
         '--input-ipc-server=$ipcPath',
+        '--script=${pauseScript.path}',
+        // On-screen controller = transport bar (seek/title when duration known).
         '--osc=yes',
+        '--osd-bar=yes',
         '--osd-level=1',
         '--osd-duration=2000',
+        // Larger, more readable OSC on TV / Deck.
+        '--script-opts=osc-visibility=auto,osc-deadzonesize=0,osc-scalewindowed=1.5,osc-scalefullscreen=1.5,osc-valign=0.9,osc-idlescreen=no',
         '--hwdec=vaapi,vaapi-copy,auto-copy,auto',
         '--profile=fast',
         '--framedrop=vo',

@@ -35,6 +35,16 @@ Flutter keeps reading the pad (Deck); mpv also has keyboard maps when it has foc
 
 Zap walks the **current list** (★ Favorites or the category you played from).
 
+### Pause chrome (transport bar)
+
+External mpv is fullscreen for performance, so the “YouTube bar” is **mpv’s OSC**, not a Flutter overlay:
+
+- **A / Space** pauses → OSC stays visible (title + transport) and a short HUD lists controls
+- **A / Space** again resumes → OSC returns to auto-hide
+- On **live** streams the seek bar is often empty or non-seekable (no end time); that is normal. VOD / catch-up later can use a real scrubber when duration is known.
+
+A full Flutter guide-over-video menu would need a different compositing model; OSC is the right layer for Phase B.
+
 ## Steam Input
 
 When launching from **Steam Game Mode** as a non-Steam game:
