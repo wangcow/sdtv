@@ -68,6 +68,12 @@ Map<ShortcutActivator, Intent> sdtvNavigationShortcuts() {
     const SingleActivator(LogicalKeyboardKey.keyF):
         const SdtvFavoriteIntent(),
 
+    // X / M — mute (player; harmless no-op if unbound)
+    const SingleActivator(LogicalKeyboardKey.gameButtonX):
+        const SdtvMuteIntent(),
+    const SingleActivator(LogicalKeyboardKey.keyM):
+        const SdtvMuteIntent(),
+
     const SingleActivator(LogicalKeyboardKey.gameButtonLeft1):
         const SdtvPageUpIntent(),
     const SingleActivator(LogicalKeyboardKey.gameButtonRight1):
@@ -83,6 +89,7 @@ Map<Type, Action<Intent>> sdtvDefaultActions({
   VoidCallback? onBack,
   VoidCallback? onMenu,
   VoidCallback? onFavorite,
+  VoidCallback? onMute,
 }) {
   return <Type, Action<Intent>>{
     DirectionalFocusIntent: DirectionalFocusAction(),
@@ -128,8 +135,17 @@ Map<Type, Action<Intent>> sdtvDefaultActions({
         return null;
       },
     ),
+    SdtvMuteIntent: CallbackAction<SdtvMuteIntent>(
+      onInvoke: (_) {
+        onMute?.call();
+        return null;
+      },
+    ),
     SdtvPageUpIntent: CallbackAction<SdtvPageUpIntent>(
-      onInvoke: (_) => null,
+      onInvoke: (_) {
+        // Overridden by SdtvInputScope when onPageUp is set.
+        return null;
+      },
     ),
     SdtvPageDownIntent: CallbackAction<SdtvPageDownIntent>(
       onInvoke: (_) => null,
@@ -150,6 +166,7 @@ class SdtvInputScope extends StatefulWidget {
     this.onBack,
     this.onMenu,
     this.onFavorite,
+    this.onMute,
     this.onDirection,
     this.onPageUp,
     this.onPageDown,
@@ -163,6 +180,7 @@ class SdtvInputScope extends StatefulWidget {
   final VoidCallback? onBack;
   final VoidCallback? onMenu;
   final VoidCallback? onFavorite;
+  final VoidCallback? onMute;
   final void Function(TraversalDirection direction)? onDirection;
   final VoidCallback? onPageUp;
   final VoidCallback? onPageDown;
@@ -204,6 +222,7 @@ class _SdtvInputScopeState extends State<SdtvInputScope> {
       ..onBack = widget.onBack
       ..onMenu = widget.onMenu
       ..onFavorite = widget.onFavorite
+      ..onMute = widget.onMute
       ..onDirection = widget.onDirection
       ..onPageUp = widget.onPageUp
       ..onPageDown = widget.onPageDown;
@@ -216,6 +235,7 @@ class _SdtvInputScopeState extends State<SdtvInputScope> {
       onBack: widget.onBack,
       onMenu: widget.onMenu,
       onFavorite: widget.onFavorite,
+      onMute: widget.onMute,
       onDirection: widget.onDirection,
       onPageUp: widget.onPageUp,
       onPageDown: widget.onPageDown,
@@ -231,6 +251,19 @@ class _SdtvInputScopeState extends State<SdtvInputScope> {
               onBack: widget.onBack,
               onMenu: widget.onMenu,
               onFavorite: widget.onFavorite,
+              onMute: widget.onMute,
+            ),
+            SdtvPageUpIntent: CallbackAction<SdtvPageUpIntent>(
+              onInvoke: (_) {
+                widget.onPageUp?.call();
+                return null;
+              },
+            ),
+            SdtvPageDownIntent: CallbackAction<SdtvPageDownIntent>(
+              onInvoke: (_) {
+                widget.onPageDown?.call();
+                return null;
+              },
             ),
             ...widget.extraActions,
           },

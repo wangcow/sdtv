@@ -211,6 +211,36 @@ class ExternalMpvLauncher {
     }
   }
 
+  /// Relative volume change (mpv 0–100 scale). OSD via mpv when osd-level ≥ 1.
+  Future<void> addVolume(int delta) async {
+    await sendCommand(['add', 'volume', delta]);
+  }
+
+  Future<void> cycleMute() async {
+    await sendCommand(['cycle', 'mute']);
+  }
+
+  /// Jump to playlist index (0-based). Used for channel zap without respawn.
+  Future<bool> playlistPlayIndex(int index) async {
+    return sendCommand(['set', 'playlist-pos', index]);
+  }
+
+  Future<bool> playlistNext() async =>
+      sendCommand(['playlist-next', 'weak']);
+
+  Future<bool> playlistPrev() async =>
+      sendCommand(['playlist-prev', 'weak']);
+
+  /// OSD message (milliseconds).
+  Future<void> showText(String text, {int durationMs = 2000}) async {
+    await sendCommand(['show-text', text, durationMs]);
+  }
+
+  /// Replace current item (fallback if playlist not used).
+  Future<bool> loadFile(Uri url) async {
+    return sendCommand(['loadfile', url.toString(), 'replace']);
+  }
+
   /// Ask mpv to quit (falls back to [stop] kill).
   Future<void> quit() async {
     final ok = await sendCommand(['quit']);
@@ -229,11 +259,17 @@ class ExternalMpvLauncher {
     }
   }
 
-  /// Play [url] fullscreen until the user quits mpv (or process dies).
+  /// Play fullscreen until quit.
   ///
-  /// Re-entrant: if a session is already launching/running, returns
-  /// [ExternalMpvResult.busy] and does **not** spawn another process.
-  Future<ExternalMpvResult> playFullscreen(Uri url) async {
+  /// [playlist] optional multi-entry list (category / favorites). Enables
+  /// keyboard PGUP/PGDWN and in-process zap via [playlistPlayIndex].
+  ///
+  /// Re-entrant: if already running, returns [ExternalMpvResult.busy].
+  Future<ExternalMpvResult> playFullscreen(
+    Uri url, {
+    List<({String title, Uri uri})>? playlist,
+    int startIndex = 0,
+  }) async {
     if (_launching || _process != null) {
       debugPrint('sdtv_player: playFullscreen ignored (already running)');
       return const ExternalMpvResult(started: false, busy: true);
@@ -255,8 +291,8 @@ class ExternalMpvLauncher {
 
       confDir = await Directory.systemTemp.createTemp('sdtv_mpv_');
       final confFile = File('${confDir.path}/input.conf');
-      // Keyboard + SDL gamepad names (when mpv gets the pad) + mouse.
-      // Flutter also drives pause/quit via IPC from /dev/input/js*.
+      // Keyboard maps matter when mpv has focus (desktop / Flatpak users).
+      // Deck pad is usually routed by Flutter → IPC; both paths stay valid.
       await confFile.writeAsString('''
 # sdtv — quit back to guide
 ESC quit
@@ -264,16 +300,32 @@ q quit
 Q quit
 BS quit
 MOUSE_BTN2 quit
-b quit
-B quit
 # Pause
 SPACE cycle pause
 p cycle pause
+# Volume (keyboard / when mpv has focus)
+UP add volume 5
+DOWN add volume -5
+m cycle mute
+# Channel zap within session playlist
+PGUP playlist-prev
+PGDWN playlist-next
+PLAYLIST_PREV playlist-prev
+PLAYLIST_NEXT playlist-next
+< playlist-prev
+> playlist-next
+n playlist-next
 # SDL gamepad (if mpv owns the pad)
 GAMEPAD_ACTION_DOWN cycle pause
 GAMEPAD_ACTION_RIGHT quit
 GAMEPAD_ACTION_EAST quit
 GAMEPAD_BACK quit
+GAMEPAD_DPAD_UP add volume 5
+GAMEPAD_DPAD_DOWN add volume -5
+GAMEPAD_DPAD_LEFT playlist-prev
+GAMEPAD_DPAD_RIGHT playlist-next
+GAMEPAD_SHOULDER_L playlist-prev
+GAMEPAD_SHOULDER_R playlist-next
 GAMEPAD_START quit
 GAMEPAD_GUIDE quit
 ''');
@@ -284,6 +336,24 @@ GAMEPAD_GUIDE quit
         final stale = File(ipcPath);
         if (await stale.exists()) await stale.delete();
       } catch (_) {}
+
+      final entries = playlist;
+      final useList = entries != null && entries.length > 1;
+      final start = useList
+          ? startIndex.clamp(0, entries.length - 1)
+          : 0;
+
+      String? playlistPath;
+      if (useList) {
+        playlistPath = '${confDir.path}/session.m3u';
+        final buf = StringBuffer('#EXTM3U\n');
+        for (final e in entries) {
+          final title = e.title.replaceAll('\n', ' ').replaceAll(',', ' ');
+          buf.writeln('#EXTINF:-1,$title');
+          buf.writeln(e.uri.toString());
+        }
+        await File(playlistPath).writeAsString(buf.toString());
+      }
 
       final mpvArgs = <String>[
         '--fullscreen',
@@ -297,14 +367,16 @@ GAMEPAD_GUIDE quit
         '--input-ipc-server=$ipcPath',
         '--osc=yes',
         '--osd-level=1',
-        // Brief on-screen hint (Deck has no keyboard)
-        '--osd-playing-msg=A pause · B back',
-        '--osd-duration=2500',
+        '--osd-duration=2000',
         '--hwdec=vaapi,vaapi-copy,auto-copy,auto',
         '--profile=fast',
         '--framedrop=vo',
         ...extraArgs,
-        url.toString(),
+        if (useList) ...[
+          '--playlist=$playlistPath',
+          '--playlist-start=$start',
+        ] else
+          url.toString(),
       ];
 
       late final String finalExec;
@@ -325,7 +397,8 @@ GAMEPAD_GUIDE quit
       }
 
       debugPrint(
-        'sdtv_player: external mpv ${inv.label} → $finalExec ${finalArgv.join(' ')}',
+        'sdtv_player: external mpv ${inv.label} → $finalExec '
+        '${finalArgv.length > 24 ? '${finalArgv.take(20).join(' ')} …' : finalArgv.join(' ')}',
       );
 
       final proc = await Process.start(
@@ -345,10 +418,12 @@ GAMEPAD_GUIDE quit
         }
       }));
 
-      // Soft hint after window is up (in case osd-playing-msg is skipped).
+      final hint = useList
+          ? 'A pause · B back · LB/RB ch · ↑↓ vol'
+          : 'A pause · B back · ↑↓ vol';
       unawaited(() async {
         await Future<void>.delayed(const Duration(milliseconds: 600));
-        await sendCommand(['show-text', 'A pause · B back', 2500]);
+        await sendCommand(['show-text', hint, 2800]);
       }());
 
       final code = await proc.exitCode;

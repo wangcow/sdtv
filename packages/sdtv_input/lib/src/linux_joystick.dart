@@ -15,6 +15,8 @@ enum GamepadEdge {
   menu,
   /// Y / North — toggle channel favorite.
   favorite,
+  /// X / West — mute while watching (optional elsewhere).
+  mute,
   pageUp,
   pageDown,
 }
@@ -75,6 +77,8 @@ class LinuxJoystickReader {
         return GamepadEdge.confirm;
       case 1: // B / East
         return GamepadEdge.back;
+      case 2: // X / West — mute in player
+        return GamepadEdge.mute;
       case 3: // Y / North — favorite (Start/Select still open menu)
         return GamepadEdge.favorite;
       case 4: // LB

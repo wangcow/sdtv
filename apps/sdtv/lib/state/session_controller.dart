@@ -108,10 +108,17 @@ class SessionController extends ChangeNotifier {
   /// True while [watchChannel] is in flight (before/during external mpv).
   bool _watchInFlight = false;
 
+  /// Channels available for zap during the current external session
+  /// (same list as when play started: category or favorites).
+  List<LiveChannel> _watchList = const [];
+  int _watchIndex = 0;
+  DateTime? _lastZapAt;
+  DateTime? _lastVolAt;
+
   /// External watch session active (mpv running or handoff in progress).
   ///
-  /// Use for **player** pad routing (pause/quit). Do **not** freeze the whole
-  /// browse UI with this — menu / Cancel must always work.
+  /// Use for **player** pad routing (pause/quit/zap/vol). Do **not** freeze
+  /// the whole browse UI with this — menu / Cancel must always work.
   bool get isWatchingExternal => _watchInFlight || externalMpv.isRunning;
 
   /// Pause/unpause the external mpv session (IPC). No-op if not watching.
@@ -129,8 +136,65 @@ class SessionController extends ChangeNotifier {
     if (_watchInFlight && !externalMpv.isRunning) {
       _watchInFlight = false;
       nowPlaying = null;
+      _watchList = const [];
       notifyListeners();
     }
+  }
+
+  /// Channel ± within the current watch list (LB/RB, ←/→, PgUp/PgDn).
+  Future<void> watchChannelAdjacent(int delta) async {
+    if (!isWatchingExternal || _watchList.isEmpty) return;
+    final now = DateTime.now();
+    if (_lastZapAt != null &&
+        now.difference(_lastZapAt!) < const Duration(milliseconds: 280)) {
+      return;
+    }
+    _lastZapAt = now;
+
+    if (_watchList.length == 1) {
+      await externalMpv.showText(nowPlaying?.name ?? _watchList[0].name);
+      return;
+    }
+
+    var i = (_watchIndex + delta) % _watchList.length;
+    if (i < 0) i += _watchList.length;
+    if (i == _watchIndex) return;
+
+    final ch = _watchList[i];
+    final uri = resolvePlayUri(ch);
+    if (uri == null) {
+      debugPrint('sdtv: zap skip — no URL for ${ch.name}');
+      return;
+    }
+
+    _watchIndex = i;
+    nowPlaying = ch;
+    notifyListeners();
+
+    // Prefer playlist index (session m3u); fall back to loadfile.
+    final ok = await externalMpv.playlistPlayIndex(i);
+    if (!ok) {
+      await externalMpv.loadFile(uri);
+    }
+    final label = ch.num > 0 ? '${ch.num}. ${ch.name}' : ch.name;
+    await externalMpv.showText(label, durationMs: 1800);
+  }
+
+  /// Volume ± (D-pad / arrows). Steps of 5 on mpv's 0–100 scale.
+  Future<void> watchVolumeDelta(int delta) async {
+    if (!isWatchingExternal) return;
+    final now = DateTime.now();
+    if (_lastVolAt != null &&
+        now.difference(_lastVolAt!) < const Duration(milliseconds: 80)) {
+      return;
+    }
+    _lastVolAt = now;
+    await externalMpv.addVolume(delta);
+  }
+
+  Future<void> watchCycleMute() async {
+    if (!isWatchingExternal) return;
+    await externalMpv.cycleMute();
   }
 
   List<LiveChannel> get channelsInCategory {
@@ -432,7 +496,10 @@ class SessionController extends ChangeNotifier {
     return client.livePlayUrl(channel.streamId, extension: 'ts');
   }
 
-  /// Phase A: mark channel now-playing and run **external mpv** until quit.
+  /// Phase A/B: mark channel now-playing and run **external mpv** until quit.
+  ///
+  /// Builds a session playlist from the current category (or favorites) so
+  /// channel zap works via IPC and keyboard PGUP/PGDWN inside mpv.
   ///
   /// Returns an error string if mpv could not start; null on normal exit
   /// or when a session is already watching (re-entry ignored).
@@ -456,19 +523,51 @@ class SessionController extends ChangeNotifier {
         return 'No playable URL for this channel.';
       }
 
-      final result = await externalMpv.playFullscreen(uri);
+      // Zap list = current guide column (favorites or category).
+      final list = channelsInCategory;
+      final entries = <({String title, Uri uri})>[];
+      final playable = <LiveChannel>[];
+      for (final c in list) {
+        final u = resolvePlayUri(c);
+        if (u == null) continue;
+        playable.add(c);
+        entries.add((title: c.name, uri: u));
+      }
+      if (entries.isEmpty) {
+        entries.add((title: channel.name, uri: uri));
+        playable.add(channel);
+      }
+
+      var start = playable.indexWhere(
+        (c) => c.favoriteKey == channel.favoriteKey,
+      );
+      if (start < 0) {
+        // Selected channel not in filtered list — prepend.
+        playable.insert(0, channel);
+        entries.insert(0, (title: channel.name, uri: uri));
+        start = 0;
+      }
+
+      _watchList = playable;
+      _watchIndex = start;
+
+      final result = await externalMpv.playFullscreen(
+        uri,
+        playlist: entries,
+        startIndex: start,
+      );
       if (result.busy) {
-        // Second path: launcher also guards; treat as no-op.
         return null;
       }
       if (!result.started) {
         return result.error ?? 'mpv failed to start';
       }
-      // Non-zero exit is normal (user quit); only surface spawn errors.
       return null;
     } finally {
       _watchInFlight = false;
       nowPlaying = null;
+      _watchList = const [];
+      _watchIndex = 0;
       notifyListeners();
     }
   }
@@ -523,6 +622,10 @@ class SessionController extends ChangeNotifier {
   }
 
   Future<void> playAdjacent(int delta) async {
+    if (isWatchingExternal) {
+      await watchChannelAdjacent(delta);
+      return;
+    }
     final list = channelsInCategory;
     if (list.isEmpty || nowPlaying == null) return;
     if (list.length == 1) {
@@ -551,6 +654,8 @@ class SessionController extends ChangeNotifier {
     }
     _watchInFlight = false;
     nowPlaying = null;
+    _watchList = const [];
+    _watchIndex = 0;
     if (notify) notifyListeners();
   }
 

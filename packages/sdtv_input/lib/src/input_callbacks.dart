@@ -12,6 +12,7 @@ class SdtvInputCallbacks extends InheritedWidget {
     required this.onBack,
     required this.onMenu,
     this.onFavorite,
+    this.onMute,
     this.onDirection,
     this.onPageUp,
     this.onPageDown,
@@ -22,6 +23,7 @@ class SdtvInputCallbacks extends InheritedWidget {
   final VoidCallback? onBack;
   final VoidCallback? onMenu;
   final VoidCallback? onFavorite;
+  final VoidCallback? onMute;
 
   /// D-pad / stick. When set, gamepad binding calls this instead of Actions.
   final void Function(TraversalDirection direction)? onDirection;
@@ -46,6 +48,7 @@ class SdtvInputCallbacks extends InheritedWidget {
         onBack != oldWidget.onBack ||
         onMenu != oldWidget.onMenu ||
         onFavorite != oldWidget.onFavorite ||
+        onMute != oldWidget.onMute ||
         onDirection != oldWidget.onDirection ||
         onPageUp != oldWidget.onPageUp ||
         onPageDown != oldWidget.onPageDown;

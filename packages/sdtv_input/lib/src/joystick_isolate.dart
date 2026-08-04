@@ -95,6 +95,8 @@ void _joystickIsolateMain(SendPort mainPort) {
         return GamepadEdge.confirm;
       case 1:
         return GamepadEdge.back;
+      case 2:
+        return GamepadEdge.mute;
       case 3:
         return GamepadEdge.favorite;
       case 4:

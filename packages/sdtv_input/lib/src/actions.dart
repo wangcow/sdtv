@@ -37,3 +37,8 @@ class SdtvPlayPauseIntent extends Intent {
 class SdtvFavoriteIntent extends Intent {
   const SdtvFavoriteIntent();
 }
+
+/// Mute / unmute (X / M) — mainly while watching.
+class SdtvMuteIntent extends Intent {
+  const SdtvMuteIntent();
+}
