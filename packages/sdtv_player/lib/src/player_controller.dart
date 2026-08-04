@@ -121,10 +121,11 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
       _player,
       configuration: const VideoControllerConfiguration(
         enableHardwareAcceleration: true,
-        // Prefer VAAPI on Steam Deck; fall back to auto/software.
-        // (Homebrew libmpv often has no VAAPI — run-sdtv.sh prefers system libmpv.)
-        hwdec: 'vaapi,auto',
-        // Cap texture size so software fallback is less brutal.
+        // media_kit renders via vo=libmpv into a Flutter texture.
+        // Zero-copy "vaapi" often fails to interop → silent CPU fallback.
+        // "*-copy" still uses the GPU decoder, then copies frames (what we need).
+        hwdec: 'vaapi-copy,auto-copy,auto',
+        // Cap texture size so pure software fallback is less brutal.
         height: 720,
       ),
     );
@@ -182,12 +183,12 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
       final dynamic native = platform;
       if (native.setProperty is! Function) return;
 
+      // Order matters for media_kit: copy-mode hwdec is required for texture upload.
       const props = <String, String>{
-        // Prefer VAAPI (system radeonsi via LIBVA_*). auto alone often stays on CPU
-        // when drivers fail to load.
-        'hwdec': 'vaapi',
+        'hwdec': 'vaapi-copy',
+        'hwdec-codecs': 'all',
         'vo': 'libmpv',
-        'gpu-context': 'auto',
+        'gpu-hwdec-interop': 'auto',
         'cache': 'yes',
         'demuxer-max-bytes': '104857600',
         'demuxer-max-back-bytes': '52428800',
@@ -205,11 +206,14 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
           debugPrint('sdtv_player setProperty ${e.key}: $err');
         }
       }
-      // If pure vaapi fails at runtime, allow fallback.
+      // Fallback chain if pure vaapi-copy is rejected at runtime.
       try {
-        await native.setProperty('hwdec', 'vaapi,vaapi-copy,auto') as Future?;
+        await native.setProperty(
+          'hwdec',
+          'vaapi-copy,auto-copy,auto-safe,auto',
+        ) as Future?;
       } catch (_) {}
-      debugPrint('sdtv_player: applied Linux demuxer/hwdec props');
+      debugPrint('sdtv_player: applied Linux demuxer/hwdec props (copy path)');
     } catch (e) {
       debugPrint('sdtv_player tune: $e');
     }
@@ -218,32 +222,28 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   Future<void> _refreshDecodeLabel() async {
     var hw = '';
     var codec = '';
+    var hwdecReq = '';
     try {
       final dynamic native = _player.platform;
       if (native != null && native.getProperty is Function) {
-        try {
-          hw = ((await native.getProperty('hwdec-current')) as String? ?? '')
-              .trim();
-        } catch (_) {}
-        try {
-          // e.g. h264, hevc
-          codec =
-              ((await native.getProperty('video-codec')) as String? ?? '')
-                  .trim();
-        } catch (_) {}
-        if (codec.isEmpty) {
+        Future<String> prop(String name) async {
           try {
-            codec =
-                ((await native.getProperty('video-format')) as String? ?? '')
-                    .trim();
-          } catch (_) {}
+            return ((await native.getProperty(name)) as String? ?? '').trim();
+          } catch (_) {
+            return '';
+          }
         }
+
+        hw = await prop('hwdec-current');
+        hwdecReq = await prop('hwdec');
+        codec = await prop('video-codec');
+        if (codec.isEmpty) codec = await prop('video-format');
+        if (codec.isEmpty) codec = await prop('current-vo');
       }
     } catch (e) {
       debugPrint('sdtv_player decode query: $e');
     }
 
-    // Fallback from media_kit video params if mpv strings empty.
     if (codec.isEmpty) {
       try {
         final vp = _player.state.videoParams;
@@ -253,10 +253,21 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
     }
 
     final src = Platform.environment['SDTV_MPV_SOURCE'] ?? '?';
-    final hwPart = hw.isEmpty || hw == 'no' ? 'cpu/software' : hw;
+    // Empty hwdec-current with hwdec request still set often means copy-path
+    // hasn't reported yet — don't always call that "cpu/software".
+    String hwPart;
+    if (hw.isNotEmpty && hw != 'no') {
+      hwPart = hw;
+    } else if (hw == 'no') {
+      hwPart = 'cpu/software';
+    } else if (hwdecReq.contains('vaapi')) {
+      hwPart = 'vaapi?'; // requested; may still be probing
+    } else {
+      hwPart = 'cpu/software';
+    }
     final codecPart = codec.isEmpty ? '' : ' · $codec';
     _decodeLabel = 'decode: $hwPart$codecPart · mpv=$src';
-    debugPrint('sdtv_player $_decodeLabel');
+    debugPrint('sdtv_player $_decodeLabel (hwdec=$hwdecReq current=$hw)');
     if (!_disposed) notifyListeners();
   }
 
