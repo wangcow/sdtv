@@ -21,8 +21,8 @@ abstract class SdtvPlayerController extends Listenable {
   String? get currentUrl;
   String? get lastError;
 
-  /// Last known libmpv `hwdec-current` (empty if unknown).
-  String get hwdecCurrent => '';
+  /// Decode path summary for HUD (never empty after first open attempt).
+  String get decodeLabel => 'decode: —';
 
   /// Non-null when using media_kit (for [Video] widget).
   VideoController? get videoController => null;
@@ -56,7 +56,7 @@ class StubSdtvPlayerController extends ChangeNotifier
   String? get lastError => _error;
 
   @override
-  String get hwdecCurrent => 'stub';
+  String get decodeLabel => 'decode: stub';
 
   @override
   VideoController? get videoController => null;
@@ -168,7 +168,7 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   SdtvPlayerState _state = SdtvPlayerState.idle;
   String? _url;
   String? _error;
-  String _hwdecCurrent = '';
+  String _decodeLabel = 'decode: —';
   bool _disposed = false;
   Timer? _bufferStuckTimer;
 
@@ -207,16 +207,48 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
     }
   }
 
-  Future<void> _refreshHwdec() async {
+  Future<void> _refreshDecodeLabel() async {
+    var hw = '';
+    var codec = '';
     try {
       final dynamic native = _player.platform;
-      if (native == null || native.getProperty is! Function) return;
-      final v = await native.getProperty('hwdec-current') as String?;
-      _hwdecCurrent = (v ?? '').trim();
-      debugPrint('sdtv_player hwdec-current=$_hwdecCurrent');
+      if (native != null && native.getProperty is Function) {
+        try {
+          hw = ((await native.getProperty('hwdec-current')) as String? ?? '')
+              .trim();
+        } catch (_) {}
+        try {
+          // e.g. h264, hevc
+          codec =
+              ((await native.getProperty('video-codec')) as String? ?? '')
+                  .trim();
+        } catch (_) {}
+        if (codec.isEmpty) {
+          try {
+            codec =
+                ((await native.getProperty('video-format')) as String? ?? '')
+                    .trim();
+          } catch (_) {}
+        }
+      }
     } catch (e) {
-      debugPrint('sdtv_player hwdec query: $e');
+      debugPrint('sdtv_player decode query: $e');
     }
+
+    // Fallback from media_kit video params if mpv strings empty.
+    if (codec.isEmpty) {
+      try {
+        final vp = _player.state.videoParams;
+        final pix = vp.pixelformat;
+        if (pix != null && pix.isNotEmpty) codec = pix;
+      } catch (_) {}
+    }
+
+    final hwPart = hw.isEmpty ? 'cpu?' : hw;
+    final codecPart = codec.isEmpty ? '' : ' · $codec';
+    _decodeLabel = 'decode: $hwPart$codecPart';
+    debugPrint('sdtv_player $_decodeLabel');
+    if (!_disposed) notifyListeners();
   }
 
   void _resyncFromNative() {
@@ -274,7 +306,7 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   String? get lastError => _error;
 
   @override
-  String get hwdecCurrent => _hwdecCurrent;
+  String get decodeLabel => _decodeLabel;
 
   @override
   VideoController get videoController => _videoController;
@@ -293,7 +325,11 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
     _setState(SdtvPlayerState.opening);
     try {
       await _player.open(Media(url.toString()), play: true);
-      await _refreshHwdec();
+      // Query after a beat — hwdec-current is often empty at open edge.
+      unawaited(Future<void>.delayed(const Duration(milliseconds: 800), () {
+        if (!_disposed) unawaited(_refreshDecodeLabel());
+      }));
+      await _refreshDecodeLabel();
       _resyncFromNative();
     } catch (e, st) {
       _error = e.toString();
