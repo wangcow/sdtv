@@ -115,30 +115,166 @@ class SessionController extends ChangeNotifier {
   DateTime? _lastZapAt;
   DateTime? _lastVolAt;
 
+  /// In-player menu (pause chrome). When open, D-pad navigates the menu
+  /// instead of volume/channel — like focusing a video player's control bar.
+  bool watchMenuOpen = false;
+  int watchMenuIndex = 0;
+
+  /// Order of rows in the watch menu OSD.
+  static const watchMenuItems = <String>[
+    'resume',
+    'subtitles',
+    'audio',
+    'mute',
+    'guide',
+  ];
+
   /// External watch session active (mpv running or handoff in progress).
   ///
   /// Use for **player** pad routing (pause/quit/zap/vol). Do **not** freeze
   /// the whole browse UI with this — menu / Cancel must always work.
   bool get isWatchingExternal => _watchInFlight || externalMpv.isRunning;
 
-  /// Pause/unpause the external mpv session (IPC). No-op if not watching.
-  ///
-  /// On pause, mpv shows its OSC transport chrome + a short HUD with the
-  /// channel name (see sdtv-pause-osc.lua). This is the “web video bar”
-  /// equivalent while we keep external mpv for performance.
-  Future<void> watchCyclePause() async {
-    if (!isWatchingExternal) return;
+  /// True when pad should drive the watch menu, not zap/volume.
+  bool get isWatchMenuActive => isWatchingExternal && watchMenuOpen;
+
+  String get _nowPlayingLabel {
     final ch = nowPlaying;
-    final label = ch == null
-        ? null
-        : (ch.num > 0 ? '${ch.num}. ${ch.name}' : ch.name);
-    await externalMpv.cyclePause(pausedHud: label);
+    if (ch == null) return 'Live';
+    return ch.num > 0 ? '${ch.num}. ${ch.name}' : ch.name;
   }
 
-  /// Quit external mpv and return to guide (B while watching).
+  /// A while watching: open menu (and pause), or confirm menu row.
+  Future<void> watchActivate() async {
+    if (!isWatchingExternal) return;
+    if (watchMenuOpen) {
+      await watchMenuConfirm();
+    } else {
+      await watchOpenMenu();
+    }
+  }
+
+  /// Legacy name — same as [watchActivate].
+  Future<void> watchCyclePause() => watchActivate();
+
+  /// Open navigable pause menu (pauses playback).
+  Future<void> watchOpenMenu() async {
+    if (!isWatchingExternal) return;
+    watchMenuOpen = true;
+    watchMenuIndex = 0;
+    await externalMpv.setPaused(true);
+    await externalMpv.setOscVisible(true);
+    await _paintWatchMenu();
+    notifyListeners();
+  }
+
+  /// Close menu. [resume] unpauses; otherwise stay paused with OSC auto-hide.
+  Future<void> watchCloseMenu({bool resume = false}) async {
+    if (!isWatchingExternal) return;
+    watchMenuOpen = false;
+    watchMenuIndex = 0;
+    if (resume) {
+      await externalMpv.setPaused(false);
+      await externalMpv.setOscVisible(false);
+    } else {
+      await externalMpv.setOscVisible(false);
+      await externalMpv.showText(
+        'Paused · A menu · B guide · LB/RB ch · ↑↓ vol',
+        durationMs: 2500,
+      );
+    }
+    notifyListeners();
+  }
+
+  Future<void> watchMenuMove(int delta) async {
+    if (!isWatchMenuActive) return;
+    final n = watchMenuItems.length;
+    watchMenuIndex = (watchMenuIndex + delta) % n;
+    if (watchMenuIndex < 0) watchMenuIndex += n;
+    await _paintWatchMenu();
+    notifyListeners();
+  }
+
+  /// ←/→ on a row: cycle value (subs / audio) or no-op.
+  Future<void> watchMenuAdjust(int delta) async {
+    if (!isWatchMenuActive) return;
+    final id = watchMenuItems[watchMenuIndex];
+    switch (id) {
+      case 'subtitles':
+        if (delta != 0) await externalMpv.cycleSubtitleTrack();
+      case 'audio':
+        if (delta != 0) await externalMpv.cycleAudioTrack();
+      case 'mute':
+        await externalMpv.cycleMute();
+      default:
+        break;
+    }
+    await _paintWatchMenu();
+  }
+
+  Future<void> watchMenuConfirm() async {
+    if (!isWatchMenuActive) return;
+    final id = watchMenuItems[watchMenuIndex];
+    switch (id) {
+      case 'resume':
+        await watchCloseMenu(resume: true);
+      case 'subtitles':
+        await externalMpv.cycleSubtitleTrack();
+        await _paintWatchMenu();
+      case 'audio':
+        await externalMpv.cycleAudioTrack();
+        await _paintWatchMenu();
+      case 'mute':
+        await externalMpv.cycleMute();
+        await _paintWatchMenu();
+      case 'guide':
+        await watchQuit();
+      default:
+        break;
+    }
+  }
+
+  Future<void> _paintWatchMenu() async {
+    final sub = await externalMpv.subtitleLabel();
+    final aud = await externalMpv.audioLabel();
+    final muted = await externalMpv.getProperty('mute');
+    final muteLabel =
+        (muted == true || muted == 'yes') ? 'On' : 'Off';
+
+    final rows = <String>[
+      'Resume',
+      'Subtitles: $sub',
+      'Audio: $aud',
+      'Mute: $muteLabel',
+      'Back to guide',
+    ];
+
+    final buf = StringBuffer('❚❚  $_nowPlayingLabel\n');
+    for (var i = 0; i < rows.length; i++) {
+      final mark = i == watchMenuIndex ? '▶ ' : '   ';
+      buf.writeln('$mark${rows[i]}');
+    }
+    buf.write('↑↓ move · ←→ change · A select · B close menu');
+    // Long duration; each move refreshes.
+    await externalMpv.showText(buf.toString(), durationMs: 12000);
+  }
+
+  /// B while watching: close menu first, else quit to guide.
+  Future<void> watchBack() async {
+    if (!isWatchingExternal) return;
+    if (watchMenuOpen) {
+      await watchCloseMenu(resume: false);
+      return;
+    }
+    await watchQuit();
+  }
+
+  /// Quit external mpv and return to guide (B while watching, menu closed).
   Future<void> watchQuit() async {
     if (!isWatchingExternal) return;
     debugPrint('sdtv: watchQuit');
+    watchMenuOpen = false;
+    watchMenuIndex = 0;
     await externalMpv.quit();
     // exitCode path clears _watchInFlight; if kill raced, force-clear.
     if (_watchInFlight && !externalMpv.isRunning) {
@@ -152,6 +288,7 @@ class SessionController extends ChangeNotifier {
   /// Channel ± within the current watch list (LB/RB, ←/→, PgUp/PgDn).
   Future<void> watchChannelAdjacent(int delta) async {
     if (!isWatchingExternal || _watchList.isEmpty) return;
+    if (watchMenuOpen) return; // menu owns the pad
     final now = DateTime.now();
     if (_lastZapAt != null &&
         now.difference(_lastZapAt!) < const Duration(milliseconds: 280)) {
@@ -194,6 +331,7 @@ class SessionController extends ChangeNotifier {
   /// Volume ± (D-pad / arrows). Steps of 5 on mpv's 0–100 scale + OSD.
   Future<void> watchVolumeDelta(int delta) async {
     if (!isWatchingExternal) return;
+    if (watchMenuOpen) return;
     final now = DateTime.now();
     if (_lastVolAt != null &&
         now.difference(_lastVolAt!) < const Duration(milliseconds: 80)) {
@@ -205,6 +343,11 @@ class SessionController extends ChangeNotifier {
 
   Future<void> watchCycleMute() async {
     if (!isWatchingExternal) return;
+    if (watchMenuOpen) {
+      await externalMpv.cycleMute();
+      await _paintWatchMenu();
+      return;
+    }
     await externalMpv.cycleMute();
   }
 
@@ -579,6 +722,8 @@ class SessionController extends ChangeNotifier {
       nowPlaying = null;
       _watchList = const [];
       _watchIndex = 0;
+      watchMenuOpen = false;
+      watchMenuIndex = 0;
       notifyListeners();
     }
   }
@@ -667,6 +812,8 @@ class SessionController extends ChangeNotifier {
     nowPlaying = null;
     _watchList = const [];
     _watchIndex = 0;
+    watchMenuOpen = false;
+    watchMenuIndex = 0;
     if (notify) notifyListeners();
   }
 

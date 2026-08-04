@@ -116,7 +116,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   void _moveVertical(int delta) {
-    // Phase B: while watching, ↑↓ = volume (pad still owned by Flutter on Deck).
+    // Watching + menu open: D-pad navigates the pause menu (not volume).
+    if (session.isWatchMenuActive && !_menuOpen && !_aboutOpen) {
+      unawaited(session.watchMenuMove(delta));
+      return;
+    }
+    // Watching, menu closed: ↑↓ = volume.
     // delta < 0 = up → louder; delta > 0 = down → quieter.
     if (session.isWatchingExternal && !_menuOpen && !_aboutOpen) {
       unawaited(session.watchVolumeDelta(delta < 0 ? 5 : -5));
@@ -155,7 +160,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   void _moveHorizontal(int delta) {
-    // Phase B: while watching, ←/→ = previous / next channel.
+    // Watching + menu: ←/→ adjust current row (subs / audio / mute).
+    if (session.isWatchMenuActive && !_menuOpen && !_aboutOpen) {
+      unawaited(session.watchMenuAdjust(delta));
+      return;
+    }
+    // Watching, menu closed: ←/→ = previous / next channel.
     if (session.isWatchingExternal && !_menuOpen && !_aboutOpen) {
       unawaited(session.watchChannelAdjacent(delta));
       return;
@@ -176,6 +186,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   void _onPage(int delta) {
+    if (session.isWatchMenuActive) {
+      unawaited(session.watchMenuMove(delta));
+      return;
+    }
     if (session.isWatchingExternal) {
       unawaited(session.watchChannelAdjacent(delta));
       return;
@@ -200,13 +214,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     _lastActivateAt = now;
 
-    // While mpv is up, A = pause (never freeze the guide / menu).
+    // While mpv is up: A opens/activates the watch menu (not the guide menu).
     if (session.isWatchingExternal) {
       if (_menuOpen || _aboutOpen) {
-        // Overlays still need A; if we somehow have UI + watch flag, clear watch.
         await session.watchQuit();
       } else {
-        await session.watchCyclePause();
+        await session.watchActivate();
       }
       return;
     }
@@ -284,10 +297,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   /// Hierarchical back: about → menu → categories ← channels.
-  /// While external mpv is up: B quits video (does not open the guide menu).
+  /// While watching: B closes watch menu first, else quits to guide.
   void _onBack() {
     if (session.isWatchingExternal) {
-      unawaited(session.watchQuit());
+      unawaited(session.watchBack());
       return;
     }
     if (_aboutOpen) {
