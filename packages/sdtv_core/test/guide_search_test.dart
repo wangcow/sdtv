@@ -60,14 +60,19 @@ void main() {
       expect(hits.any((h) => h.subtitle.contains('hidden')), isTrue);
     });
 
-    test('boosts favorited channels', () {
+    test('marks favorited channels in subtitle and score', () {
       final hits = GuideSearch.search(
-        query: 'e',
+        query: 'bloomberg',
         categories: cats,
         channels: channels,
         favoriteKeys: {channels[0].favoriteKey},
       );
-      expect(hits.first.channel?.name, contains('Bloomberg'));
+      expect(hits, isNotEmpty);
+      final bloom = hits.firstWhere(
+        (h) => h.channel?.name.contains('Bloomberg') ?? false,
+      );
+      expect(bloom.subtitle, contains('★'));
+      expect(bloom.score, greaterThan(40));
     });
 
     test('empty query returns nothing', () {
