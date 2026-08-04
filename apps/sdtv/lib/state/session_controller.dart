@@ -42,13 +42,17 @@ class SessionController extends ChangeNotifier {
   /// True when catalog/playback is fixture-based (demo or SDTV_FORCE_MOCK).
   bool mockCatalog = true;
 
+  /// M3U playlist session (direct stream URLs per channel).
+  bool useM3u = false;
+  String? m3uPlaylistUrl;
+
   List<MediaCategory> categories = const [];
   List<LiveChannel> allChannels = const [];
   String? selectedCategoryId;
   LiveChannel? nowPlaying;
 
-  /// Real HTTP Xtream provider (not demo, not forced mock).
-  bool get isLiveProvider => !useDemo && !mockCatalog;
+  /// Real HTTP Xtream provider (not demo, not forced mock, not M3U).
+  bool get isLiveProvider => !useDemo && !mockCatalog && !useM3u;
 
   List<LiveChannel> get channelsInCategory {
     final id = selectedCategoryId;
@@ -63,10 +67,13 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
 
     useDemo = _settings.useDemo;
+    useM3u = _settings.useM3u;
     if (_settings.hasSavedSession) {
       try {
         if (useDemo) {
           await connectDemo(save: false);
+        } else if (useM3u && _settings.m3uUrl != null) {
+          await connectM3u(_settings.m3uUrl!, save: false);
         } else {
           final creds = _settings.credentials;
           if (creds != null) {
@@ -96,6 +103,8 @@ class SessionController extends ChangeNotifier {
 
     try {
       final client = await loadMockXtreamClient();
+      useM3u = false;
+      m3uPlaylistUrl = null;
       await _finishConnect(
         client,
         useDemo: true,
@@ -106,6 +115,56 @@ class SessionController extends ChangeNotifier {
       errorMessage = 'Demo load failed: $e';
       phase = SessionPhase.login;
       notifyListeners();
+    }
+  }
+
+  /// Load a remote M3U / M3U8 **playlist** URL (user-supplied, legal lists only).
+  Future<void> connectM3u(String playlistUrl, {bool save = true}) async {
+    phase = SessionPhase.loading;
+    errorMessage = null;
+    notifyListeners();
+
+    final loader = M3uLoader();
+    try {
+      final pl = await loader.load(playlistUrl);
+      try {
+        if (_client is HttpXtreamClient) {
+          (_client as HttpXtreamClient).close();
+        }
+      } catch (_) {}
+      _client = null;
+      useDemo = false;
+      mockCatalog = false;
+      useM3u = true;
+      m3uPlaylistUrl = playlistUrl.trim();
+      userInfo = UserInfo(
+        username: 'm3u',
+        status: 'Active',
+      );
+      categories = pl.categories;
+      allChannels = pl.channels;
+      selectedCategoryId =
+          pl.categories.isNotEmpty ? pl.categories.first.categoryId : null;
+
+      if (save) {
+        await _settings.saveSession(
+          useDemo: false,
+          useM3u: true,
+          m3uUrl: m3uPlaylistUrl,
+        );
+      }
+      phase = SessionPhase.browse;
+      notifyListeners();
+    } on XtreamException catch (e) {
+      errorMessage = e.message;
+      phase = SessionPhase.login;
+      notifyListeners();
+    } catch (e) {
+      errorMessage = e.toString();
+      phase = SessionPhase.login;
+      notifyListeners();
+    } finally {
+      loader.close();
     }
   }
 
@@ -164,6 +223,8 @@ class SessionController extends ChangeNotifier {
         client = HttpXtreamClient(credentials: credentials);
         mock = false;
       }
+      useM3u = false;
+      m3uPlaylistUrl = null;
       await _finishConnect(
         client,
         useDemo: false,
@@ -244,6 +305,7 @@ class SessionController extends ChangeNotifier {
     if (save) {
       await _settings.saveSession(
         useDemo: useDemo,
+        useM3u: false,
         credentials: credentials,
       );
     }
@@ -258,11 +320,27 @@ class SessionController extends ChangeNotifier {
   }
 
   Future<void> playChannel(LiveChannel channel) async {
-    final client = _client;
-    if (client == null) return;
     final previous = nowPlaying;
     nowPlaying = channel;
     notifyListeners();
+
+    // M3U / any direct URL on the channel entry.
+    if (channel.hasDirectUrl) {
+      final url = Uri.parse(channel.streamUrl!.trim());
+      if (previous?.streamId == channel.streamId &&
+          player.currentUrl == url.toString() &&
+          (player.state == SdtvPlayerState.playing ||
+              player.state == SdtvPlayerState.paused ||
+              player.state == SdtvPlayerState.buffering)) {
+        return;
+      }
+      await player.open(url);
+      notifyListeners();
+      return;
+    }
+
+    final client = _client;
+    if (client == null) return;
 
     // Demo / forced mock: public test HLS.
     if (useDemo || mockCatalog) {
@@ -279,12 +357,11 @@ class SessionController extends ChangeNotifier {
       return;
     }
 
-    // Live provider: real per-channel URL. Prefer .ts then fall back to .m3u8.
+    // Live Xtream: per-channel URL. Prefer .ts then fall back to .m3u8.
     final ts = client.livePlayUrl(channel.streamId, extension: 'ts');
     final m3u8 = client.livePlayUrl(channel.streamId, extension: 'm3u8');
 
     await player.open(ts);
-    // Brief window for async open/error from libmpv.
     await Future<void>.delayed(const Duration(milliseconds: 450));
     if (player.state == SdtvPlayerState.error) {
       debugPrint('sdtv: .ts open failed, trying .m3u8');
@@ -339,6 +416,8 @@ class SessionController extends ChangeNotifier {
     selectedCategoryId = null;
     useDemo = true;
     mockCatalog = true;
+    useM3u = false;
+    m3uPlaylistUrl = null;
     try {
       await _settings.clearSession();
     } catch (e, st) {

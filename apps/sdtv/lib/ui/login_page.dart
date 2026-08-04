@@ -23,12 +23,15 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  static const _itemCount = 5; // demo, url, user, pass, connect
+  // demo · m3uUrl · loadM3u · xtreamUrl · user · pass · connect
+  static const _itemCount = 7;
 
+  final _m3uUrl = TextEditingController();
   final _url = TextEditingController();
   final _user = TextEditingController();
   final _pass = TextEditingController();
 
+  final _m3uFocus = FocusNode(debugLabel: 'm3u');
   final _urlFocus = FocusNode(debugLabel: 'url');
   final _userFocus = FocusNode(debugLabel: 'user');
   final _passFocus = FocusNode(debugLabel: 'pass');
@@ -44,16 +47,19 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   void dispose() {
+    _m3uUrl.dispose();
     _url.dispose();
     _user.dispose();
     _pass.dispose();
+    _m3uFocus.dispose();
     _urlFocus.dispose();
     _userFocus.dispose();
     _passFocus.dispose();
     super.dispose();
   }
 
-  bool get _isFieldSelected => _selected >= 1 && _selected <= 3;
+  bool get _isFieldSelected =>
+      _selected == 1 || _selected == 3 || _selected == 4 || _selected == 5;
 
   void _nav(int delta) {
     final now = DateTime.now();
@@ -74,12 +80,15 @@ class _LoginPageState extends State<LoginPage> {
       if (!mounted) return;
       switch (_selected) {
         case 1:
-          _urlFocus.requestFocus();
-        case 2:
-          _userFocus.requestFocus();
+          _m3uFocus.requestFocus();
         case 3:
+          _urlFocus.requestFocus();
+        case 4:
+          _userFocus.requestFocus();
+        case 5:
           _passFocus.requestFocus();
         default:
+          _m3uFocus.unfocus();
           _urlFocus.unfocus();
           _userFocus.unfocus();
           _passFocus.unfocus();
@@ -93,11 +102,15 @@ class _LoginPageState extends State<LoginPage> {
       case 0:
         await _demo();
       case 1:
+        _nav(1); // m3u field → load button
       case 2:
-        _nav(1);
+        await _loadM3u();
       case 3:
-        await _connect();
       case 4:
+        _nav(1);
+      case 5:
+        await _connect();
+      case 6:
         await _connect();
     }
   }
@@ -111,6 +124,29 @@ class _LoginPageState extends State<LoginPage> {
     if (mounted) setState(() => _busy = false);
   }
 
+  Future<void> _loadM3u() async {
+    final url = _m3uUrl.text.trim();
+    if (url.isEmpty) {
+      setState(
+        () => _localError =
+            'Paste an http(s) M3U playlist URL (public/legal lists only).',
+      );
+      return;
+    }
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      setState(
+        () => _localError = 'M3U URL must start with http:// or https://',
+      );
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _localError = null;
+    });
+    await widget.session.connectM3u(url);
+    if (mounted) setState(() => _busy = false);
+  }
+
   Future<void> _connect() async {
     final url = _url.text.trim();
     final user = _user.text.trim();
@@ -118,7 +154,7 @@ class _LoginPageState extends State<LoginPage> {
     if (url.isEmpty || user.isEmpty || pass.isEmpty) {
       setState(
         () => _localError =
-            'Enter server URL, username, and password — or use Demo.',
+            'Enter server URL, username, and password — or Demo / M3U.',
       );
       return;
     }
@@ -126,7 +162,7 @@ class _LoginPageState extends State<LoginPage> {
       setState(
         () => _localError =
             'Server URL must be like http://host:8080 (not a short placeholder). '
-            'Or use “Continue with demo playlist”.',
+            'Or use Demo / M3U.',
       );
       return;
     }
@@ -234,9 +270,9 @@ class _LoginPageState extends State<LoginPage> {
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              'Player only — bring your own Xtream Codes credentials. '
-                              'Demo uses offline mock data. Connect hits your real '
-                              'provider (URL + user + pass).',
+                              'Player only — you supply playlists/credentials. '
+                              'Demo = offline mock. M3U = public playlist URL. '
+                              'Xtream = provider panel login.',
                               style: theme.textTheme.bodyMedium,
                             ),
                             const SizedBox(height: 28),
@@ -249,7 +285,37 @@ class _LoginPageState extends State<LoginPage> {
                                 if (!_busy) _demo();
                               },
                             ),
-                            const SizedBox(height: 28),
+                            const SizedBox(height: 24),
+                            Text(
+                              'OR M3U PLAYLIST',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                letterSpacing: 1.2,
+                                color: theme.colorScheme.outline,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            _SelectField(
+                              selected: _selected == 1,
+                              label: 'M3U URL (http… playlist.m3u)',
+                              controller: _m3uUrl,
+                              focusNode: _m3uFocus,
+                              keyboardType: TextInputType.url,
+                              onTap: () {
+                                setState(() => _selected = 1);
+                                _syncFieldFocus();
+                              },
+                            ),
+                            const SizedBox(height: 12),
+                            _SelectTile(
+                              selected: _selected == 2,
+                              label: _busy ? 'Loading M3U…' : 'Open M3U playlist',
+                              icon: Icons.playlist_play,
+                              onTap: () {
+                                setState(() => _selected = 2);
+                                if (!_busy) _loadM3u();
+                              },
+                            ),
+                            const SizedBox(height: 24),
                             Text(
                               'OR CONNECT XTREAM CODES',
                               style: theme.textTheme.labelSmall?.copyWith(
@@ -259,30 +325,30 @@ class _LoginPageState extends State<LoginPage> {
                             ),
                             const SizedBox(height: 12),
                             _SelectField(
-                              selected: _selected == 1,
+                              selected: _selected == 3,
                               label: 'Server URL (http://host:port)',
                               controller: _url,
                               focusNode: _urlFocus,
                               keyboardType: TextInputType.url,
                               onTap: () {
-                                setState(() => _selected = 1);
+                                setState(() => _selected = 3);
                                 _syncFieldFocus();
                               },
                             ),
                             const SizedBox(height: 12),
                             _SelectField(
-                              selected: _selected == 2,
+                              selected: _selected == 4,
                               label: 'Username',
                               controller: _user,
                               focusNode: _userFocus,
                               onTap: () {
-                                setState(() => _selected = 2);
+                                setState(() => _selected = 4);
                                 _syncFieldFocus();
                               },
                             ),
                             const SizedBox(height: 12),
                             _SelectField(
-                              selected: _selected == 3,
+                              selected: _selected == 5,
                               label: 'Password',
                               controller: _pass,
                               focusNode: _passFocus,
@@ -290,7 +356,7 @@ class _LoginPageState extends State<LoginPage> {
                               textInputAction: TextInputAction.done,
                               onSubmitted: _busy ? null : _connect,
                               onTap: () {
-                                setState(() => _selected = 3);
+                                setState(() => _selected = 5);
                                 _syncFieldFocus();
                               },
                               suffix: IconButton(
@@ -309,13 +375,13 @@ class _LoginPageState extends State<LoginPage> {
                             ),
                             const SizedBox(height: 20),
                             _SelectTile(
-                              selected: _selected == 4,
+                              selected: _selected == 6,
                               label: _busy
                                   ? 'Connecting…'
                                   : 'Connect to provider',
                               icon: Icons.login,
                               onTap: () {
-                                setState(() => _selected = 4);
+                                setState(() => _selected = 6);
                                 if (!_busy) _connect();
                               },
                             ),
@@ -331,9 +397,9 @@ class _LoginPageState extends State<LoginPage> {
                             if (_isFieldSelected) ...[
                               const SizedBox(height: 16),
                               Text(
-                                _selected == 3
+                                _selected == 5
                                     ? 'Type with OSK · eye icon shows password · A = connect'
-                                    : 'Type with OSK · D-pad up/down changes field · A = next / connect',
+                                    : 'Type with OSK · D-pad up/down changes field · A = next / open',
                                 style: theme.textTheme.bodySmall?.copyWith(
                                   color: theme.colorScheme.outline,
                                 ),
