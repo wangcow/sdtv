@@ -99,18 +99,56 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     SdtvTextFocusRegistry.register(_searchFocus);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (session.browseCategories.isNotEmpty &&
-          session.selectedCategoryId == null) {
-        session.selectCategory(session.browseCategories.first.categoryId);
-      }
-      // Align index with session selection (e.g. open on Favorites).
-      final sel = session.selectedCategoryId;
-      if (sel != null) {
-        final i =
-            session.browseCategories.indexWhere((c) => c.categoryId == sel);
-        if (i >= 0) setState(() => _catIndex = i);
+      _restoreGuideLanding();
+    });
+  }
+
+  /// Land on last-played category/channel (or session default selection).
+  void _restoreGuideLanding() {
+    if (session.browseCategories.isEmpty) return;
+
+    if (session.selectedCategoryId == null) {
+      session.selectCategory(session.browseCategories.first.categoryId);
+    }
+
+    final sel = session.selectedCategoryId;
+    var catIdx = 0;
+    if (sel != null) {
+      final i =
+          session.browseCategories.indexWhere((c) => c.categoryId == sel);
+      if (i >= 0) catIdx = i;
+    }
+
+    // Prefer last-played channel row within the selected category.
+    var chanIdx = 0;
+    final lastIdx = session.lastPlayedChannelIndex;
+    if (lastIdx >= 0) {
+      chanIdx = lastIdx;
+      final id = session.selectedCategoryId;
+      if (id != null) _chanIndexByCategory[id] = chanIdx;
+    }
+
+    setState(() {
+      _catIndex = catIdx;
+      _chanIndex = chanIdx;
+      // Open on the channel column when we have a resume target.
+      if (lastIdx >= 0) {
+        _column = 1;
       }
     });
+
+    if (lastIdx >= 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _scrollTo(
+          _catScroll,
+          catIdx,
+          itemExtent: _rowExtent,
+          headerExtent: _listHeaderExtent,
+        );
+        _scrollToChannelIndex(chanIdx);
+      });
+    }
   }
 
   @override
