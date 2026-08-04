@@ -49,14 +49,25 @@ void main() {
       expect(hits.any((h) => h.isCategory && h.categoryId == '2'), isTrue);
     });
 
-    test('skips hidden categories and their channels', () {
+    test('still finds channels in hidden categories (marked)', () {
       final hits = GuideSearch.search(
         query: 'algeria',
         categories: cats,
         channels: channels,
         hiddenCategoryIds: {'3'},
       );
-      expect(hits, isEmpty);
+      expect(hits, isNotEmpty);
+      expect(hits.any((h) => h.subtitle.contains('hidden')), isTrue);
+    });
+
+    test('boosts favorited channels', () {
+      final hits = GuideSearch.search(
+        query: 'e',
+        categories: cats,
+        channels: channels,
+        favoriteKeys: {channels[0].favoriteKey},
+      );
+      expect(hits.first.channel?.name, contains('Bloomberg'));
     });
 
     test('empty query returns nothing', () {

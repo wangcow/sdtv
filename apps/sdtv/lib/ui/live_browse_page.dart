@@ -725,23 +725,32 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (mounted) setState(() {});
   }
 
-  /// Y / F: star or unstar the focused channel (channel column only).
+  /// Y / F: star or unstar channel (guide focus, or now-playing while watching).
   Future<void> _toggleFavorite() async {
-    if (session.isWatchingExternal) return;
-    if (_menuOpen || _aboutOpen) return;
-    if (_column != 1) {
+    if (_menuOpen || _aboutOpen || _manageCatsOpen || _searchOpen) return;
+
+    LiveChannel? ch;
+    if (session.isWatchingExternal) {
+      // Search → play → Y used to no-op here; star the playing channel instead.
+      ch = session.nowPlaying;
+    } else if (_column == 1) {
+      final chans = session.channelsInCategory;
+      if (chans.isNotEmpty) {
+        ch = chans[_chanIndex.clamp(0, chans.length - 1)];
+      }
+    }
+
+    if (ch == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Move to a channel, then press Y to favorite'),
+          content: Text('Highlight a channel (or play one), then Y to favorite'),
           duration: Duration(seconds: 2),
         ),
       );
       return;
     }
-    final chans = session.channelsInCategory;
-    if (chans.isEmpty) return;
-    final ch = chans[_chanIndex.clamp(0, chans.length - 1)];
+
     final nowFav = await session.toggleFavorite(ch);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -750,7 +759,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         duration: const Duration(seconds: 2),
       ),
     );
-    // If we unstarred the last item while in Favorites, index may be empty.
     setState(() {});
   }
 
