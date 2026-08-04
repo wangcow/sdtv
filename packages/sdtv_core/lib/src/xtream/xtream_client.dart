@@ -24,7 +24,9 @@ class HttpXtreamClient implements XtreamClient {
     required this.credentials,
     http.Client? httpClient,
     this.timeout = const Duration(seconds: 25),
-    this.userAgent = 'sdtv/0.1 (Steam Deck; Flutter; libmpv)',
+    // Many XUI / CF panels fingerprint exotic UAs; use a common IPTV client string.
+    this.userAgent = 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 '
+        '(KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3',
   }) : _http = httpClient ?? http.Client();
 
   final XtreamCredentials credentials;
@@ -95,9 +97,25 @@ class HttpXtreamClient implements XtreamClient {
         'Network error reaching ${credentials.baseUrl}: $e',
       );
     }
+    final body = response.body.trim();
+
+    // Prefer parsing body even on 4xx — XUI may send HTML error pages.
     if (response.statusCode == 401 || response.statusCode == 403) {
+      final htmlHint = body.isNotEmpty ? _parseHtmlApiError(body) : null;
+      if (htmlHint != null) {
+        throw XtreamException(htmlHint, statusCode: response.statusCode);
+      }
+      if (response.statusCode == 403 && body.isEmpty) {
+        throw XtreamException(
+          'HTTP 403 forbidden (empty body). Often Cloudflare/bot filter or '
+          'IP block — not always a wrong password. Confirm this panel works '
+          'in another app on this same network, or try later / another DNS.',
+          statusCode: 403,
+        );
+      }
       throw XtreamException(
-        'Auth rejected (HTTP ${response.statusCode}). Check username/password.',
+        'Auth rejected (HTTP ${response.statusCode}). '
+        'Check username/password, or the panel may be blocking this client.',
         statusCode: response.statusCode,
       );
     }
@@ -107,7 +125,6 @@ class HttpXtreamClient implements XtreamClient {
         statusCode: response.statusCode,
       );
     }
-    final body = response.body.trim();
     if (body.isEmpty) {
       throw XtreamException('Empty response from player_api.php');
     }
