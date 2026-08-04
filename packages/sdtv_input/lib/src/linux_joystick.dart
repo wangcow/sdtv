@@ -245,27 +245,18 @@ class LinuxJoystickReader {
       return;
     }
     final heldMs = DateTime.now().difference(started).inMilliseconds;
-    // Long hold: multi-step jumps so huge Xtream lists stay usable.
-    final steps = heldMs >= 2200
-        ? 5
-        : heldMs >= 1400
-            ? 3
-            : heldMs >= 900
-                ? 2
-                : 1;
-    for (var i = 0; i < steps; i++) {
-      _emit(dir);
-    }
-    final period = _acceleratedPeriod(heldMs);
-    _repeatTimer = Timer(period, _onRepeatTick);
+    // One step per tick; period shortens while held (see [_acceleratedPeriod]).
+    // Multi-step bursts fight UI cooldowns and only one row would move.
+    _emit(dir);
+    _repeatTimer = Timer(_acceleratedPeriod(heldMs), _onRepeatTick);
   }
 
-  /// Faster repeat the longer the D-pad is held.
+  /// Faster repeat the longer the D-pad is held (~7 → ~25 rows/sec).
   Duration _acceleratedPeriod(int heldMs) {
     if (heldMs < 900) return repeatPeriod; // ~140ms
-    if (heldMs < 1400) return const Duration(milliseconds: 85);
-    if (heldMs < 2200) return const Duration(milliseconds: 55);
-    return const Duration(milliseconds: 40);
+    if (heldMs < 1500) return const Duration(milliseconds: 80);
+    if (heldMs < 2200) return const Duration(milliseconds: 50);
+    return const Duration(milliseconds: 32);
   }
 
   void _clearHeldIfAxis({required bool xAxis}) {
