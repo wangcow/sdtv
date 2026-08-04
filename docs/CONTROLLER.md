@@ -13,6 +13,7 @@ Couch navigation is the core product requirement. Every screen must work with a 
 | Back | B | Escape |
 | Menu | Start (☰) | Context menu / F1 |
 | Favorite channel | Y | F |
+| Hide category | X (guide) | M (guide) |
 | Page jump | LB / RB | PageUp / PageDown |
 
 ### Favorites
@@ -20,6 +21,12 @@ Couch navigation is the core product requirement. Every screen must work with a 
 - **Y** (or **F**, long-press on touch) toggles a star on the focused channel.
 - **★ Favorites** is pinned at the top of the category list.
 - Stars are stored locally, scoped per playlist/panel.
+
+### Hidden categories
+
+- **X** (guide) or **☰ → Hide category** removes the focused category from the list (not ★ Favorites).
+- **☰ → Manage categories** lists every provider category; **A** toggles hidden/shown.
+- Hidden ids are stored locally, scoped per Xtream account / M3U URL (same as favorites).
 
 ## Watching (external mpv — Phase B)
 

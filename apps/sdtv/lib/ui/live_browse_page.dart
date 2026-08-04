@@ -28,15 +28,20 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   /// In-page menu (no showDialog — avoids stuck modal barriers on Deck).
   bool _menuOpen = false;
   bool _aboutOpen = false;
+  bool _manageCatsOpen = false;
   int _menuIndex = 0;
+  int _manageIndex = 0;
 
   final _catScroll = ScrollController();
   final _chanScroll = ScrollController();
+  final _manageScroll = ScrollController();
 
   DateTime? _lastNavAt;
   static const _navCooldown = Duration(milliseconds: 200);
 
   static const _menuItems = <({String id, String label, IconData icon})>[
+    (id: 'hide_cat', label: 'Hide category', icon: Icons.visibility_off_outlined),
+    (id: 'manage_cats', label: 'Manage categories', icon: Icons.category_outlined),
     (id: 'about', label: 'About', icon: Icons.info_outline),
     (id: 'signout', label: 'Sign out', icon: Icons.logout),
     (id: 'exit', label: 'Exit sdtv', icon: Icons.power_settings_new),
@@ -79,6 +84,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     session.removeListener(_onSession);
     _catScroll.dispose();
     _chanScroll.dispose();
+    _manageScroll.dispose();
     super.dispose();
   }
 
@@ -117,21 +123,36 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   void _moveVertical(int delta) {
     // Watching + menu open: D-pad navigates the pause menu (not volume).
-    if (session.isWatchMenuActive && !_menuOpen && !_aboutOpen) {
+    if (session.isWatchMenuActive &&
+        !_menuOpen &&
+        !_aboutOpen &&
+        !_manageCatsOpen) {
       unawaited(session.watchMenuMove(delta));
       return;
     }
     // Watching, menu closed: ↑↓ = volume.
     // delta < 0 = up → louder; delta > 0 = down → quieter.
-    if (session.isWatchingExternal && !_menuOpen && !_aboutOpen) {
+    if (session.isWatchingExternal &&
+        !_menuOpen &&
+        !_aboutOpen &&
+        !_manageCatsOpen) {
       unawaited(session.watchVolumeDelta(delta < 0 ? 5 : -5));
       return;
     }
 
     if (!_acceptNav()) return;
 
-    // Menu / about overlays own the D-pad.
+    // Menu / about / manage overlays own the D-pad.
     if (_aboutOpen) return;
+    if (_manageCatsOpen) {
+      final n = session.categories.length;
+      if (n == 0) return;
+      setState(() {
+        _manageIndex = (_manageIndex + delta).clamp(0, n - 1);
+      });
+      _scrollTo(_manageScroll, _manageIndex);
+      return;
+    }
     if (_menuOpen) {
       setState(() {
         _menuIndex = (_menuIndex + delta).clamp(0, _menuItems.length - 1);
@@ -161,17 +182,23 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   void _moveHorizontal(int delta) {
     // Watching + menu: ←/→ adjust current row (subs / audio / mute).
-    if (session.isWatchMenuActive && !_menuOpen && !_aboutOpen) {
+    if (session.isWatchMenuActive &&
+        !_menuOpen &&
+        !_aboutOpen &&
+        !_manageCatsOpen) {
       unawaited(session.watchMenuAdjust(delta));
       return;
     }
     // Watching, menu closed: ←/→ = previous / next channel.
-    if (session.isWatchingExternal && !_menuOpen && !_aboutOpen) {
+    if (session.isWatchingExternal &&
+        !_menuOpen &&
+        !_aboutOpen &&
+        !_manageCatsOpen) {
       unawaited(session.watchChannelAdjacent(delta));
       return;
     }
 
-    if (_menuOpen || _aboutOpen) return;
+    if (_menuOpen || _aboutOpen || _manageCatsOpen) return;
     if (!_acceptNav()) return;
     if (delta > 0 && _column == 0) {
       setState(() {
@@ -216,7 +243,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
     // While mpv is up: A opens/activates the watch menu (not the guide menu).
     if (session.isWatchingExternal) {
-      if (_menuOpen || _aboutOpen) {
+      if (_menuOpen || _aboutOpen || _manageCatsOpen) {
         await session.watchQuit();
       } else {
         await session.watchActivate();
@@ -226,6 +253,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
     if (_aboutOpen) {
       setState(() => _aboutOpen = false);
+      return;
+    }
+
+    if (_manageCatsOpen) {
+      await _toggleManageRow();
       return;
     }
 
@@ -296,7 +328,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (mounted) setState(() => _column = 1);
   }
 
-  /// Hierarchical back: about → menu → categories ← channels.
+  /// Hierarchical back: about → manage → menu → categories ← channels.
   /// While watching: B closes watch menu first, else quits to guide.
   void _onBack() {
     if (session.isWatchingExternal) {
@@ -305,6 +337,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     if (_aboutOpen) {
       setState(() => _aboutOpen = false);
+      return;
+    }
+    if (_manageCatsOpen) {
+      setState(() => _manageCatsOpen = false);
       return;
     }
     if (_menuOpen) {
@@ -331,6 +367,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       setState(() => _aboutOpen = false);
       return;
     }
+    if (_manageCatsOpen) {
+      setState(() => _manageCatsOpen = false);
+      return;
+    }
     if (_menuOpen) {
       setState(() => _menuOpen = false);
       return;
@@ -344,6 +384,17 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   Future<void> _runMenuAction(String id) async {
     setState(() => _menuOpen = false);
     if (id == 'cancel') return;
+    if (id == 'hide_cat') {
+      await _hideFocusedCategory();
+      return;
+    }
+    if (id == 'manage_cats') {
+      setState(() {
+        _manageCatsOpen = true;
+        _manageIndex = 0;
+      });
+      return;
+    }
     if (id == 'about') {
       setState(() => _aboutOpen = true);
       return;
@@ -355,6 +406,57 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (id == 'exit') {
       await _exitApp();
     }
+  }
+
+  /// Hide the category under the guide cursor (not ★ Favorites).
+  Future<void> _hideFocusedCategory() async {
+    if (session.isWatchingExternal) return;
+    final cats = session.browseCategories;
+    if (cats.isEmpty) return;
+    // Prefer category column selection; if on channels, hide that category.
+    final idx = _catIndex.clamp(0, cats.length - 1);
+    final cat = cats[idx];
+    if (cat.categoryId == kFavoritesCategoryId) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('★ Favorites cannot be hidden'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    final name = cat.categoryName;
+    await session.hideCategory(cat.categoryId);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Hidden: $name · ☰ Manage categories to restore'),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+    setState(() {
+      _column = 0;
+      _chanIndex = 0;
+    });
+  }
+
+  Future<void> _toggleManageRow() async {
+    final all = session.categories;
+    if (all.isEmpty) return;
+    final i = _manageIndex.clamp(0, all.length - 1);
+    final cat = all[i];
+    final nowHidden = await session.toggleCategoryHidden(cat.categoryId);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          nowHidden ? 'Hidden: ${cat.categoryName}' : 'Shown: ${cat.categoryName}',
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+    setState(() {});
   }
 
   /// Y / F: star or unstar the focused channel (channel column only).
@@ -423,6 +525,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       onMute: () {
         if (session.isWatchingExternal) {
           unawaited(session.watchCycleMute());
+        } else if (_manageCatsOpen) {
+          unawaited(_toggleManageRow());
+        } else if (!_menuOpen && !_aboutOpen) {
+          // Guide: X hides the focused category (quick junk filter).
+          unawaited(_hideFocusedCategory());
         }
       },
       onPageUp: () => _onPage(-1),
@@ -533,10 +640,13 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             itemCount: cats.length + 1,
                             itemBuilder: (context, index) {
                               if (index == 0) {
+                                final hiddenN = session.hiddenCategoryCount;
                                 return Padding(
                                   padding: const EdgeInsets.only(bottom: 12),
                                   child: Text(
-                                    'CATEGORIES',
+                                    hiddenN > 0
+                                        ? 'CATEGORIES · $hiddenN hidden'
+                                        : 'CATEGORIES',
                                     style: theme.textTheme.labelSmall?.copyWith(
                                       color: theme.colorScheme.outline,
                                       letterSpacing: 1.1,
@@ -655,8 +765,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                     ),
                     child: Text(
                       _column == 1
-                          ? '↑↓ channels · A play · Y favorite · ← or B categories · ☰ menu'
-                          : '↑↓ categories · → or A channels · B menu · Y = star channel',
+                          ? '↑↓ channels · A play · Y favorite · X hide cat · ☰ menu'
+                          : '↑↓ categories · A open · X hide · ☰ Manage cats · Y star on channel',
                       style: theme.textTheme.bodySmall,
                     ),
                   ),
@@ -712,6 +822,97 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             const SizedBox(height: 12),
                             Text(
                               '↑↓ move · A select · B close',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.outline,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+
+              // —— Manage categories (show / hide) ——
+              if (_manageCatsOpen) ...[
+                Positioned.fill(
+                  child: GestureDetector(
+                    onTap: () => setState(() => _manageCatsOpen = false),
+                    child: ColoredBox(
+                      color: Colors.black.withValues(alpha: 0.55),
+                    ),
+                  ),
+                ),
+                Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(
+                      maxWidth: 480,
+                      maxHeight: 520,
+                    ),
+                    child: Material(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(16),
+                      elevation: 12,
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text(
+                              'Manage categories',
+                              style: theme.textTheme.headlineSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'A toggles hide/show · Hidden stay off the guide.\n'
+                              'Hidden: ${session.hiddenCategoryCount} · '
+                              'Visible: ${session.visibleCategories.length}',
+                              style: theme.textTheme.bodyMedium,
+                            ),
+                            const SizedBox(height: 16),
+                            Expanded(
+                              child: session.categories.isEmpty
+                                  ? Text(
+                                      'No categories from provider.',
+                                      style: theme.textTheme.bodyLarge,
+                                    )
+                                  : ListView.builder(
+                                      controller: _manageScroll,
+                                      itemCount: session.categories.length,
+                                      itemBuilder: (context, i) {
+                                        final cat = session.categories[i];
+                                        final hidden =
+                                            session.isCategoryHidden(
+                                          cat.categoryId,
+                                        );
+                                        final selected = _manageIndex == i;
+                                        return Padding(
+                                          padding: const EdgeInsets.only(
+                                            bottom: 8,
+                                          ),
+                                          child: _BrowseTile(
+                                            label: hidden
+                                                ? '${cat.categoryName}  · hidden'
+                                                : cat.categoryName,
+                                            icon: hidden
+                                                ? Icons.visibility_off_outlined
+                                                : Icons.visibility_outlined,
+                                            selected: selected,
+                                            onTap: () async {
+                                              setState(() => _manageIndex = i);
+                                              await _toggleManageRow();
+                                            },
+                                          ),
+                                        );
+                                      },
+                                    ),
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              '↑↓ move · A toggle · B close',
                               style: theme.textTheme.bodySmall?.copyWith(
                                 color: theme.colorScheme.outline,
                               ),
