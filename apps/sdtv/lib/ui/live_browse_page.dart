@@ -49,6 +49,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   // Allow accelerated hold-scroll from the joystick reader (~40ms + bursts).
   static const _navCooldown = Duration(milliseconds: 28);
 
+  /// Fixed row height so scroll offset matches the selected tile (highlight stays on-screen).
+  static const _rowExtent = 78.0;
+  static const _listHeaderExtent = 44.0;
+
   static const _menuItems = <({String id, String label, IconData icon})>[
     (id: 'search', label: 'Search', icon: Icons.search),
     (id: 'hide_cat', label: 'Hide category', icon: Icons.visibility_off_outlined),
@@ -139,13 +143,41 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     setState(() {});
   }
 
-  void _scrollTo(ScrollController c, int index) {
+  /// Scroll so [index] is near the top of [c].
+  ///
+  /// [index] is the **data** index (0 = first channel/result), not the ListView
+  /// child index. Pass [headerExtent] when the list has a title row above items.
+  void _scrollTo(
+    ScrollController c,
+    int index, {
+    double itemExtent = _rowExtent,
+    double headerExtent = 0,
+  }) {
     if (!c.hasClients) return;
-    final offset = (index * 72.0).clamp(0.0, c.position.maxScrollExtent);
+    final offset =
+        (headerExtent + index * itemExtent).clamp(0.0, c.position.maxScrollExtent);
     c.animateTo(
       offset,
-      duration: const Duration(milliseconds: 120),
+      duration: const Duration(milliseconds: 100),
       curve: Curves.easeOut,
+    );
+  }
+
+  void _scrollToChannelIndex(int index) {
+    _scrollTo(
+      _chanScroll,
+      index,
+      itemExtent: _rowExtent,
+      headerExtent: _listHeaderExtent,
+    );
+  }
+
+  void _scrollToSearchIndex(int index) {
+    _scrollTo(
+      _searchScroll,
+      index,
+      itemExtent: _rowExtent,
+      headerExtent: 0,
     );
   }
 
@@ -180,7 +212,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      _scrollTo(_chanScroll, idx);
+      _scrollToChannelIndex(idx);
     });
   }
 
@@ -212,12 +244,18 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (_searchOpen) {
       if (_searchHits.isEmpty) return;
       // Leave the text field so arrows move results, not caret.
+      final wasTyping = _searchFocus.hasFocus;
       _searchFocus.unfocus();
       setState(() {
-        _searchIndex =
-            (_searchIndex + delta).clamp(0, _searchHits.length - 1);
+        // First D-pad from the field keeps index 0 so the highlight is obvious.
+        if (wasTyping && _searchIndex == 0 && delta > 0) {
+          _searchIndex = 0;
+        } else {
+          _searchIndex =
+              (_searchIndex + delta).clamp(0, _searchHits.length - 1);
+        }
       });
-      _scrollTo(_searchScroll, _searchIndex);
+      _scrollToSearchIndex(_searchIndex);
       return;
     }
     if (_manageCatsOpen) {
@@ -226,7 +264,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       setState(() {
         _manageIndex = (_manageIndex + delta).clamp(0, n - 1);
       });
-      _scrollTo(_manageScroll, _manageIndex);
+      _scrollTo(_manageScroll, _manageIndex, itemExtent: _rowExtent);
       return;
     }
     if (_menuOpen) {
@@ -245,14 +283,19 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         _catIndex = (_catIndex + delta).clamp(0, cats.length - 1);
       });
       _selectCategoryKeepingChanPos(cats[_catIndex].categoryId);
-      _scrollTo(_catScroll, _catIndex);
+      _scrollTo(
+        _catScroll,
+        _catIndex,
+        itemExtent: _rowExtent,
+        headerExtent: _listHeaderExtent,
+      );
     } else {
       if (chans.isEmpty) return;
       setState(() {
         _chanIndex = (_chanIndex + delta).clamp(0, chans.length - 1);
       });
       _rememberChanIndex();
-      _scrollTo(_chanScroll, _chanIndex);
+      _scrollToChannelIndex(_chanIndex);
     }
   }
 
@@ -283,7 +326,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     } else if (delta < 0 && _column == 1) {
       _rememberChanIndex();
       setState(() => _column = 0);
-      _scrollTo(_catScroll, _catIndex);
+      _scrollTo(
+        _catScroll,
+        _catIndex,
+        itemExtent: _rowExtent,
+        headerExtent: _listHeaderExtent,
+      );
     }
   }
 
@@ -382,7 +430,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
     if (mounted) {
       setState(() => _column = 1);
-      _scrollTo(_chanScroll, _chanIndex);
+      _scrollToChannelIndex(_chanIndex);
     }
   }
 
@@ -434,7 +482,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       if (!_acceptNav()) return;
       _rememberChanIndex();
       setState(() => _column = 0);
-      _scrollTo(_catScroll, _catIndex);
+      _scrollTo(
+        _catScroll,
+        _catIndex,
+        itemExtent: _rowExtent,
+        headerExtent: _listHeaderExtent,
+      );
       return;
     }
     // Category list: open menu.
@@ -558,9 +611,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _chanIndex = chIdx;
       _chanIndexByCategory[catId] = chIdx;
       _closeSearch();
-      setState(() => _column = 1);
+      setState(() {
+        _column = 1;
+        _chanIndex = chIdx;
+      });
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _scrollTo(_chanScroll, chIdx);
+        if (mounted) _scrollToChannelIndex(chIdx);
       });
       // Play immediately — search is for getting to content fast.
       final err = await session.watchChannel(hit.channel!);
@@ -837,43 +893,53 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             itemBuilder: (context, index) {
                               if (index == 0) {
                                 final hiddenN = session.hiddenCategoryCount;
-                                return Padding(
-                                  padding: const EdgeInsets.only(bottom: 12),
-                                  child: Text(
-                                    hiddenN > 0
-                                        ? 'CATEGORIES · $hiddenN hidden'
-                                        : 'CATEGORIES',
-                                    style: theme.textTheme.labelSmall?.copyWith(
-                                      color: theme.colorScheme.outline,
-                                      letterSpacing: 1.1,
+                                return SizedBox(
+                                  height: _listHeaderExtent,
+                                  child: Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Text(
+                                      hiddenN > 0
+                                          ? 'CATEGORIES · $hiddenN hidden'
+                                          : 'CATEGORIES',
+                                      style:
+                                          theme.textTheme.labelSmall?.copyWith(
+                                        color: theme.colorScheme.outline,
+                                        letterSpacing: 1.1,
+                                      ),
                                     ),
                                   ),
                                 );
                               }
                               final i = index - 1;
-                              final selected = _column == 0 && _catIndex == i;
+                              // Show cursor even when focus is on the other column.
+                              final selected = _catIndex == i;
+                              final focused = _column == 0 && selected;
                               final isFavCat =
                                   cats[i].categoryId == kFavoritesCategoryId;
-                              return Padding(
-                                padding: const EdgeInsets.only(bottom: 10),
-                                child: _BrowseTile(
-                                  label: isFavCat
-                                      ? '${cats[i].categoryName}'
-                                          '${session.favoriteCount > 0 ? ' (${session.favoriteCount})' : ''}'
-                                      : cats[i].categoryName,
-                                  icon: isFavCat
-                                      ? Icons.star_rounded
-                                      : Icons.folder_outlined,
-                                  selected: selected,
-                                  onTap: () {
-                                    setState(() {
-                                      _catIndex = i;
-                                      _column = 0;
-                                    });
-                                    _selectCategoryKeepingChanPos(
-                                      cats[i].categoryId,
-                                    );
-                                  },
+                              return SizedBox(
+                                height: _rowExtent,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(bottom: 6),
+                                  child: _BrowseTile(
+                                    label: isFavCat
+                                        ? '${cats[i].categoryName}'
+                                            '${session.favoriteCount > 0 ? ' (${session.favoriteCount})' : ''}'
+                                        : cats[i].categoryName,
+                                    icon: isFavCat
+                                        ? Icons.star_rounded
+                                        : Icons.folder_outlined,
+                                    selected: focused,
+                                    dimSelected: selected && !focused,
+                                    onTap: () {
+                                      setState(() {
+                                        _catIndex = i;
+                                        _column = 0;
+                                      });
+                                      _selectCategoryKeepingChanPos(
+                                        cats[i].categoryId,
+                                      );
+                                    },
+                                  ),
                                 ),
                               );
                             },
@@ -892,13 +958,17 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                 channels.isEmpty ? 2 : channels.length + 1,
                             itemBuilder: (context, index) {
                               if (index == 0) {
-                                return Padding(
-                                  padding: const EdgeInsets.only(bottom: 12),
-                                  child: Text(
-                                    'CHANNELS · $catTitle',
-                                    style: theme.textTheme.labelSmall?.copyWith(
-                                      color: theme.colorScheme.outline,
-                                      letterSpacing: 1.1,
+                                return SizedBox(
+                                  height: _listHeaderExtent,
+                                  child: Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Text(
+                                      'CHANNELS · $catTitle',
+                                      style:
+                                          theme.textTheme.labelSmall?.copyWith(
+                                        color: theme.colorScheme.outline,
+                                        letterSpacing: 1.1,
+                                      ),
                                     ),
                                   ),
                                 );
@@ -915,34 +985,39 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                               }
                               final i = index - 1;
                               final ch = channels[i];
-                              final selected =
-                                  _column == 1 && _chanIndex == i;
+                              // Always mark current row so highlight is visible after search jump.
+                              final selected = _chanIndex == i;
+                              final focused = _column == 1 && selected;
                               final fav = session.isFavorite(ch);
-                              return Padding(
-                                padding: const EdgeInsets.only(bottom: 10),
-                                child: _BrowseTile(
-                                  label:
-                                      '${ch.num > 0 ? '${ch.num}. ' : ''}${ch.name}',
-                                  icon: fav
-                                      ? Icons.star_rounded
-                                      : Icons.live_tv_outlined,
-                                  selected: selected,
-                                  onTap: () async {
-                                    setState(() {
-                                      _column = 1;
-                                      _chanIndex = i;
-                                    });
-                                    _rememberChanIndex();
-                                    await _activate();
-                                  },
-                                  onLongPress: () async {
-                                    setState(() {
-                                      _column = 1;
-                                      _chanIndex = i;
-                                    });
-                                    _rememberChanIndex();
-                                    await _toggleFavorite();
-                                  },
+                              return SizedBox(
+                                height: _rowExtent,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(bottom: 6),
+                                  child: _BrowseTile(
+                                    label:
+                                        '${ch.num > 0 ? '${ch.num}. ' : ''}${ch.name}',
+                                    icon: fav
+                                        ? Icons.star_rounded
+                                        : Icons.live_tv_outlined,
+                                    selected: focused,
+                                    dimSelected: selected && !focused,
+                                    onTap: () async {
+                                      setState(() {
+                                        _column = 1;
+                                        _chanIndex = i;
+                                      });
+                                      _rememberChanIndex();
+                                      await _activate();
+                                    },
+                                    onLongPress: () async {
+                                      setState(() {
+                                        _column = 1;
+                                        _chanIndex = i;
+                                      });
+                                      _rememberChanIndex();
+                                      await _toggleFavorite();
+                                    },
+                                  ),
                                 ),
                               );
                             },
@@ -1105,6 +1180,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                         )
                                       : ListView.builder(
                                           controller: _searchScroll,
+                                          itemExtent: _rowExtent,
                                           itemCount: _searchHits.length,
                                           itemBuilder: (context, i) {
                                             final hit = _searchHits[i];
@@ -1114,14 +1190,15 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                                 : hit.isEpg
                                                     ? Icons.event_outlined
                                                     : Icons.live_tv_outlined;
+                                            final label = hit.subtitle.isEmpty
+                                                ? hit.title
+                                                : '${hit.title}  ·  ${hit.subtitle}';
                                             return Padding(
                                               padding: const EdgeInsets.only(
-                                                bottom: 8,
+                                                bottom: 6,
                                               ),
                                               child: _BrowseTile(
-                                                label: hit.subtitle.isEmpty
-                                                    ? hit.title
-                                                    : '${hit.title}\n${hit.subtitle}',
+                                                label: label,
                                                 icon: icon,
                                                 selected: selected,
                                                 onTap: () async {
@@ -1320,6 +1397,7 @@ class _BrowseTile extends StatelessWidget {
     required this.onTap,
     this.onLongPress,
     this.icon,
+    this.dimSelected = false,
   });
 
   final String label;
@@ -1328,26 +1406,33 @@ class _BrowseTile extends StatelessWidget {
   final VoidCallback? onLongPress;
   final IconData? icon;
 
+  /// Soft highlight when this row is the cursor but the other column is focused.
+  final bool dimSelected;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final active = selected || dimSelected;
     final bg = selected
         ? theme.colorScheme.primary
-        : theme.colorScheme.surfaceContainerHighest;
-    final fg =
-        selected ? theme.colorScheme.onPrimary : theme.colorScheme.onSurface;
+        : dimSelected
+            ? theme.colorScheme.primary.withValues(alpha: 0.28)
+            : theme.colorScheme.surfaceContainerHighest;
+    final fg = selected
+        ? theme.colorScheme.onPrimary
+        : theme.colorScheme.onSurface;
 
     return GestureDetector(
       onTap: onTap,
       onLongPress: onLongPress,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 100),
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
           color: bg,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: selected
+            color: active
                 ? theme.colorScheme.primaryContainer
                 : Colors.transparent,
             width: 3,
@@ -1364,15 +1449,17 @@ class _BrowseTile extends StatelessWidget {
         child: Row(
           children: [
             if (icon != null) ...[
-              Icon(icon, color: fg, size: 28),
-              const SizedBox(width: 12),
+              Icon(icon, color: fg, size: 26),
+              const SizedBox(width: 10),
             ],
             Expanded(
               child: Text(
                 label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: theme.textTheme.titleMedium?.copyWith(
                   color: fg,
-                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  fontWeight: active ? FontWeight.w700 : FontWeight.w500,
                 ),
               ),
             ),
