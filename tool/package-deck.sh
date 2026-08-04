@@ -310,26 +310,41 @@ cat > "${BUNDLE}/run-sdtv.sh" <<'EOF'
 #!/bin/sh
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Prefer *system* libmpv when present (Steam Deck / SteamOS VAAPI).
-# Homebrew libmpv is often built *without* VAAPI → software decode → stutter / ~7fps.
-# DT_RUNPATH is $ORIGIN/lib; with RUNPATH, LD_LIBRARY_PATH is searched first.
+# --- Library search ---
+# Bundled brew libmpv *does* link libva, but we intentionally do NOT ship brew
+# Mesa. Without LIBVA_DRIVERS_PATH, VAAPI has no radeonsi driver → cpu/software.
+# Prefer system libmpv when present; always point VAAPI at system DRI drivers.
+
 SYS_LIB=""
-if [ -e /usr/lib64/libmpv.so.2 ] || [ -e /usr/lib64/libmpv.so ]; then
-  SYS_LIB="/usr/lib64"
-elif [ -e /usr/lib/libmpv.so.2 ] || [ -e /usr/lib/libmpv.so ]; then
-  SYS_LIB="/usr/lib"
-fi
+for c in /usr/lib64/libmpv.so.2 /usr/lib64/libmpv.so /usr/lib/libmpv.so.2 /usr/lib/libmpv.so; do
+  if [ -e "$c" ]; then
+    SYS_LIB=$(dirname "$c")
+    break
+  fi
+done
 
 if [ -n "$SYS_LIB" ] && [ "${SDTV_FORCE_BUNDLED_MPV:-0}" != "1" ]; then
-  # System mpv + mesa first; bundled codecs/ffmpeg still available after.
   export LD_LIBRARY_PATH="${SYS_LIB}:/usr/lib64:/usr/lib:${DIR}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   export SDTV_MPV_SOURCE=system
 else
-  export LD_LIBRARY_PATH="${DIR}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  # Still put system lib dirs first for libva/drm/mesa interop.
+  export LD_LIBRARY_PATH="/usr/lib64:/usr/lib:${DIR}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   export SDTV_MPV_SOURCE=bundled
 fi
 
-# Point fontconfig/xkb at Deck OS (never Homebrew data prefixes).
+# Critical: system VAAPI drivers (Steam Deck AMD = radeonsi).
+if [ -d /usr/lib64/dri ]; then
+  export LIBVA_DRIVERS_PATH="/usr/lib64/dri${LIBVA_DRIVERS_PATH:+:$LIBVA_DRIVERS_PATH}"
+elif [ -d /usr/lib/dri ]; then
+  export LIBVA_DRIVERS_PATH="/usr/lib/dri${LIBVA_DRIVERS_PATH:+:$LIBVA_DRIVERS_PATH}"
+fi
+if [ -z "${LIBVA_DRIVER_NAME:-}" ]; then
+  if [ -e /usr/lib64/dri/radeonsi_drv_video.so ] || [ -e /usr/lib/dri/radeonsi_drv_video.so ]; then
+    export LIBVA_DRIVER_NAME=radeonsi
+  fi
+fi
+
+# Fontconfig / XKB = Deck OS
 if [ -d /usr/share/X11/xkb ]; then
   export XKB_CONFIG_ROOT=/usr/share/X11/xkb
 fi
@@ -340,15 +355,25 @@ if [ -d /usr/share/glib-2.0/schemas ]; then
   export GSETTINGS_SCHEMA_DIR=/usr/share/glib-2.0/schemas
 fi
 
-# Optional overrides (create yourself; not in the tarball), e.g.:
-#   echo 'SDTV_FORCE_MOCK=1' > sdtv.env
-#   echo 'SDTV_FORCE_BUNDLED_MPV=1' >> sdtv.env   # debug only
+# Optional overrides (you create this file):
+#   SDTV_FORCE_MOCK=1
+#   SDTV_FORCE_BUNDLED_MPV=1
 if [ -f "${DIR}/sdtv.env" ]; then
   # shellcheck disable=SC1091
   set -a
   . "${DIR}/sdtv.env"
   set +a
 fi
+
+# Tiny debug breadcrumb (safe to ignore)
+{
+  echo "SDTV_MPV_SOURCE=${SDTV_MPV_SOURCE:-}"
+  echo "LIBVA_DRIVER_NAME=${LIBVA_DRIVER_NAME:-}"
+  echo "LIBVA_DRIVERS_PATH=${LIBVA_DRIVERS_PATH:-}"
+  echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}"
+  ls /usr/lib64/libmpv.so* /usr/lib/libmpv.so* 2>/dev/null || echo "no system libmpv"
+  ls /usr/lib64/dri/radeonsi_drv_video.so /usr/lib/dri/radeonsi_drv_video.so 2>/dev/null || echo "no radeonsi vaapi"
+} > "${DIR}/.sdtv-runtime.txt" 2>/dev/null || true
 
 exec "${DIR}/sdtv" "$@"
 EOF

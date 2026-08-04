@@ -45,17 +45,24 @@ flutter run -d linux
 
 ### Smooth video (VAAPI)
 
-If the player HUD shows `decode: cpu/software` and video stutters, the app is using **software decode**.
+Stutter + `decode: cpu/software` means **software decode**.
 
-Homebrew’s `libmpv` is often built **without VAAPI**. `run-sdtv.sh` prefers **system** `libmpv` on SteamOS (`/usr/lib64`) so Deck hardware decode can work.
+We ship brew `libmpv` + `libva`, but **not** brew Mesa. VAAPI needs the Deck’s driver:
+
+`/usr/lib64/dri/radeonsi_drv_video.so`
+
+`run-sdtv.sh` sets:
+
+- `LIBVA_DRIVERS_PATH=/usr/lib64/dri`
+- `LIBVA_DRIVER_NAME=radeonsi` (Steam Deck APU)
+- prefers system `libmpv` when present
 
 | HUD | Meaning |
 |-----|---------|
-| `decode: vaapi · … · mpv=system` | Good — hardware path |
-| `decode: cpu/software · mpv=bundled` | Still on brew mpv — check system libmpv exists |
-| `decode: cpu/software · mpv=system` | System mpv but no VAAPI for this codec |
+| `decode: vaapi · …` | Good — hardware path |
+| `decode: cpu/software · mpv=bundled` | VAAPI driver still not engaged — check `~/sdtv/.sdtv-runtime.txt` |
 
-Debug force bundled brew mpv: `echo SDTV_FORCE_BUNDLED_MPV=1 >> ~/sdtv/sdtv.env`
+After a failed/slow run, open `~/sdtv/.sdtv-runtime.txt` (written at launch) for paths/env.
 
 ### Live Xtream on Deck
 
