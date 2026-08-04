@@ -368,6 +368,7 @@ fi
 # Optional overrides (you create this file):
 #   SDTV_FORCE_MOCK=1
 #   SDTV_FORCE_BUNDLED_MPV=1
+#   SDTV_MPV_PATH=/usr/bin/mpv
 if [ -f "${DIR}/sdtv.env" ]; then
   # shellcheck disable=SC1091
   set -a
