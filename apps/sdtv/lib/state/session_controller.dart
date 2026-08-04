@@ -171,16 +171,18 @@ class SessionController extends ChangeNotifier {
     nowPlaying = ch;
     notifyListeners();
 
-    // Prefer playlist index (session m3u); fall back to loadfile.
-    final ok = await externalMpv.playlistPlayIndex(i);
-    if (!ok) {
-      await externalMpv.loadFile(uri);
-    }
+    // Live IPTV: always loadfile. playlist-pos often updates OSD index only and
+    // does not re-open the stream (especially HLS/ts).
     final label = ch.num > 0 ? '${ch.num}. ${ch.name}' : ch.name;
-    await externalMpv.showText(label, durationMs: 1800);
+    await externalMpv.showText('→ $label', durationMs: 2200);
+    final ok = await externalMpv.loadFile(uri);
+    if (!ok) {
+      debugPrint('sdtv: loadfile failed, trying playlist-play-index $i');
+      await externalMpv.playlistPlayIndex(i);
+    }
   }
 
-  /// Volume ± (D-pad / arrows). Steps of 5 on mpv's 0–100 scale.
+  /// Volume ± (D-pad / arrows). Steps of 5 on mpv's 0–100 scale + OSD.
   Future<void> watchVolumeDelta(int delta) async {
     if (!isWatchingExternal) return;
     final now = DateTime.now();
