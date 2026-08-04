@@ -294,14 +294,24 @@ for so in "${LIBDIR}"/*.so "${LIBDIR}"/*.so.*; do
   ensure_soname_links "${so}"
 done
 
-echo "Setting RPATH=\$ORIGIN on bundled media libs and binary…"
+# Drop brew libva* so libmpv cannot resolve VA-API to a driver-less Cellar copy.
+# System libva + /usr/lib64/dri/radeonsi is what actually enables hw decode on Deck.
+echo "Removing bundled libva (force system VA-API stack)…"
+(
+  cd "${LIBDIR}"
+  rm -f libva.so libva.so.* libva-*.so libva-*.so.* 2>/dev/null || true
+)
+
+# RUNPATH: system first (libva/drm/mesa), then $ORIGIN for bundled codecs/mpv.
+# Critical: libmpv's own RUNPATH decides where *its* libva comes from.
+SYS_RPATH='/usr/lib64:/usr/lib'
+echo "Setting RUNPATH=${SYS_RPATH}:\$ORIGIN on media libs / binary…"
 for so in "${LIBDIR}"/*.so "${LIBDIR}"/*.so.*; do
   [[ -f "${so}" && ! -L "${so}" ]] || continue
-  # Flutter plugin / app libs can keep default; still set $ORIGIN for consistency
-  patchelf --set-rpath '$ORIGIN' "${so}" 2>/dev/null || true
+  patchelf --set-rpath "${SYS_RPATH}:\$ORIGIN" "${so}" 2>/dev/null || true
 done
 if [[ -f "${BUNDLE}/sdtv" ]]; then
-  patchelf --set-rpath '$ORIGIN/lib' "${BUNDLE}/sdtv" 2>/dev/null || true
+  patchelf --set-rpath "${SYS_RPATH}:\$ORIGIN/lib" "${BUNDLE}/sdtv" 2>/dev/null || true
 fi
 
 # Wrapper: media libs first, but force *system* XKB/fontconfig data paths.
@@ -365,14 +375,23 @@ if [ -f "${DIR}/sdtv.env" ]; then
   set +a
 fi
 
-# Tiny debug breadcrumb (safe to ignore)
+# Tiny debug breadcrumb (safe to ignore / share when debugging decode)
 {
   echo "SDTV_MPV_SOURCE=${SDTV_MPV_SOURCE:-}"
   echo "LIBVA_DRIVER_NAME=${LIBVA_DRIVER_NAME:-}"
   echo "LIBVA_DRIVERS_PATH=${LIBVA_DRIVERS_PATH:-}"
   echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}"
-  ls /usr/lib64/libmpv.so* /usr/lib/libmpv.so* 2>/dev/null || echo "no system libmpv"
-  ls /usr/lib64/dri/radeonsi_drv_video.so /usr/lib/dri/radeonsi_drv_video.so 2>/dev/null || echo "no radeonsi vaapi"
+  echo "--- libmpv ---"
+  ls -la /usr/lib64/libmpv.so* /usr/lib/libmpv.so* "${DIR}/lib"/libmpv.so* 2>/dev/null || true
+  echo "--- libva (should prefer system) ---"
+  ls -la /usr/lib64/libva.so* /usr/lib/libva.so* 2>/dev/null || true
+  ls -la "${DIR}/lib"/libva.so* 2>/dev/null || echo "bundled libva removed (good)"
+  echo "--- radeonsi ---"
+  ls -la /usr/lib64/dri/radeonsi_drv_video.so /usr/lib/dri/radeonsi_drv_video.so 2>/dev/null || echo "no radeonsi vaapi"
+  if command -v vainfo >/dev/null 2>&1; then
+    echo "--- vainfo ---"
+    vainfo 2>&1 | head -40
+  fi
 } > "${DIR}/.sdtv-runtime.txt" 2>/dev/null || true
 
 exec "${DIR}/sdtv" "$@"

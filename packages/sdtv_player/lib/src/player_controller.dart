@@ -183,12 +183,13 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
       if (native.setProperty is! Function) return;
 
       const props = <String, String>{
-        // Comma = priority list (mpv). Needs libmpv built with VAAPI.
-        'hwdec': 'vaapi,vaapi-copy,auto-safe,auto',
+        // Prefer VAAPI (system radeonsi via LIBVA_*). auto alone often stays on CPU
+        // when drivers fail to load.
+        'hwdec': 'vaapi',
         'vo': 'libmpv',
         'gpu-context': 'auto',
         'cache': 'yes',
-        'demuxer-max-bytes': '104857600', // 100 MiB
+        'demuxer-max-bytes': '104857600',
         'demuxer-max-back-bytes': '52428800',
         'demuxer-readahead-secs': '20',
         'cache-secs': '60',
@@ -204,6 +205,10 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
           debugPrint('sdtv_player setProperty ${e.key}: $err');
         }
       }
+      // If pure vaapi fails at runtime, allow fallback.
+      try {
+        await native.setProperty('hwdec', 'vaapi,vaapi-copy,auto') as Future?;
+      } catch (_) {}
       debugPrint('sdtv_player: applied Linux demuxer/hwdec props');
     } catch (e) {
       debugPrint('sdtv_player tune: $e');
