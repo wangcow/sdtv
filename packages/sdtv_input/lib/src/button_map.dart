@@ -15,11 +15,8 @@ class SdtvButtonMap {
   static const channelZap = 'D-pad up/down in player (planned)';
 
   static const summary = '''
-Move:     D-pad or left stick
-Confirm:  A / Enter
-Back:     B / Escape
-Favorite: Y / F
-Menu:     Start
-Page:     LB / RB
+Guide:  D-pad move · A open · B back · Y favorite · Start menu
+Watch:  A pause · B quit · LB/RB channel · ↑↓ volume · X mute
+Keys:   Esc quit · Space pause · PgUp/Dn ch · arrows vol · M mute
 ''';
 }

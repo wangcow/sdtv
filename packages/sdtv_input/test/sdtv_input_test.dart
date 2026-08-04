@@ -47,7 +47,8 @@ void main() {
     expect(second.focusNode?.hasFocus, isTrue);
   });
 
-  test('button map summary is non-empty', () {
-    expect(SdtvButtonMap.summary, contains('Confirm'));
+  test('button map summary covers guide and watch', () {
+    expect(SdtvButtonMap.summary, contains('pause'));
+    expect(SdtvButtonMap.summary, contains('volume'));
   });
 }

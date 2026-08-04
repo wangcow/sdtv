@@ -116,6 +116,13 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   void _moveVertical(int delta) {
+    // Phase B: while watching, ↑↓ = volume (pad still owned by Flutter on Deck).
+    // delta < 0 = up → louder; delta > 0 = down → quieter.
+    if (session.isWatchingExternal && !_menuOpen && !_aboutOpen) {
+      unawaited(session.watchVolumeDelta(delta < 0 ? 5 : -5));
+      return;
+    }
+
     if (!_acceptNav()) return;
 
     // Menu / about overlays own the D-pad.
@@ -148,6 +155,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   void _moveHorizontal(int delta) {
+    // Phase B: while watching, ←/→ = previous / next channel.
+    if (session.isWatchingExternal && !_menuOpen && !_aboutOpen) {
+      unawaited(session.watchChannelAdjacent(delta));
+      return;
+    }
+
     if (_menuOpen || _aboutOpen) return;
     if (!_acceptNav()) return;
     if (delta > 0 && _column == 0) {
@@ -159,6 +172,20 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     } else if (delta < 0 && _column == 1) {
       setState(() => _column = 0);
       _scrollTo(_catScroll, _catIndex);
+    }
+  }
+
+  void _onPage(int delta) {
+    if (session.isWatchingExternal) {
+      unawaited(session.watchChannelAdjacent(delta));
+      return;
+    }
+    // Guide: shoulders move category or channel list like page jumps.
+    if (_menuOpen || _aboutOpen) return;
+    if (_column == 0) {
+      _moveVertical(delta);
+    } else {
+      _moveVertical(delta * 5);
     }
   }
 
@@ -380,6 +407,13 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       onFavorite: () {
         unawaited(_toggleFavorite());
       },
+      onMute: () {
+        if (session.isWatchingExternal) {
+          unawaited(session.watchCycleMute());
+        }
+      },
+      onPageUp: () => _onPage(-1),
+      onPageDown: () => _onPage(1),
       onConfirm: () {
         unawaited(_activate());
       },

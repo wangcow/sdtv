@@ -49,10 +49,11 @@ Selecting a channel **starts fullscreen `mpv`**, then returns to the channel lis
 
 - Install **mpv** on the Deck (Desktop Mode → **Discover** → search **mpv** → install Flathub app `io.mpv.Mpv`).  
   Discover installs a **Flatpak**, not `/usr/bin/mpv` — that is normal; sdtv looks for Flatpak too.
-- While watching (OSD: **A pause · B back**):
-  - **A** — pause / unpause (Flutter → mpv IPC)
-  - **B** — quit mpv and return to the channel list
-  - Keyboard: Esc / q quit, Space pause
+- While watching (OSD hint on open):
+  - **A** — pause · **B** — quit to guide
+  - **LB / RB** or **← / →** — previous / next channel (same list / favorites)
+  - **↑ / ↓** — volume · **X** / **M** — mute
+  - Keyboard (desktop / when mpv has focus): Esc quit, Space pause, PgUp/PgDn channel, arrows volume
 - If mpv is missing, sdtv shows an error snack with optional **Embedded** fallback (old Flutter texture path).
 - Override: create `~/sdtv/sdtv.env` with one of:
   ```bash

@@ -2,27 +2,38 @@
 
 **Product of the Wangcow Corporation**
 
-Couch navigation is the core product requirement. Every screen must work with a gamepad only.
+Couch navigation is the core product requirement. Every screen must work with a **gamepad** and a **keyboard** (desktop / future Flatpak users).
 
-## Default mapping (Steam Deck / Xbox layout)
+## Guide (browse)
 
-| Action | Deck / Xbox | DualSense-style | Keyboard (dev) |
-|--------|-------------|-----------------|----------------|
-| Move focus | D-pad, left stick | D-pad, left stick | Arrow keys |
-| Confirm | A (bottom) | Cross | Enter / Space |
-| Back | B (right) | Circle | Escape |
-| Menu | Start (☰) | Options | Context menu |
-| Page up/down | LB / RB | L1 / R1 | PageUp / PageDown |
-| Pause (external mpv) | A | Cross | Space |
-| Quit video (external mpv) | B | Circle | Esc |
-| Favorite channel | Y | Triangle | F |
-| Channel ± (player, later) | D-pad U/D or LB/RB | same | ↑ / ↓ |
+| Action | Deck / Xbox | Keyboard |
+|--------|-------------|----------|
+| Move focus | D-pad, left stick | Arrow keys |
+| Confirm / open | A | Enter / Space |
+| Back | B | Escape |
+| Menu | Start (☰) | Context menu / F1 |
+| Favorite channel | Y | F |
+| Page jump | LB / RB | PageUp / PageDown |
 
 ### Favorites
 
-- **Y** (or **F** on keyboard, long-press on touch) toggles a star on the focused channel.
-- **★ Favorites** is pinned at the top of the category list (survives reconnect for the same M3U URL / Xtream account).
-- Stars are stored locally (SharedPreferences), scoped per playlist/panel so Demo and M3U do not mix.
+- **Y** (or **F**, long-press on touch) toggles a star on the focused channel.
+- **★ Favorites** is pinned at the top of the category list.
+- Stars are stored locally, scoped per playlist/panel.
+
+## Watching (external mpv — Phase B)
+
+Flutter keeps reading the pad (Deck); mpv also has keyboard maps when it has focus (desktop).
+
+| Action | Deck / Xbox | Keyboard |
+|--------|-------------|----------|
+| Pause | A | Space / P |
+| Quit to guide | B | Esc / Q |
+| Channel − / + | LB / RB or D-pad ←/→ | PageUp / PageDown, `<` / `>`, N next |
+| Volume − / + | D-pad ↓ / ↑ | Arrow ↓ / ↑ |
+| Mute | X | M |
+
+Zap walks the **current list** (★ Favorites or the category you played from).
 
 ## Steam Input
 
