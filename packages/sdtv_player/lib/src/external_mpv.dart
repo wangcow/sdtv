@@ -20,9 +20,26 @@ class ExternalMpvResult {
   bool get ok => started && error == null;
 }
 
+/// How to invoke mpv (native binary vs Flatpak app).
+class _MpvInvoke {
+  const _MpvInvoke.binary(this.executable) : appId = null;
+
+  const _MpvInvoke.flatpak(this.appId) : executable = 'flatpak';
+
+  final String executable;
+  final String? appId;
+
+  bool get isFlatpak => appId != null;
+
+  String get label => isFlatpak ? 'flatpak:$appId' : executable;
+}
+
 /// Spawns system/bundled **mpv** fullscreen for a single URL and waits until exit.
 ///
 /// Phase A handoff: Flutter keeps the guide; mpv owns the picture.
+///
+/// On Steam Deck, Discover usually installs **Flatpak** mpv (`io.mpv.Mpv`), not
+/// `/usr/bin/mpv`. We look for both.
 class ExternalMpvLauncher {
   ExternalMpvLauncher({this.extraArgs = const []});
 
@@ -32,46 +49,97 @@ class ExternalMpvLauncher {
   Process? _process;
   bool get isRunning => _process != null;
 
-  /// Locate an mpv binary.
-  static Future<String?> findMpvBinary() async {
+  /// Common Flatpak app IDs for mpv (Discover / Flathub).
+  static const flatpakAppIds = <String>[
+    'io.mpv.Mpv',
+    'org.mpv.Mpv',
+  ];
+
+  /// Locate an mpv binary or Flatpak app.
+  static Future<_MpvInvoke?> _findMpv() async {
     final env = Platform.environment['SDTV_MPV_PATH'];
-    if (env != null && env.isNotEmpty && await File(env).exists()) {
-      return env;
+    if (env != null && env.isNotEmpty) {
+      if (env.startsWith('flatpak:')) {
+        return _MpvInvoke.flatpak(env.substring('flatpak:'.length));
+      }
+      if (flatpakAppIds.contains(env)) {
+        return _MpvInvoke.flatpak(env);
+      }
+      if (await File(env).exists()) {
+        return _MpvInvoke.binary(env);
+      }
     }
 
+    final home = Platform.environment['HOME'];
     final candidates = <String>[
-      // Next to our binary (bundle or install prefix)
       _besideExecutable('mpv'),
-      // Common system paths (Steam Deck / Fedora / Arch)
       '/usr/bin/mpv',
       '/usr/local/bin/mpv',
       '/bin/mpv',
-      // Flatpak host (if user installed)
-      '/var/lib/flatpak/exports/bin/mpv',
+      if (home != null) '$home/.local/bin/mpv',
     ];
 
-    // PATH lookup
+    // Flatpak export scripts are named after the app id, not "mpv".
+    for (final id in flatpakAppIds) {
+      candidates.add('/var/lib/flatpak/exports/bin/$id');
+      if (home != null) {
+        candidates.add('$home/.local/share/flatpak/exports/bin/$id');
+      }
+    }
+
     final pathEnv = Platform.environment['PATH'] ?? '';
     for (final dir in pathEnv.split(':')) {
       if (dir.isEmpty) continue;
       candidates.add('$dir/mpv');
+      for (final id in flatpakAppIds) {
+        candidates.add('$dir/$id');
+      }
     }
 
-    // Homebrew on dev machines
-    final home = Platform.environment['HOME'];
     if (home != null) {
       candidates.add('$home/.linuxbrew/bin/mpv');
-      candidates.add('/home/linuxbrew/.linuxbrew/bin/mpv');
     }
+    candidates.add('/home/linuxbrew/.linuxbrew/bin/mpv');
 
     final seen = <String>{};
     for (final c in candidates) {
       if (c.isEmpty || !seen.add(c)) continue;
       try {
-        if (await File(c).exists()) return c;
+        if (!await File(c).exists()) continue;
+        final base = c.split('/').last;
+        if (flatpakAppIds.contains(base)) {
+          return _MpvInvoke.flatpak(base);
+        }
+        return _MpvInvoke.binary(c);
       } catch (_) {}
     }
+
+    try {
+      final r = await Process.run('sh', ['-c', 'command -v mpv']);
+      if (r.exitCode == 0) {
+        final p = (r.stdout as String).trim().split('\n').first.trim();
+        if (p.isNotEmpty && await File(p).exists()) {
+          return _MpvInvoke.binary(p);
+        }
+      }
+    } catch (_) {}
+
+    for (final id in flatpakAppIds) {
+      try {
+        final r = await Process.run('flatpak', ['info', id]);
+        if (r.exitCode == 0) {
+          return _MpvInvoke.flatpak(id);
+        }
+      } catch (_) {}
+    }
+
     return null;
+  }
+
+  /// Path/label for diagnostics.
+  static Future<String?> findMpvBinary() async {
+    final inv = await _findMpv();
+    return inv?.label;
   }
 
   static String _besideExecutable(String name) {
@@ -84,6 +152,23 @@ class ExternalMpvLauncher {
     }
   }
 
+  /// Keep VAAPI hints; drop brew LD_LIBRARY_PATH so host/Flatpak mpv is clean.
+  static Map<String, String> _childEnvironment() {
+    final env = Map<String, String>.from(Platform.environment);
+    env['LD_LIBRARY_PATH'] = '/usr/lib64:/usr/lib';
+    if (Platform.environment['LIBVA_DRIVERS_PATH'] != null) {
+      env['LIBVA_DRIVERS_PATH'] = Platform.environment['LIBVA_DRIVERS_PATH']!;
+    } else if (Directory('/usr/lib64/dri').existsSync()) {
+      env['LIBVA_DRIVERS_PATH'] = '/usr/lib64/dri';
+    } else if (Directory('/usr/lib/dri').existsSync()) {
+      env['LIBVA_DRIVERS_PATH'] = '/usr/lib/dri';
+    }
+    if (Platform.environment['LIBVA_DRIVER_NAME'] != null) {
+      env['LIBVA_DRIVER_NAME'] = Platform.environment['LIBVA_DRIVER_NAME']!;
+    }
+    return env;
+  }
+
   /// Play [url] fullscreen until the user quits mpv (or process dies).
   Future<ExternalMpvResult> playFullscreen(Uri url) async {
     if (_process != null) {
@@ -93,17 +178,17 @@ class ExternalMpvLauncher {
       _process = null;
     }
 
-    final mpv = await findMpvBinary();
-    if (mpv == null) {
+    final inv = await _findMpv();
+    if (inv == null) {
       return const ExternalMpvResult(
         started: false,
         error:
-            'mpv not found. Install mpv on the Deck (Desktop → Discover / pacman) '
-            'or set SDTV_MPV_PATH to the binary.',
+            'mpv not found. On Deck: Desktop → Discover → install “mpv” '
+            '(Flatpak io.mpv.Mpv), or set SDTV_MPV_PATH in ~/sdtv/sdtv.env '
+            '(e.g. flatpak:io.mpv.Mpv or /usr/bin/mpv).',
       );
     }
 
-    // Minimal input conf so Escape / q / B-like keys quit (Phase B expands pad map).
     final confDir = await Directory.systemTemp.createTemp('sdtv_mpv_');
     final confFile = File('${confDir.path}/input.conf');
     await confFile.writeAsString('''
@@ -113,15 +198,13 @@ q quit
 Q quit
 BS quit
 MOUSE_BTN2 quit
-# Common keyboard mappings Steam may inject for B
 b quit
 B quit
-# Pause
 SPACE cycle pause
 p cycle pause
 ''');
 
-    final args = <String>[
+    final mpvArgs = <String>[
       '--fullscreen',
       '--force-window=immediate',
       '--keep-open=no',
@@ -132,7 +215,6 @@ p cycle pause
       '--input-conf=${confFile.path}',
       '--osc=yes',
       '--osd-level=1',
-      // Deck-friendly decode (system libva / radeonsi via parent env)
       '--hwdec=vaapi,vaapi-copy,auto-copy,auto',
       '--profile=fast',
       '--framedrop=vo',
@@ -140,25 +222,36 @@ p cycle pause
       url.toString(),
     ];
 
-    debugPrint('sdtv_player: external mpv $mpv ${args.join(' ')}');
+    late final String finalExec;
+    late final List<String> finalArgv;
+    if (inv.isFlatpak) {
+      finalExec = 'flatpak';
+      finalArgv = <String>[
+        'run',
+        // Temp input.conf + any local playlist files.
+        '--filesystem=/tmp',
+        '--filesystem=host',
+        inv.appId!,
+        ...mpvArgs,
+      ];
+    } else {
+      finalExec = inv.executable;
+      finalArgv = mpvArgs;
+    }
+
+    debugPrint(
+      'sdtv_player: external mpv ${inv.label} → $finalExec ${finalArgv.join(' ')}',
+    );
 
     try {
       final proc = await Process.start(
-        mpv,
-        args,
+        finalExec,
+        finalArgv,
         mode: ProcessStartMode.normal,
-        environment: {
-          ...Platform.environment,
-          // Ensure child sees VAAPI hints from run-sdtv.sh
-          if (Platform.environment['LIBVA_DRIVERS_PATH'] != null)
-            'LIBVA_DRIVERS_PATH': Platform.environment['LIBVA_DRIVERS_PATH']!,
-          if (Platform.environment['LIBVA_DRIVER_NAME'] != null)
-            'LIBVA_DRIVER_NAME': Platform.environment['LIBVA_DRIVER_NAME']!,
-        },
+        environment: _childEnvironment(),
       );
       _process = proc;
 
-      // Drain stdout/err so the pipe cannot fill and block mpv.
       unawaited(proc.stdout.drain<void>());
       unawaited(proc.stderr.transform(SystemEncoding().decoder).forEach((line) {
         if (line.trim().isNotEmpty) {
@@ -175,7 +268,7 @@ p cycle pause
       return ExternalMpvResult(
         started: true,
         exitCode: code,
-        mpvPath: mpv,
+        mpvPath: inv.label,
       );
     } catch (e, st) {
       _process = null;
@@ -185,8 +278,8 @@ p cycle pause
       } catch (_) {}
       return ExternalMpvResult(
         started: false,
-        error: 'Failed to start mpv: $e',
-        mpvPath: mpv,
+        error: 'Failed to start mpv (${inv.label}): $e',
+        mpvPath: inv.label,
       );
     }
   }
