@@ -57,10 +57,13 @@ class SessionController extends ChangeNotifier {
   /// Ordered favorite keys for the current [favoritesScope].
   List<String> _favoriteKeys = const [];
 
+  /// Hidden provider category ids for the current scope.
+  Set<String> _hiddenCategoryIds = {};
+
   /// Real HTTP Xtream provider (not demo, not forced mock, not M3U).
   bool get isLiveProvider => !useDemo && !mockCatalog && !useM3u;
 
-  /// Prefs namespace so M3U vs Xtream vs demo don't share stars.
+  /// Prefs namespace so M3U vs Xtream vs demo don't share stars / hidden cats.
   String get favoritesScope {
     if (useDemo || mockCatalog) return 'demo';
     if (useM3u) {
@@ -72,13 +75,21 @@ class SessionController extends ChangeNotifier {
     return 'xtream:${creds.baseUrl}|${creds.username}';
   }
 
-  /// Provider categories with ★ Favorites pinned first.
+  /// Same scope string as [favoritesScope] (hidden cats share the namespace).
+  String get prefsScope => favoritesScope;
+
+  /// Provider categories that are not hidden (guide list without ★).
+  List<MediaCategory> get visibleCategories => categories
+      .where((c) => !_hiddenCategoryIds.contains(c.categoryId))
+      .toList();
+
+  /// Provider categories with ★ Favorites pinned first (hidden cats omitted).
   List<MediaCategory> get browseCategories => [
         const MediaCategory(
           categoryId: kFavoritesCategoryId,
           categoryName: '★ Favorites',
         ),
-        ...categories,
+        ...visibleCategories,
       ];
 
   bool get isFavoritesCategory =>
@@ -89,17 +100,80 @@ class SessionController extends ChangeNotifier {
 
   int get favoriteCount => _favoriteKeys.length;
 
+  int get hiddenCategoryCount => _hiddenCategoryIds.length;
+
+  bool isCategoryHidden(String categoryId) =>
+      _hiddenCategoryIds.contains(categoryId);
+
   void _reloadFavorites() {
-    _favoriteKeys = _settings.favoriteKeys(favoritesScope);
+    _favoriteKeys = _settings.favoriteKeys(prefsScope);
+  }
+
+  void _reloadHiddenCategories() {
+    _hiddenCategoryIds =
+        _settings.hiddenCategoryIds(prefsScope).toSet();
+  }
+
+  void _reloadGuidePrefs() {
+    _reloadFavorites();
+    _reloadHiddenCategories();
   }
 
   /// Star / unstar [channel]. Returns true if now favorited.
   Future<bool> toggleFavorite(LiveChannel channel) async {
     final key = channel.favoriteKey;
-    final nowFav = await _settings.toggleFavoriteKey(favoritesScope, key);
+    final nowFav = await _settings.toggleFavoriteKey(prefsScope, key);
     _reloadFavorites();
     notifyListeners();
     return nowFav;
+  }
+
+  /// Hide a provider category from the guide. Cannot hide ★ Favorites.
+  /// Returns true if now hidden.
+  Future<bool> hideCategory(String categoryId) async {
+    if (categoryId.isEmpty || categoryId == kFavoritesCategoryId) {
+      return false;
+    }
+    if (_hiddenCategoryIds.contains(categoryId)) return true;
+    final list = _settings.hiddenCategoryIds(prefsScope)..add(categoryId);
+    await _settings.setHiddenCategoryIds(prefsScope, list);
+    _reloadHiddenCategories();
+    _ensureSelectedCategoryVisible();
+    notifyListeners();
+    return true;
+  }
+
+  /// Show a previously hidden category again.
+  Future<void> unhideCategory(String categoryId) async {
+    if (!_hiddenCategoryIds.contains(categoryId)) return;
+    final list = _settings.hiddenCategoryIds(prefsScope)
+      ..remove(categoryId);
+    await _settings.setHiddenCategoryIds(prefsScope, list);
+    _reloadHiddenCategories();
+    notifyListeners();
+  }
+
+  /// Toggle hidden. Returns true if now hidden.
+  Future<bool> toggleCategoryHidden(String categoryId) async {
+    if (categoryId.isEmpty || categoryId == kFavoritesCategoryId) {
+      return false;
+    }
+    final nowHidden =
+        await _settings.toggleHiddenCategoryId(prefsScope, categoryId);
+    _reloadHiddenCategories();
+    if (nowHidden) {
+      _ensureSelectedCategoryVisible();
+    }
+    notifyListeners();
+    return nowHidden;
+  }
+
+  /// If current selection was hidden, jump to first visible / favorites.
+  void _ensureSelectedCategoryVisible() {
+    final id = selectedCategoryId;
+    if (id == null || id == kFavoritesCategoryId) return;
+    if (!_hiddenCategoryIds.contains(id)) return;
+    selectedCategoryId = _defaultCategoryId(categories);
   }
 
   /// Phase A: fullscreen external mpv for watch sessions.
@@ -452,7 +526,7 @@ class SessionController extends ChangeNotifier {
       );
       categories = pl.categories;
       allChannels = pl.channels;
-      _reloadFavorites();
+      _reloadGuidePrefs();
       selectedCategoryId = _defaultCategoryId(pl.categories);
 
       if (save) {
@@ -609,7 +683,7 @@ class SessionController extends ChangeNotifier {
     allChannels = streams;
     this.useDemo = useDemo;
     this.mockCatalog = mockCatalog;
-    _reloadFavorites();
+    _reloadGuidePrefs();
     selectedCategoryId = _defaultCategoryId(cats);
 
     if (save) {
@@ -624,10 +698,14 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Prefer ★ Favorites when the user already has stars (faster testing).
+  /// Prefer ★ Favorites when starred; else first *visible* provider category.
   String? _defaultCategoryId(List<MediaCategory> cats) {
     if (_favoriteKeys.isNotEmpty) return kFavoritesCategoryId;
-    if (cats.isNotEmpty) return cats.first.categoryId;
+    for (final c in cats) {
+      if (!_hiddenCategoryIds.contains(c.categoryId)) {
+        return c.categoryId;
+      }
+    }
     return kFavoritesCategoryId;
   }
 
@@ -834,6 +912,7 @@ class SessionController extends ChangeNotifier {
     allChannels = const [];
     selectedCategoryId = null;
     _favoriteKeys = const [];
+    _hiddenCategoryIds = {};
     useDemo = true;
     mockCatalog = true;
     useM3u = false;

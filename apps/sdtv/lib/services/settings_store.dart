@@ -18,6 +18,8 @@ class SettingsStore {
   static const _kM3uUrl = 'playlist.m3uUrl';
   /// JSON map: scope → list of [LiveChannel.favoriteKey] strings.
   static const _kFavorites = 'favorites.v1';
+  /// JSON map: scope → list of hidden category_id strings.
+  static const _kHiddenCategories = 'hidden_categories.v1';
 
   static Future<SettingsStore> open() async {
     final prefs = await SharedPreferences.getInstance();
@@ -82,13 +84,13 @@ class SettingsStore {
     await _prefs.remove(_kBaseUrl);
     await _prefs.remove(_kUsername);
     await _prefs.remove(_kPassword);
-    // Favorites intentionally kept across sign-out (per-scope keys remain).
+    // Favorites + hidden categories intentionally kept across sign-out.
   }
 
-  // —— Favorites (scoped by playlist / panel) ——
+  // —— Scoped string-list maps (favorites, hidden categories) ——
 
-  Map<String, List<String>> _favoritesMap() {
-    final raw = _prefs.getString(_kFavorites);
+  Map<String, List<String>> _stringListMap(String prefKey) {
+    final raw = _prefs.getString(prefKey);
     if (raw == null || raw.isEmpty) return {};
     try {
       final decoded = jsonDecode(raw);
@@ -107,16 +109,13 @@ class SettingsStore {
     }
   }
 
-  /// Favorite channel keys for a provider scope (see [SessionController.favoritesScope]).
-  List<String> favoriteKeys(String scope) {
-    if (scope.isEmpty) return const [];
-    return List<String>.from(_favoritesMap()[scope] ?? const []);
-  }
-
-  Future<void> setFavoriteKeys(String scope, List<String> keys) async {
+  Future<void> _setStringListMap(
+    String prefKey,
+    String scope,
+    List<String> keys,
+  ) async {
     if (scope.isEmpty) return;
-    final map = _favoritesMap();
-    // Preserve order; drop empties / dups.
+    final map = _stringListMap(prefKey);
     final seen = <String>{};
     final cleaned = <String>[];
     for (final k in keys) {
@@ -128,7 +127,19 @@ class SettingsStore {
     } else {
       map[scope] = cleaned;
     }
-    await _prefs.setString(_kFavorites, jsonEncode(map));
+    await _prefs.setString(prefKey, jsonEncode(map));
+  }
+
+  // —— Favorites (scoped by playlist / panel) ——
+
+  /// Favorite channel keys for a provider scope (see [SessionController.favoritesScope]).
+  List<String> favoriteKeys(String scope) {
+    if (scope.isEmpty) return const [];
+    return List<String>.from(_stringListMap(_kFavorites)[scope] ?? const []);
+  }
+
+  Future<void> setFavoriteKeys(String scope, List<String> keys) async {
+    await _setStringListMap(_kFavorites, scope, keys);
   }
 
   Future<bool> toggleFavoriteKey(String scope, String key) async {
@@ -140,6 +151,32 @@ class SettingsStore {
       list.add(key);
     }
     await setFavoriteKeys(scope, list);
+    return !had;
+  }
+
+  // —— Hidden categories (scoped by playlist / panel) ——
+
+  List<String> hiddenCategoryIds(String scope) {
+    if (scope.isEmpty) return const [];
+    return List<String>.from(
+      _stringListMap(_kHiddenCategories)[scope] ?? const [],
+    );
+  }
+
+  Future<void> setHiddenCategoryIds(String scope, List<String> ids) async {
+    await _setStringListMap(_kHiddenCategories, scope, ids);
+  }
+
+  /// Returns true if [categoryId] is now hidden.
+  Future<bool> toggleHiddenCategoryId(String scope, String categoryId) async {
+    final list = hiddenCategoryIds(scope);
+    final had = list.contains(categoryId);
+    if (had) {
+      list.remove(categoryId);
+    } else {
+      list.add(categoryId);
+    }
+    await setHiddenCategoryIds(scope, list);
     return !had;
   }
 }
