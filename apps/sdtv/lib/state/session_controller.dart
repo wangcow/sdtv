@@ -85,13 +85,36 @@ class SessionController extends ChangeNotifier {
       .toList();
 
   /// Provider categories with ★ Favorites pinned first (hidden cats omitted).
-  List<MediaCategory> get browseCategories => [
-        const MediaCategory(
-          categoryId: kFavoritesCategoryId,
-          categoryName: '★ Favorites',
-        ),
-        ...visibleCategories,
-      ];
+  ///
+  /// If last-played sits in a **hidden** category, that category is still
+  /// injected once so resume can land on it.
+  List<MediaCategory> get browseCategories {
+    final fav = const MediaCategory(
+      categoryId: kFavoritesCategoryId,
+      categoryName: '★ Favorites',
+    );
+    final visible = visibleCategories;
+    final last = lastPlayedCategoryId;
+    if (last == null ||
+        last.isEmpty ||
+        last == kFavoritesCategoryId ||
+        !_hiddenCategoryIds.contains(last)) {
+      return [fav, ...visible];
+    }
+    MediaCategory? resumeCat;
+    for (final c in categories) {
+      if (c.categoryId == last) {
+        resumeCat = c;
+        break;
+      }
+    }
+    if (resumeCat == null) return [fav, ...visible];
+    // Avoid dup if somehow visible.
+    if (visible.any((c) => c.categoryId == last)) {
+      return [fav, ...visible];
+    }
+    return [fav, resumeCat, ...visible];
+  }
 
   bool get isFavoritesCategory =>
       selectedCategoryId == kFavoritesCategoryId;
