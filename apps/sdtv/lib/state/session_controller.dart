@@ -109,6 +109,19 @@ class SessionController extends ChangeNotifier {
     }
   }
 
+  /// Failures against a real panel — used to enforce cooldown (avoid bans).
+  int _liveFailCount = 0;
+  DateTime? _liveCooldownUntil;
+
+  /// Remaining live-connect cooldown, if any.
+  Duration? get liveConnectCooldownRemaining {
+    final until = _liveCooldownUntil;
+    if (until == null) return null;
+    final left = until.difference(DateTime.now());
+    if (left.isNegative) return null;
+    return left;
+  }
+
   /// Connect to a provider (or mock if [SDTV_FORCE_MOCK]=1).
   Future<void> connectRemote(
     XtreamCredentials credentials, {
@@ -130,6 +143,18 @@ class SessionController extends ChangeNotifier {
       final forceMock = _envFlag('SDTV_FORCE_MOCK') ||
           _envIsFalse('SDTV_ALLOW_LIVE');
 
+      if (!forceMock) {
+        final left = liveConnectCooldownRemaining;
+        if (left != null) {
+          final secs = left.inSeconds.clamp(1, 3600);
+          throw XtreamException(
+            'Live connect cooling down (${secs}s). '
+            'Wait before trying again — repeated failures can flag or ban accounts. '
+            'Use Demo playlist meanwhile.',
+          );
+        }
+      }
+
       final XtreamClient client;
       final bool mock;
       if (forceMock) {
@@ -146,15 +171,44 @@ class SessionController extends ChangeNotifier {
         save: save,
         credentials: credentials,
       );
+      // Success — reset fail budget.
+      _liveFailCount = 0;
+      _liveCooldownUntil = null;
     } on XtreamException catch (e) {
-      errorMessage = e.message;
+      errorMessage = _noteLiveConnectFailure(e);
       phase = SessionPhase.login;
       notifyListeners();
     } catch (e) {
-      errorMessage = e.toString();
+      errorMessage = _noteLiveConnectFailure(
+        XtreamException(e.toString()),
+      );
       phase = SessionPhase.login;
       notifyListeners();
     }
+  }
+
+  /// Record failure, set cooldown, return user-facing message.
+  String _noteLiveConnectFailure(XtreamException e) {
+    if (e.message.contains('cooling down')) {
+      return e.message;
+    }
+    // Only throttle real-panel attempts (not mock).
+    if (_envFlag('SDTV_FORCE_MOCK') || _envIsFalse('SDTV_ALLOW_LIVE')) {
+      return e.message;
+    }
+    _liveFailCount++;
+    // 15s → 45s → 2m → 5m — avoid hammering panels / CF.
+    final seconds = switch (_liveFailCount) {
+      1 => 15,
+      2 => 45,
+      3 => 120,
+      _ => 300,
+    };
+    _liveCooldownUntil = DateTime.now().add(Duration(seconds: seconds));
+    final hint = e.statusCode == 403
+        ? ' HTTP 403 can mean IP/Cloudflare block — stop retrying; check TiviMate and provider support.'
+        : '';
+    return '${e.message}$hint Wait ${seconds}s before Connect again (or use Demo).';
   }
 
   Future<void> _finishConnect(
