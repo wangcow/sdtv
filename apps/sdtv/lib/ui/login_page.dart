@@ -35,6 +35,7 @@ class _LoginPageState extends State<LoginPage> {
 
   int _selected = 0;
   bool _busy = false;
+  bool _showPassword = false;
   String? _localError;
 
   /// Ignore duplicate nav from js + keyboard arrow within this window.
@@ -285,13 +286,26 @@ class _LoginPageState extends State<LoginPage> {
                               label: 'Password',
                               controller: _pass,
                               focusNode: _passFocus,
-                              obscureText: true,
+                              obscureText: !_showPassword,
                               textInputAction: TextInputAction.done,
                               onSubmitted: _busy ? null : _connect,
                               onTap: () {
                                 setState(() => _selected = 3);
                                 _syncFieldFocus();
                               },
+                              suffix: IconButton(
+                                tooltip: _showPassword
+                                    ? 'Hide password'
+                                    : 'Show password',
+                                icon: Icon(
+                                  _showPassword
+                                      ? Icons.visibility_off
+                                      : Icons.visibility,
+                                ),
+                                onPressed: () {
+                                  setState(() => _showPassword = !_showPassword);
+                                },
+                              ),
                             ),
                             const SizedBox(height: 20),
                             _SelectTile(
@@ -317,7 +331,9 @@ class _LoginPageState extends State<LoginPage> {
                             if (_isFieldSelected) ...[
                               const SizedBox(height: 16),
                               Text(
-                                'Type with OSK · D-pad up/down changes field · A = next / connect',
+                                _selected == 3
+                                    ? 'Type with OSK · eye icon shows password · A = connect'
+                                    : 'Type with OSK · D-pad up/down changes field · A = next / connect',
                                 style: theme.textTheme.bodySmall?.copyWith(
                                   color: theme.colorScheme.outline,
                                 ),
@@ -431,6 +447,7 @@ class _SelectField extends StatelessWidget {
     this.keyboardType,
     this.textInputAction = TextInputAction.next,
     this.onSubmitted,
+    this.suffix,
   });
 
   final bool selected;
@@ -442,6 +459,7 @@ class _SelectField extends StatelessWidget {
   final TextInputType? keyboardType;
   final TextInputAction textInputAction;
   final VoidCallback? onSubmitted;
+  final Widget? suffix;
 
   @override
   Widget build(BuildContext context) {
@@ -482,6 +500,7 @@ class _SelectField extends StatelessWidget {
             ),
             contentPadding:
                 const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+            suffixIcon: suffix,
           ),
           textInputAction: textInputAction,
           // Typing only; D-pad is owned by the page index.
