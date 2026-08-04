@@ -43,6 +43,15 @@ flutter pub get
 flutter run -d linux
 ```
 
+### Watching channels (Phase A: external mpv)
+
+Selecting a channel **starts fullscreen `mpv`**, then returns to the channel list when mpv quits.
+
+- Install **mpv** on the Deck if needed (Desktop Mode: Discover search “mpv”, or distro package).
+- Quit video: **Esc**, **q**, or Steam keyboard **B** if mapped to Esc.
+- If mpv is missing, sdtv shows an error snack with optional **Embedded** fallback (old Flutter texture path).
+- Override binary: `SDTV_MPV_PATH=/path/to/mpv` in `~/sdtv/sdtv.env`.
+
 ### Smooth video (VAAPI)
 
 Stutter + `decode: cpu/software` means **software decode**.

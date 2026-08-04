@@ -54,6 +54,9 @@ class SessionController extends ChangeNotifier {
   /// Real HTTP Xtream provider (not demo, not forced mock, not M3U).
   bool get isLiveProvider => !useDemo && !mockCatalog && !useM3u;
 
+  /// Phase A: fullscreen external mpv for watch sessions.
+  final ExternalMpvLauncher externalMpv = ExternalMpvLauncher();
+
   List<LiveChannel> get channelsInCategory {
     final id = selectedCategoryId;
     if (id == null) return allChannels;
@@ -319,12 +322,49 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Resolve the URL that should be handed to the player engine.
+  Uri? resolvePlayUri(LiveChannel channel) {
+    if (channel.hasDirectUrl) {
+      return Uri.tryParse(channel.streamUrl!.trim());
+    }
+    if (useDemo || mockCatalog) {
+      return Uri.parse(kDemoPlaybackUri);
+    }
+    final client = _client;
+    if (client == null) return null;
+    // Live: prefer .ts (mpv will error visibly if bad; m3u8 retry in Phase B).
+    return client.livePlayUrl(channel.streamId, extension: 'ts');
+  }
+
+  /// Phase A: mark channel now-playing and run **external mpv** until quit.
+  ///
+  /// Returns an error string if mpv could not start; null on normal exit.
+  Future<String?> watchChannel(LiveChannel channel) async {
+    nowPlaying = channel;
+    notifyListeners();
+
+    final uri = resolvePlayUri(channel);
+    if (uri == null) {
+      return 'No playable URL for this channel.';
+    }
+
+    final result = await externalMpv.playFullscreen(uri);
+    nowPlaying = null;
+    notifyListeners();
+
+    if (!result.started) {
+      return result.error ?? 'mpv failed to start';
+    }
+    // Non-zero exit is normal (user quit); only surface spawn errors.
+    return null;
+  }
+
+  /// Legacy embedded media_kit open (fallback / debug). Prefer [watchChannel].
   Future<void> playChannel(LiveChannel channel) async {
     final previous = nowPlaying;
     nowPlaying = channel;
     notifyListeners();
 
-    // M3U / any direct URL on the channel entry.
     if (channel.hasDirectUrl) {
       final url = Uri.parse(channel.streamUrl!.trim());
       if (previous?.streamId == channel.streamId &&
@@ -342,7 +382,6 @@ class SessionController extends ChangeNotifier {
     final client = _client;
     if (client == null) return;
 
-    // Demo / forced mock: public test HLS.
     if (useDemo || mockCatalog) {
       final url = Uri.parse(kDemoPlaybackUri);
       if (previous != null &&
@@ -357,7 +396,6 @@ class SessionController extends ChangeNotifier {
       return;
     }
 
-    // Live Xtream: per-channel URL. Prefer .ts then fall back to .m3u8.
     final ts = client.livePlayUrl(channel.streamId, extension: 'ts');
     final m3u8 = client.livePlayUrl(channel.streamId, extension: 'm3u8');
 
@@ -379,16 +417,19 @@ class SessionController extends ChangeNotifier {
     }
     final idx = list.indexWhere((c) => c.streamId == nowPlaying!.streamId);
     if (idx < 0) {
-      await playChannel(list[0]);
+      await watchChannel(list[0]);
       return;
     }
     final next = (idx + delta) % list.length;
     final i = next < 0 ? next + list.length : next;
     if (i == idx) return;
-    await playChannel(list[i]);
+    await watchChannel(list[i]);
   }
 
   Future<void> stopPlayback({bool notify = true}) async {
+    try {
+      await externalMpv.stop();
+    } catch (_) {}
     try {
       await player.stop();
     } catch (e, st) {

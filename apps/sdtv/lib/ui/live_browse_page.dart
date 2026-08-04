@@ -3,6 +3,7 @@ import 'dart:io' show exit;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:sdtv_core/sdtv_core.dart';
 import 'package:sdtv_input/sdtv_input.dart';
 
 import '../state/session_controller.dart';
@@ -184,30 +185,51 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
 
-    // Channels: play.
+    // Channels: hand off to external fullscreen mpv (Phase A).
     final chans = session.channelsInCategory;
     if (chans.isEmpty) return;
     final ch = chans[_chanIndex.clamp(0, chans.length - 1)];
-    await session.playChannel(ch);
+
+    final err = await session.watchChannel(ch);
     if (!mounted) return;
 
+    if (err != null) {
+      // Surface spawn errors in About-style snack; keep channel column.
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(err),
+          duration: const Duration(seconds: 6),
+          action: SnackBarAction(
+            label: 'Embedded',
+            onPressed: () {
+              unawaited(_playEmbedded(ch));
+            },
+          ),
+        ),
+      );
+    }
+
+    setState(() => _column = 1);
+  }
+
+  /// Fallback: old Flutter texture player (debug / no system mpv).
+  Future<void> _playEmbedded(LiveChannel ch) async {
+    await session.playChannel(ch);
+    if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => PlayerPage(session: session),
       ),
     );
-
     if (!mounted) return;
-    // Timed stop — unbounded mpv stop after bipbop was freezing the UI on B.
     try {
       await session.stopPlayback(notify: false).timeout(
             const Duration(seconds: 2),
           );
     } catch (e) {
-      debugPrint('sdtv: stop after player: $e');
+      debugPrint('sdtv: stop after embedded player: $e');
     }
-    if (!mounted) return;
-    setState(() => _column = 1);
+    if (mounted) setState(() => _column = 1);
   }
 
   /// Hierarchical back: about → menu → categories ← channels ← (player pops itself).
