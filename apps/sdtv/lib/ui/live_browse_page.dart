@@ -37,7 +37,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   final _manageScroll = ScrollController();
 
   DateTime? _lastNavAt;
-  static const _navCooldown = Duration(milliseconds: 200);
+  // Allow accelerated hold-scroll from the joystick reader (~40ms + bursts).
+  static const _navCooldown = Duration(milliseconds: 28);
 
   static const _menuItems = <({String id, String label, IconData icon})>[
     (id: 'hide_cat', label: 'Hide category', icon: Icons.visibility_off_outlined),
