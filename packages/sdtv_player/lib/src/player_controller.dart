@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
@@ -19,6 +20,9 @@ abstract class SdtvPlayerController extends Listenable {
   SdtvPlayerState get state;
   String? get currentUrl;
   String? get lastError;
+
+  /// Last known libmpv `hwdec-current` (empty if unknown).
+  String get hwdecCurrent => '';
 
   /// Non-null when using media_kit (for [Video] widget).
   VideoController? get videoController => null;
@@ -50,6 +54,9 @@ class StubSdtvPlayerController extends ChangeNotifier
 
   @override
   String? get lastError => _error;
+
+  @override
+  String get hwdecCurrent => 'stub';
 
   @override
   VideoController? get videoController => null;
@@ -103,16 +110,26 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   MediaKitSdtvPlayerController() {
     _player = Player(
       configuration: const PlayerConfiguration(
-        bufferSize: 32 * 1024 * 1024,
+        // Larger demuxer buffer helps janky HLS/M3U feeds on Wi‑Fi.
+        bufferSize: 64 * 1024 * 1024,
         title: 'sdtv',
+        // Quieter default; set MPV_VERBOSE=1 via env later if needed.
+        logLevel: MPVLogLevel.warn,
       ),
     );
     _videoController = VideoController(
       _player,
       configuration: const VideoControllerConfiguration(
         enableHardwareAcceleration: true,
+        // Prefer GPU decode (VAAPI on Deck when libmpv supports it).
+        hwdec: 'auto',
+        // Cap texture size to ~720p output for software-decode fallback;
+        // full bitstream still demuxed, but upload/composite is lighter.
+        height: 720,
       ),
     );
+
+    unawaited(_applyLinuxPerfProps());
 
     _subs.add(_player.stream.playing.listen((_) {
       if (_disposed) return;
@@ -124,8 +141,7 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
       _resyncFromNative();
     }));
 
-    // Position ticks while audio/video advances — clears stuck "buffering" UI
-    // after long idle / brief rebuffer (bipbop still audible but spinner stuck).
+    // Position ticks while audio/video advances — clears stuck "buffering" UI.
     _subs.add(_player.stream.position.listen((_) {
       if (_disposed) return;
       if (_state == SdtvPlayerState.buffering ||
@@ -152,14 +168,57 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   SdtvPlayerState _state = SdtvPlayerState.idle;
   String? _url;
   String? _error;
+  String _hwdecCurrent = '';
   bool _disposed = false;
   Timer? _bufferStuckTimer;
 
-  /// Map media_kit/mpv flags → UI state.
-  ///
-  /// **Playing wins over buffering.** HLS often reports buffering=true while
-  /// still outputting audio; treating that as "buffering" left a forever
-  /// spinner after rebuffer / walk-away.
+  /// libmpv properties that reduce rebuffer/stutter on weak live HLS.
+  Future<void> _applyLinuxPerfProps() async {
+    if (!Platform.isLinux) return;
+    try {
+      final platform = _player.platform;
+      if (platform == null) return;
+      // NativePlayer.setProperty — not on the public Player type.
+      final dynamic native = platform;
+      if (native.setProperty is! Function) return;
+
+      const props = <String, String>{
+        'hwdec': 'auto',
+        'cache': 'yes',
+        'demuxer-max-bytes': '104857600', // 100 MiB
+        'demuxer-max-back-bytes': '52428800',
+        'demuxer-readahead-secs': '20',
+        'cache-secs': '60',
+        'interpolation': 'no',
+        'video-sync': 'audio',
+        'framedrop': 'vo',
+        'vd-lavc-threads': '0',
+      };
+      for (final e in props.entries) {
+        try {
+          await native.setProperty(e.key, e.value) as Future?;
+        } catch (err) {
+          debugPrint('sdtv_player setProperty ${e.key}: $err');
+        }
+      }
+      debugPrint('sdtv_player: applied Linux demuxer/hwdec props');
+    } catch (e) {
+      debugPrint('sdtv_player tune: $e');
+    }
+  }
+
+  Future<void> _refreshHwdec() async {
+    try {
+      final dynamic native = _player.platform;
+      if (native == null || native.getProperty is! Function) return;
+      final v = await native.getProperty('hwdec-current') as String?;
+      _hwdecCurrent = (v ?? '').trim();
+      debugPrint('sdtv_player hwdec-current=$_hwdecCurrent');
+    } catch (e) {
+      debugPrint('sdtv_player hwdec query: $e');
+    }
+  }
+
   void _resyncFromNative() {
     if (_disposed) return;
     if (_url == null) {
@@ -191,12 +250,10 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
     _bufferStuckTimer = Timer(const Duration(seconds: 4), () {
       if (_disposed) return;
       if (_state != SdtvPlayerState.buffering) return;
-      // Native may have recovered without a clean buffering=false edge.
       if (_player.state.playing) {
         _setState(SdtvPlayerState.playing);
         return;
       }
-      // Last resort: re-read flags once more.
       _resyncFromNative();
     });
   }
@@ -217,6 +274,9 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   String? get lastError => _error;
 
   @override
+  String get hwdecCurrent => _hwdecCurrent;
+
+  @override
   VideoController get videoController => _videoController;
 
   Player get rawPlayer => _player;
@@ -233,6 +293,7 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
     _setState(SdtvPlayerState.opening);
     try {
       await _player.open(Media(url.toString()), play: true);
+      await _refreshHwdec();
       _resyncFromNative();
     } catch (e, st) {
       _error = e.toString();
