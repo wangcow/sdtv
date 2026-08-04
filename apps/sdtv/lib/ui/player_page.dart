@@ -41,10 +41,14 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     if (vc != null) {
       _stableVideo = ExcludeFocus(
         child: IgnorePointer(
-          child: Video(
-            controller: vc,
-            controls: NoVideoControls,
-            fill: Colors.black,
+          // RepaintBoundary isolates video presents from HUD setState cost.
+          child: RepaintBoundary(
+            child: Video(
+              controller: vc,
+              controls: NoVideoControls,
+              fill: Colors.black,
+              filterQuality: FilterQuality.none,
+            ),
           ),
         ),
       );
@@ -61,9 +65,22 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     }
   }
 
+  SdtvPlayerState? _lastPaintedState;
+  String? _lastPaintedDecode;
+
   void _onTick() {
     if (!mounted) return;
-    _syncBufferChrome(widget.session.player.state);
+    final p = widget.session.player;
+    final st = p.state;
+    _syncBufferChrome(st);
+    // Avoid full rebuilds when nothing HUD-visible changed (helps present FPS).
+    if (st == _lastPaintedState &&
+        p.decodeLabel == _lastPaintedDecode &&
+        !_showBufferChrome) {
+      return;
+    }
+    _lastPaintedState = st;
+    _lastPaintedDecode = p.decodeLabel;
     setState(() {});
   }
 

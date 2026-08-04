@@ -117,16 +117,20 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
         logLevel: MPVLogLevel.warn,
       ),
     );
+    // Texture size is the main lever for Flutter/linux present FPS.
+    // vaapi-copy still uploads every frame to a GL texture; 720p upload on Deck
+    // was ~7–8 Flutter FPS. Cap lower for couch IPTV (panel is ~800p anyway).
+    final texH = int.tryParse(
+          Platform.environment['SDTV_VIDEO_HEIGHT'] ?? '',
+        ) ??
+        480;
     _videoController = VideoController(
       _player,
-      configuration: const VideoControllerConfiguration(
+      configuration: VideoControllerConfiguration(
         enableHardwareAcceleration: true,
-        // media_kit renders via vo=libmpv into a Flutter texture.
-        // Zero-copy "vaapi" often fails to interop → silent CPU fallback.
-        // "*-copy" still uses the GPU decoder, then copies frames (what we need).
+        // media_kit → vo=libmpv texture. Prefer copy-mode VAAPI.
         hwdec: 'vaapi-copy,auto-copy,auto',
-        // Cap texture size so pure software fallback is less brutal.
-        height: 720,
+        height: texH > 0 ? texH : 480,
       ),
     );
 
@@ -183,21 +187,28 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
       final dynamic native = platform;
       if (native.setProperty is! Function) return;
 
-      // Order matters for media_kit: copy-mode hwdec is required for texture upload.
+      // media_kit texture path: copy hwdec + drop frames rather than stutter.
       const props = <String, String>{
         'hwdec': 'vaapi-copy',
         'hwdec-codecs': 'all',
         'vo': 'libmpv',
         'gpu-hwdec-interop': 'auto',
+        'profile': 'fast',
+        'video-latency-hacks': 'yes',
         'cache': 'yes',
+        'cache-pause': 'no',
+        'cache-pause-initial': 'no',
         'demuxer-max-bytes': '104857600',
         'demuxer-max-back-bytes': '52428800',
-        'demuxer-readahead-secs': '20',
-        'cache-secs': '60',
+        'demuxer-readahead-secs': '15',
+        'cache-secs': '30',
         'interpolation': 'no',
-        'video-sync': 'audio',
-        'framedrop': 'vo',
+        'video-sync': 'display-vdrop',
+        'framedrop': 'decoder+vo',
+        'opengl-pbo': 'yes',
+        'opengl-swapinterval': '0',
         'vd-lavc-threads': '0',
+        'audio-buffer': '0.05',
       };
       for (final e in props.entries) {
         try {
@@ -206,14 +217,13 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
           debugPrint('sdtv_player setProperty ${e.key}: $err');
         }
       }
-      // Fallback chain if pure vaapi-copy is rejected at runtime.
       try {
         await native.setProperty(
           'hwdec',
           'vaapi-copy,auto-copy,auto-safe,auto',
         ) as Future?;
       } catch (_) {}
-      debugPrint('sdtv_player: applied Linux demuxer/hwdec props (copy path)');
+      debugPrint('sdtv_player: applied Deck live/texture perf props');
     } catch (e) {
       debugPrint('sdtv_player tune: $e');
     }
