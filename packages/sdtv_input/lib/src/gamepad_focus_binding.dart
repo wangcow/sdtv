@@ -35,7 +35,8 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
   DateTime? _lastDirAt;
   DateTime? _lastConfirmAt;
   DateTime? _lastBackAt;
-  static const _dirCooldown = Duration(milliseconds: 160);
+  // Low enough for accelerated D-pad hold (40ms ticks + multi-step).
+  static const _dirCooldown = Duration(milliseconds: 28);
   static const _confirmCooldown = Duration(milliseconds: 220);
   static const _backCooldown = Duration(milliseconds: 220);
 

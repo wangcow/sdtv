@@ -34,10 +34,10 @@ class LinuxJoystickReader {
     /// Left stick needs a larger deadzone — near-center noise during video
     /// playback was spamming channel zap (1↔2 flicker) and starving B.
     this.stickDeadzone = 22000,
-    /// Longer initial delay so a short Deck D-pad tap is only one step
-    /// (Steam often also injects a keyboard arrow for the same press).
-    this.repeatInitial = const Duration(milliseconds: 400),
-    this.repeatPeriod = const Duration(milliseconds: 200),
+    /// Delay before the first auto-repeat (short tap = one step only).
+    this.repeatInitial = const Duration(milliseconds: 380),
+    /// Base period after [repeatInitial] (then accelerates while held).
+    this.repeatPeriod = const Duration(milliseconds: 140),
     /// Auto-repeat only for hat/D-pad (list scroll). Stick is one-shot per tilt
     /// so a resting stick during video never floods channel-up/down.
     this.repeatStick = false,
@@ -56,6 +56,7 @@ class LinuxJoystickReader {
 
   GamepadEdge? _heldDir;
   Timer? _repeatTimer;
+  DateTime? _holdStartedAt;
   final Map<int, int> _axisSign = {};
   final Set<int> _buttonsDown = {};
 
@@ -227,15 +228,44 @@ class LinuxJoystickReader {
   void _setHeldDir(GamepadEdge dir, {required bool allowRepeat}) {
     if (_heldDir == dir) return;
     _heldDir = dir;
+    _holdStartedAt = DateTime.now();
     _emit(dir);
     _repeatTimer?.cancel();
     _repeatTimer = null;
     if (!allowRepeat) return;
-    _repeatTimer = Timer(repeatInitial, () {
-      _repeatTimer = Timer.periodic(repeatPeriod, (_) {
-        if (_heldDir != null) _emit(_heldDir!);
-      });
-    });
+    // First repeat after [repeatInitial], then accelerate while held.
+    _repeatTimer = Timer(repeatInitial, _onRepeatTick);
+  }
+
+  void _onRepeatTick() {
+    final dir = _heldDir;
+    final started = _holdStartedAt;
+    if (dir == null || started == null) {
+      _repeatTimer = null;
+      return;
+    }
+    final heldMs = DateTime.now().difference(started).inMilliseconds;
+    // Long hold: multi-step jumps so huge Xtream lists stay usable.
+    final steps = heldMs >= 2200
+        ? 5
+        : heldMs >= 1400
+            ? 3
+            : heldMs >= 900
+                ? 2
+                : 1;
+    for (var i = 0; i < steps; i++) {
+      _emit(dir);
+    }
+    final period = _acceleratedPeriod(heldMs);
+    _repeatTimer = Timer(period, _onRepeatTick);
+  }
+
+  /// Faster repeat the longer the D-pad is held.
+  Duration _acceleratedPeriod(int heldMs) {
+    if (heldMs < 900) return repeatPeriod; // ~140ms
+    if (heldMs < 1400) return const Duration(milliseconds: 85);
+    if (heldMs < 2200) return const Duration(milliseconds: 55);
+    return const Duration(milliseconds: 40);
   }
 
   void _clearHeldIfAxis({required bool xAxis}) {
@@ -249,6 +279,7 @@ class LinuxJoystickReader {
           : (_axisSign[0] ?? 0) != 0 || (_axisSign[6] ?? 0) != 0;
       if (!otherHeld) {
         _heldDir = null;
+        _holdStartedAt = null;
         _repeatTimer?.cancel();
         _repeatTimer = null;
       } else if (xAxis) {
@@ -284,6 +315,7 @@ class LinuxJoystickReader {
     _repeatTimer?.cancel();
     _repeatTimer = null;
     _heldDir = null;
+    _holdStartedAt = null;
     _axisSign.clear();
     _buttonsDown.clear();
     final f = _file;
