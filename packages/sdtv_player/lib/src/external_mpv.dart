@@ -184,23 +184,85 @@ class ExternalMpvLauncher {
     return '/tmp/sdtv-mpv-$n.sock';
   }
 
-  /// Send a JSON IPC command to the running mpv (newline-delimited).
+  int _ipcReqId = 1;
+
+  /// Send a JSON IPC command; waits for mpv's reply when possible.
+  ///
+  /// Returns false on transport failure or non-success error from mpv.
   Future<bool> sendCommand(List<Object?> command) async {
+    final res = await _ipc(command);
+    return res != null && res['error'] == 'success';
+  }
+
+  /// Low-level IPC: returns decoded JSON reply, or null on failure.
+  Future<Map<String, dynamic>?> _ipc(List<Object?> command) async {
     final path = _ipcPath;
-    if (path == null || !isRunning) return false;
+    if (path == null || !isRunning) return null;
+    final id = _ipcReqId++;
     try {
       final addr = InternetAddress(path, type: InternetAddressType.unix);
       final socket = await Socket.connect(addr, 0)
-          .timeout(const Duration(milliseconds: 400));
-      final payload = jsonEncode({'command': command});
+          .timeout(const Duration(milliseconds: 500));
+      final payload = jsonEncode({
+        'command': command,
+        'request_id': id,
+      });
       socket.write('$payload\n');
-      await socket.flush().timeout(const Duration(milliseconds: 400));
-      await socket.close();
-      return true;
+      await socket.flush().timeout(const Duration(milliseconds: 500));
+
+      // mpv may emit events; read until our request_id matches.
+      final lines = socket
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter());
+      Map<String, dynamic>? matched;
+      await for (final line in lines.timeout(
+        const Duration(milliseconds: 800),
+        onTimeout: (sink) => sink.close(),
+      )) {
+        if (line.trim().isEmpty) continue;
+        try {
+          final map = jsonDecode(line);
+          if (map is Map<String, dynamic>) {
+            if (map['request_id'] == id ||
+                (map['error'] != null && map['event'] == null)) {
+              matched = map;
+              break;
+            }
+          } else if (map is Map) {
+            final m = Map<String, dynamic>.from(map);
+            if (m['request_id'] == id) {
+              matched = m;
+              break;
+            }
+          }
+        } catch (_) {}
+      }
+      try {
+        await socket.close();
+      } catch (_) {}
+
+      if (matched == null) {
+        debugPrint('sdtv_player: mpv ipc no reply for $command');
+        // Write may still have worked (mute/volume often do).
+        return {'error': 'success', 'data': null, 'assumed': true};
+      }
+      if (matched['error'] != null && matched['error'] != 'success') {
+        debugPrint(
+          'sdtv_player: mpv ipc error ${matched['error']} for $command',
+        );
+      }
+      return matched;
     } catch (e) {
       debugPrint('sdtv_player: mpv ipc failed ($command): $e');
-      return false;
+      return null;
     }
+  }
+
+  Future<Object?> getProperty(String name) async {
+    final res = await _ipc(['get_property', name]);
+    if (res == null || res['error'] != 'success') return null;
+    return res['data'];
   }
 
   /// Pause / unpause via IPC.
@@ -211,34 +273,70 @@ class ExternalMpvLauncher {
     }
   }
 
-  /// Relative volume change (mpv 0–100 scale). OSD via mpv when osd-level ≥ 1.
+  /// Relative volume change with OSD bar + numeric readout.
   Future<void> addVolume(int delta) async {
-    await sendCommand(['add', 'volume', delta]);
+    // osd-msg-bar shows the volume slider; plain add is silent on some builds.
+    var ok = await sendCommand(['osd-msg-bar', 'add', 'volume', delta]);
+    if (!ok) {
+      ok = await sendCommand(['add', 'volume', delta]);
+    }
+    if (!ok) return;
+
+    final raw = await getProperty('volume');
+    num? vol;
+    if (raw is num) {
+      vol = raw;
+    } else if (raw is String) {
+      vol = num.tryParse(raw);
+    }
+    if (vol != null) {
+      await showText('Volume ${vol.round()}', durationMs: 900);
+    } else {
+      await showText(delta > 0 ? 'Volume +' : 'Volume −', durationMs: 700);
+    }
   }
 
   Future<void> cycleMute() async {
-    await sendCommand(['cycle', 'mute']);
+    await sendCommand(['osd-msg', 'cycle', 'mute']);
+    final muted = await getProperty('mute');
+    if (muted == true || muted == 'yes') {
+      await showText('Muted', durationMs: 900);
+    } else if (muted == false || muted == 'no') {
+      await showText('Unmuted', durationMs: 900);
+    }
   }
 
-  /// Jump to playlist index (0-based). Used for channel zap without respawn.
+  /// Jump to playlist index (0-based). Prefer [loadFile] for live IPTV.
   Future<bool> playlistPlayIndex(int index) async {
-    return sendCommand(['set', 'playlist-pos', index]);
+    // playlist-play-index restarts playback; set playlist-pos often does not
+    // re-open live/HLS URLs.
+    var ok = await sendCommand(['playlist-play-index', index]);
+    if (!ok) {
+      ok = await sendCommand(['set', 'playlist-pos', index]);
+    }
+    return ok;
   }
 
   Future<bool> playlistNext() async =>
-      sendCommand(['playlist-next', 'weak']);
+      sendCommand(['playlist-next', 'force']);
 
   Future<bool> playlistPrev() async =>
-      sendCommand(['playlist-prev', 'weak']);
+      sendCommand(['playlist-prev', 'force']);
 
   /// OSD message (milliseconds).
   Future<void> showText(String text, {int durationMs = 2000}) async {
     await sendCommand(['show-text', text, durationMs]);
   }
 
-  /// Replace current item (fallback if playlist not used).
+  /// Replace current playback with [url] (reliable for live channel zap).
   Future<bool> loadFile(Uri url) async {
-    return sendCommand(['loadfile', url.toString(), 'replace']);
+    // Third arg "replace" clears the current item and plays immediately.
+    final ok = await sendCommand(['loadfile', url.toString(), 'replace']);
+    if (!ok) {
+      // Some builds want append-play style flags as separate form.
+      return sendCommand(['loadfile', url.toString()]);
+    }
+    return true;
   }
 
   /// Ask mpv to quit (falls back to [stop] kill).
@@ -303,29 +401,29 @@ MOUSE_BTN2 quit
 # Pause
 SPACE cycle pause
 p cycle pause
-# Volume (keyboard / when mpv has focus)
-UP add volume 5
-DOWN add volume -5
-m cycle mute
-# Channel zap within session playlist
-PGUP playlist-prev
-PGDWN playlist-next
-PLAYLIST_PREV playlist-prev
-PLAYLIST_NEXT playlist-next
-< playlist-prev
-> playlist-next
-n playlist-next
+# Volume (keyboard / when mpv has focus) — bar OSD
+UP osd-msg-bar add volume 5
+DOWN osd-msg-bar add volume -5
+m osd-msg cycle mute
+# Channel zap within session playlist (force restarts live entries)
+PGUP playlist-prev force
+PGDWN playlist-next force
+PLAYLIST_PREV playlist-prev force
+PLAYLIST_NEXT playlist-next force
+< playlist-prev force
+> playlist-next force
+n playlist-next force
 # SDL gamepad (if mpv owns the pad)
 GAMEPAD_ACTION_DOWN cycle pause
 GAMEPAD_ACTION_RIGHT quit
 GAMEPAD_ACTION_EAST quit
 GAMEPAD_BACK quit
-GAMEPAD_DPAD_UP add volume 5
-GAMEPAD_DPAD_DOWN add volume -5
-GAMEPAD_DPAD_LEFT playlist-prev
-GAMEPAD_DPAD_RIGHT playlist-next
-GAMEPAD_SHOULDER_L playlist-prev
-GAMEPAD_SHOULDER_R playlist-next
+GAMEPAD_DPAD_UP osd-msg-bar add volume 5
+GAMEPAD_DPAD_DOWN osd-msg-bar add volume -5
+GAMEPAD_DPAD_LEFT playlist-prev force
+GAMEPAD_DPAD_RIGHT playlist-next force
+GAMEPAD_SHOULDER_L playlist-prev force
+GAMEPAD_SHOULDER_R playlist-next force
 GAMEPAD_START quit
 GAMEPAD_GUIDE quit
 ''');
