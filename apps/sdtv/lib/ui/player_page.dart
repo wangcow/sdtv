@@ -172,6 +172,15 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   void _togglePlay() {
     final player = widget.session.player;
     final state = player.state;
+    if (state == SdtvPlayerState.error) {
+      // A on error: retry current channel (embed path).
+      final ch = widget.session.nowPlaying;
+      if (ch != null) {
+        unawaited(widget.session.playChannel(ch));
+      }
+      _bumpHud();
+      return;
+    }
     if (state == SdtvPlayerState.playing ||
         state == SdtvPlayerState.buffering ||
         state == SdtvPlayerState.opening) {
