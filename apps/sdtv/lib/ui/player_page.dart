@@ -108,8 +108,10 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
 
   SdtvPlayerState? _lastPaintedState;
   String? _lastPaintedDecode;
+  String? _lastPaintedPerf;
   Duration? _lastPos;
   Duration? _lastDur;
+  bool _lastShowBuffer = false;
 
   void _onTick() {
     if (!mounted) return;
@@ -119,18 +121,36 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     if (st == SdtvPlayerState.paused) {
       if (!_showHud) setState(() => _showHud = true);
     }
-    // Avoid full rebuilds when nothing HUD-visible changed.
+
+    // While chrome is hidden, only rebuild on real state / error / buffer UI.
+    // Position ticks must not rebuild the tree (texture present path starves).
+    if (!_showHud) {
+      if (st == _lastPaintedState &&
+          _showBufferChrome == _lastShowBuffer &&
+          st != SdtvPlayerState.error) {
+        return;
+      }
+      _lastPaintedState = st;
+      _lastShowBuffer = _showBufferChrome;
+      setState(() {});
+      return;
+    }
+
+    // Chrome visible: still throttle; scrubber only needs ~1 Hz.
     if (st == _lastPaintedState &&
         p.decodeLabel == _lastPaintedDecode &&
+        p.perfLabel == _lastPaintedPerf &&
         p.position == _lastPos &&
         p.duration == _lastDur &&
-        !_showBufferChrome) {
+        _showBufferChrome == _lastShowBuffer) {
       return;
     }
     _lastPaintedState = st;
     _lastPaintedDecode = p.decodeLabel;
+    _lastPaintedPerf = p.perfLabel;
     _lastPos = p.position;
     _lastDur = p.duration;
+    _lastShowBuffer = _showBufferChrome;
     setState(() {});
   }
 
@@ -415,6 +435,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
               focus: _focus,
               showChrome: _showHud && state != SdtvPlayerState.error,
               decodeLabel: player.decodeLabel,
+              perfLabel: player.perfLabel.isEmpty ? null : player.perfLabel,
               onPlayPause: _togglePlay,
               onSeekBack: () {
                 unawaited(
