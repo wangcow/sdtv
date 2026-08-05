@@ -6,6 +6,7 @@ import 'package:sdtv_core/sdtv_core.dart';
 import 'package:sdtv_player/sdtv_player.dart';
 
 import '../services/mock_client_factory.dart';
+import '../services/saved_source.dart';
 import '../services/settings_store.dart';
 
 enum SessionPhase {
@@ -63,6 +64,53 @@ class SessionController extends ChangeNotifier {
 
   /// Real HTTP Xtream provider (not demo, not forced mock, not M3U).
   bool get isLiveProvider => !useDemo && !mockCatalog && !useM3u;
+
+  /// Saved playlists / panels (local; survives sign-out).
+  List<SavedSource> get savedSources => _settings.savedSources();
+
+  String? get activeSourceId => _settings.activeSourceId;
+
+  Future<void> removeSavedSource(String id) async {
+    await _settings.removeSavedSource(id);
+    notifyListeners();
+  }
+
+  /// Connect a previously saved source without retyping credentials.
+  Future<void> openSavedSource(SavedSource source) async {
+    try {
+      await stopPlayback(notify: false);
+    } catch (_) {}
+    switch (source.kind) {
+      case SavedSourceKind.demo:
+        await connectDemo(save: true);
+      case SavedSourceKind.m3u:
+        final url = source.m3uUrl?.trim() ?? '';
+        if (url.isEmpty) {
+          errorMessage = 'Saved M3U has no URL.';
+          phase = SessionPhase.login;
+          notifyListeners();
+          return;
+        }
+        await connectM3u(url, save: true);
+      case SavedSourceKind.xtream:
+        final creds = source.credentials;
+        if (creds == null) {
+          errorMessage = 'Saved Xtream entry is incomplete.';
+          phase = SessionPhase.login;
+          notifyListeners();
+          return;
+        }
+        await connectRemote(creds, save: true);
+    }
+  }
+
+  Future<void> _rememberSavedSource(SavedSource source) async {
+    try {
+      await _settings.upsertSavedSource(source);
+    } catch (e) {
+      debugPrint('sdtv: upsertSavedSource failed: $e');
+    }
+  }
 
   /// Prefs namespace so M3U vs Xtream vs demo don't share stars / hidden cats.
   /// Trailing slashes on server URLs are stripped so save/load scopes match.
@@ -770,6 +818,9 @@ class SessionController extends ChangeNotifier {
         mockCatalog: true,
         save: save,
       );
+      if (save) {
+        await _rememberSavedSource(SavedSource.demo());
+      }
     } catch (e) {
       errorMessage = 'Demo load failed: $e';
       phase = SessionPhase.login;
@@ -813,6 +864,9 @@ class SessionController extends ChangeNotifier {
       _reloadGuidePrefs();
       if (!applyLastPlayedSelection()) {
         selectedCategoryId = _defaultCategoryId(pl.categories);
+      }
+      if (save) {
+        await _rememberSavedSource(SavedSource.m3u(url: m3uPlaylistUrl!));
       }
       phase = SessionPhase.browse;
       notifyListeners();
@@ -972,6 +1026,12 @@ class SessionController extends ChangeNotifier {
     _reloadGuidePrefs();
     if (!applyLastPlayedSelection()) {
       selectedCategoryId = _defaultCategoryId(cats);
+    }
+
+    if (save && credentials != null && !useDemo && !mockCatalog) {
+      await _rememberSavedSource(
+        SavedSource.xtream(credentials: credentials),
+      );
     }
 
     phase = SessionPhase.browse;

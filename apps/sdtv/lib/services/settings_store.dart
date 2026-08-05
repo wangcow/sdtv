@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sdtv_core/sdtv_core.dart';
 
+import 'saved_source.dart';
+
 /// Local-only Xtream credentials + prefs. Never phones home.
 class SettingsStore {
   SettingsStore(this._prefs);
@@ -22,6 +24,9 @@ class SettingsStore {
   static const _kHiddenCategories = 'hidden_categories.v1';
   /// JSON map: scope → { categoryId, favoriteKey, name }.
   static const _kLastPlayed = 'last_played.v1';
+  /// JSON list of [SavedSource] maps.
+  static const _kSavedSources = 'saved_sources.v1';
+  static const _kActiveSourceId = 'saved_sources.activeId';
 
   static Future<SettingsStore> open() async {
     final prefs = await SharedPreferences.getInstance();
@@ -86,8 +91,92 @@ class SettingsStore {
     await _prefs.remove(_kBaseUrl);
     await _prefs.remove(_kUsername);
     await _prefs.remove(_kPassword);
-    // Favorites, hidden categories, last-played intentionally kept across sign-out.
+    // Favorites, hidden categories, last-played, saved sources kept across sign-out.
   }
+
+  // —— Saved playlists / panels (multi-source) ——
+
+  String? get activeSourceId {
+    final id = _prefs.getString(_kActiveSourceId);
+    if (id == null || id.isEmpty) return null;
+    return id;
+  }
+
+  Future<void> setActiveSourceId(String? id) async {
+    if (id == null || id.isEmpty) {
+      await _prefs.remove(_kActiveSourceId);
+    } else {
+      await _prefs.setString(_kActiveSourceId, id);
+    }
+  }
+
+  List<SavedSource> savedSources() {
+    final raw = _prefs.getString(_kSavedSources);
+    if (raw == null || raw.isEmpty) {
+      return _migrateLegacyIntoSavedSourcesSync();
+    }
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const [];
+      final out = <SavedSource>[];
+      for (final item in decoded) {
+        if (item is Map) {
+          final s = SavedSource.fromJson(Map<String, dynamic>.from(item));
+          if (s.id.isNotEmpty) out.add(s);
+        }
+      }
+      return out;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// One-time: seed saved list from legacy single-session fields if empty.
+  List<SavedSource> _migrateLegacyIntoSavedSourcesSync() {
+    final seeded = <SavedSource>[];
+    final m3u = m3uUrl;
+    if (m3u != null && m3u.isNotEmpty) {
+      seeded.add(SavedSource.m3u(url: m3u));
+    }
+    final creds = credentials;
+    if (creds != null) {
+      seeded.add(SavedSource.xtream(credentials: creds));
+    }
+    if (seeded.isEmpty) return const [];
+    // Persist async-friendly: write immediately (sync API via setString).
+    // ignore: discarded_futures
+    _writeSavedSources(seeded);
+    return seeded;
+  }
+
+  Future<void> _writeSavedSources(List<SavedSource> list) async {
+    await _prefs.setString(
+      _kSavedSources,
+      jsonEncode(list.map((s) => s.toJson()).toList()),
+    );
+  }
+
+  Future<void> upsertSavedSource(SavedSource source) async {
+    if (source.id.isEmpty) return;
+    final list = List<SavedSource>.from(savedSources());
+    final i = list.indexWhere((s) => s.id == source.id);
+    if (i >= 0) {
+      list[i] = source;
+    } else {
+      list.add(source);
+    }
+    await _writeSavedSources(list);
+    await setActiveSourceId(source.id);
+  }
+
+  Future<void> removeSavedSource(String id) async {
+    final list = savedSources().where((s) => s.id != id).toList();
+    await _writeSavedSources(list);
+    if (activeSourceId == id) {
+      await setActiveSourceId(null);
+    }
+  }
+}
 
   // —— Scoped string-list maps (favorites, hidden categories) ——
 

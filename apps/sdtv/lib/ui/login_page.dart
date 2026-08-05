@@ -5,16 +5,17 @@ import 'package:flutter/services.dart';
 import 'package:sdtv_core/sdtv_core.dart';
 import 'package:sdtv_input/sdtv_input.dart';
 
+import '../services/saved_source.dart';
 import '../state/session_controller.dart';
 
-/// How the user wants to load channels after Demo.
+/// How the user wants to load channels after Demo / saved.
 enum _SourceKind { none, m3u, xtream }
 
 /// Login / home. Selection is an **integer index**, not Flutter focus geometry.
 ///
-/// Layout (no endless dual forms):
-///   0 Demo
-///   1 M3U  ·  2 Xtream   ← pick one source
+/// Layout:
+///   [saved playlists…]
+///   Demo · M3U · Xtream
 ///   then only fields for the active source
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key, required this.session});
@@ -45,17 +46,24 @@ class _LoginPageState extends State<LoginPage> {
   DateTime? _lastNav;
   static const _cooldown = Duration(milliseconds: 220);
 
-  /// Fixed header: demo + two source choosers.
-  static const _headerCount = 3;
+  List<SavedSource> get _saved => widget.session.savedSources;
+
+  int get _savedCount => _saved.length;
+
+  /// First index of Demo (after saved list).
+  int get _iDemo => _savedCount;
+  int get _iM3u => _savedCount + 1;
+  int get _iXtream => _savedCount + 2;
+  int get _iField0 => _savedCount + 3;
 
   int get _itemCount {
     switch (_source) {
       case _SourceKind.none:
-        return _headerCount; // 0..2
+        return _savedCount + 3;
       case _SourceKind.m3u:
-        return _headerCount + 2; // + url, open
+        return _savedCount + 5; // + url, open
       case _SourceKind.xtream:
-        return _headerCount + 4; // + server, user, pass, connect
+        return _savedCount + 7; // + server, user, pass, connect
     }
   }
 
@@ -73,9 +81,11 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   bool get _isTextFieldSelected {
-    if (_source == _SourceKind.m3u && _selected == 3) return true;
+    if (_source == _SourceKind.m3u && _selected == _iField0) return true;
     if (_source == _SourceKind.xtream &&
-        (_selected == 3 || _selected == 4 || _selected == 5)) {
+        (_selected == _iField0 ||
+            _selected == _iField0 + 1 ||
+            _selected == _iField0 + 2)) {
       return true;
     }
     return false;
@@ -85,8 +95,9 @@ class _LoginPageState extends State<LoginPage> {
     setState(() {
       _source = kind;
       _localError = null;
-      // Land on first field of that section (or stay on chooser if none).
-      _selected = kind == _SourceKind.none ? _selected.clamp(0, 2) : 3;
+      _selected = kind == _SourceKind.none
+          ? _selected.clamp(0, _itemCount - 1)
+          : _iField0;
     });
     _syncFieldFocus();
   }
@@ -115,21 +126,22 @@ class _LoginPageState extends State<LoginPage> {
         FocusManager.instance.primaryFocus?.unfocus();
       }
 
-      if (_source == _SourceKind.m3u && _selected == 3) {
+      if (_source == _SourceKind.m3u && _selected == _iField0) {
         _m3uFocus.requestFocus();
         return;
       }
       if (_source == _SourceKind.xtream) {
-        switch (_selected) {
-          case 3:
-            _urlFocus.requestFocus();
-            return;
-          case 4:
-            _userFocus.requestFocus();
-            return;
-          case 5:
-            _passFocus.requestFocus();
-            return;
+        if (_selected == _iField0) {
+          _urlFocus.requestFocus();
+          return;
+        }
+        if (_selected == _iField0 + 1) {
+          _userFocus.requestFocus();
+          return;
+        }
+        if (_selected == _iField0 + 2) {
+          _passFocus.requestFocus();
+          return;
         }
       }
       clear();
@@ -137,28 +149,44 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> _activate() async {
-    switch (_selected) {
-      case 0:
-        await _demo();
-      case 1:
-        _setSource(_SourceKind.m3u);
-      case 2:
-        _setSource(_SourceKind.xtream);
-      default:
-        if (_source == _SourceKind.m3u) {
-          if (_selected == 3) {
-            _nav(1); // url → open
-          } else if (_selected == 4) {
-            await _loadM3u();
-          }
-        } else if (_source == _SourceKind.xtream) {
-          if (_selected == 3 || _selected == 4) {
-            _nav(1);
-          } else if (_selected == 5 || _selected == 6) {
-            await _connect();
-          }
-        }
+    if (_selected < _savedCount) {
+      await _openSaved(_saved[_selected]);
+      return;
     }
+    if (_selected == _iDemo) {
+      await _demo();
+      return;
+    }
+    if (_selected == _iM3u) {
+      _setSource(_SourceKind.m3u);
+      return;
+    }
+    if (_selected == _iXtream) {
+      _setSource(_SourceKind.xtream);
+      return;
+    }
+    if (_source == _SourceKind.m3u) {
+      if (_selected == _iField0) {
+        _nav(1);
+      } else if (_selected == _iField0 + 1) {
+        await _loadM3u();
+      }
+    } else if (_source == _SourceKind.xtream) {
+      if (_selected == _iField0 || _selected == _iField0 + 1) {
+        _nav(1);
+      } else if (_selected == _iField0 + 2 || _selected == _iField0 + 3) {
+        await _connect();
+      }
+    }
+  }
+
+  Future<void> _openSaved(SavedSource source) async {
+    setState(() {
+      _busy = true;
+      _localError = null;
+    });
+    await widget.session.openSavedSource(source);
+    if (mounted) setState(() => _busy = false);
   }
 
   Future<void> _demo() async {
@@ -200,7 +228,7 @@ class _LoginPageState extends State<LoginPage> {
     if (url.isEmpty || user.isEmpty || pass.isEmpty) {
       setState(
         () => _localError =
-            'Enter server URL, username, and password — or Demo / M3U.',
+            'Enter server URL, username, and password — or Demo / M3U / saved.',
       );
       return;
     }
@@ -225,6 +253,7 @@ class _LoginPageState extends State<LoginPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final err = _localError ?? widget.session.errorMessage;
+    final saved = _saved;
 
     return SdtvInputScope(
       onConfirm: () {
@@ -314,40 +343,74 @@ class _LoginPageState extends State<LoginPage> {
                             const SizedBox(height: 8),
                             Text(
                               'You supply legal playlists or credentials. '
-                              'Pick Demo, or choose M3U / Xtream below.',
+                              'Saved sources are stored only on this device.',
                               style: theme.textTheme.bodyMedium,
                             ),
+                            if (saved.isNotEmpty) ...[
+                              const SizedBox(height: 24),
+                              Text(
+                                'SAVED PLAYLISTS',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  letterSpacing: 1.2,
+                                  color: theme.colorScheme.outline,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              for (var i = 0; i < saved.length; i++) ...[
+                                if (i > 0) const SizedBox(height: 10),
+                                _SelectTile(
+                                  selected: _selected == i,
+                                  label:
+                                      '${saved[i].kindBadge} · ${saved[i].label}',
+                                  icon: saved[i].kind == SavedSourceKind.m3u
+                                      ? Icons.playlist_play
+                                      : saved[i].kind == SavedSourceKind.xtream
+                                          ? Icons.cloud_outlined
+                                          : Icons.play_circle_outline,
+                                  onTap: () {
+                                    setState(() => _selected = i);
+                                    if (!_busy) unawaited(_openSaved(saved[i]));
+                                  },
+                                ),
+                              ],
+                              const SizedBox(height: 8),
+                              Text(
+                                'A opens a saved source · no retyping',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.outline,
+                                ),
+                              ),
+                            ],
                             const SizedBox(height: 28),
                             _SelectTile(
-                              selected: _selected == 0,
+                              selected: _selected == _iDemo,
                               label: 'Continue with demo playlist',
                               icon: Icons.play_circle_outline,
                               onTap: () {
-                                setState(() => _selected = 0);
+                                setState(() => _selected = _iDemo);
                                 if (!_busy) _demo();
                               },
                             ),
                             const SizedBox(height: 28),
                             Text(
-                              'OR LOAD CHANNELS FROM',
+                              'OR ADD A SOURCE',
                               style: theme.textTheme.labelSmall?.copyWith(
                                 letterSpacing: 1.2,
                                 color: theme.colorScheme.outline,
                               ),
                             ),
                             const SizedBox(height: 12),
-                            // Two source choosers — only one form expands under them.
                             Row(
                               children: [
                                 Expanded(
                                   child: _SelectTile(
-                                    selected: _selected == 1,
+                                    selected: _selected == _iM3u,
                                     active: _source == _SourceKind.m3u,
                                     label: 'M3U',
                                     icon: Icons.playlist_play,
                                     compact: true,
                                     onTap: () {
-                                      setState(() => _selected = 1);
+                                      setState(() => _selected = _iM3u);
                                       _setSource(_SourceKind.m3u);
                                     },
                                   ),
@@ -355,13 +418,13 @@ class _LoginPageState extends State<LoginPage> {
                                 const SizedBox(width: 12),
                                 Expanded(
                                   child: _SelectTile(
-                                    selected: _selected == 2,
+                                    selected: _selected == _iXtream,
                                     active: _source == _SourceKind.xtream,
                                     label: 'Xtream',
                                     icon: Icons.cloud_outlined,
                                     compact: true,
                                     onTap: () {
-                                      setState(() => _selected = 2);
+                                      setState(() => _selected = _iXtream);
                                       _setSource(_SourceKind.xtream);
                                     },
                                   ),
@@ -371,7 +434,7 @@ class _LoginPageState extends State<LoginPage> {
                             if (_source == _SourceKind.none) ...[
                               const SizedBox(height: 16),
                               Text(
-                                'A on M3U or Xtream to continue',
+                                'A on M3U or Xtream to add · saved after connect',
                                 style: theme.textTheme.bodySmall?.copyWith(
                                   color: theme.colorScheme.outline,
                                 ),
@@ -387,25 +450,25 @@ class _LoginPageState extends State<LoginPage> {
                               ),
                               const SizedBox(height: 12),
                               _SelectField(
-                                selected: _selected == 3,
+                                selected: _selected == _iField0,
                                 label: 'Playlist URL (http… .m3u)',
                                 controller: _m3uUrl,
                                 focusNode: _m3uFocus,
                                 keyboardType: TextInputType.url,
                                 onTap: () {
-                                  setState(() => _selected = 3);
+                                  setState(() => _selected = _iField0);
                                   _syncFieldFocus();
                                 },
                               ),
                               const SizedBox(height: 12),
                               _SelectTile(
-                                selected: _selected == 4,
+                                selected: _selected == _iField0 + 1,
                                 label: _busy
                                     ? 'Loading M3U…'
                                     : 'Open M3U playlist',
                                 icon: Icons.login,
                                 onTap: () {
-                                  setState(() => _selected = 4);
+                                  setState(() => _selected = _iField0 + 1);
                                   if (!_busy) _loadM3u();
                                 },
                               ),
@@ -420,30 +483,30 @@ class _LoginPageState extends State<LoginPage> {
                               ),
                               const SizedBox(height: 12),
                               _SelectField(
-                                selected: _selected == 3,
+                                selected: _selected == _iField0,
                                 label: 'Server URL (http://host:port)',
                                 controller: _url,
                                 focusNode: _urlFocus,
                                 keyboardType: TextInputType.url,
                                 onTap: () {
-                                  setState(() => _selected = 3);
+                                  setState(() => _selected = _iField0);
                                   _syncFieldFocus();
                                 },
                               ),
                               const SizedBox(height: 12),
                               _SelectField(
-                                selected: _selected == 4,
+                                selected: _selected == _iField0 + 1,
                                 label: 'Username',
                                 controller: _user,
                                 focusNode: _userFocus,
                                 onTap: () {
-                                  setState(() => _selected = 4);
+                                  setState(() => _selected = _iField0 + 1);
                                   _syncFieldFocus();
                                 },
                               ),
                               const SizedBox(height: 12),
                               _SelectField(
-                                selected: _selected == 5,
+                                selected: _selected == _iField0 + 2,
                                 label: 'Password',
                                 controller: _pass,
                                 focusNode: _passFocus,
@@ -451,7 +514,7 @@ class _LoginPageState extends State<LoginPage> {
                                 textInputAction: TextInputAction.done,
                                 onSubmitted: _busy ? null : _connect,
                                 onTap: () {
-                                  setState(() => _selected = 5);
+                                  setState(() => _selected = _iField0 + 2);
                                   _syncFieldFocus();
                                 },
                                 suffix: IconButton(
@@ -472,13 +535,13 @@ class _LoginPageState extends State<LoginPage> {
                               ),
                               const SizedBox(height: 20),
                               _SelectTile(
-                                selected: _selected == 6,
+                                selected: _selected == _iField0 + 3,
                                 label: _busy
                                     ? 'Connecting…'
                                     : 'Connect to provider',
                                 icon: Icons.login,
                                 onTap: () {
-                                  setState(() => _selected = 6);
+                                  setState(() => _selected = _iField0 + 3);
                                   if (!_busy) _connect();
                                 },
                               ),
@@ -495,7 +558,8 @@ class _LoginPageState extends State<LoginPage> {
                             if (_isTextFieldSelected) ...[
                               const SizedBox(height: 16),
                               Text(
-                                _source == _SourceKind.xtream && _selected == 5
+                                _source == _SourceKind.xtream &&
+                                        _selected == _iField0 + 2
                                     ? 'Type with OSK · eye icon shows password · A = connect'
                                     : 'Type with OSK · D-pad moves · A confirms',
                                 style: theme.textTheme.bodySmall?.copyWith(
@@ -537,8 +601,8 @@ class _SelectTile extends StatelessWidget {
   const _SelectTile({
     required this.selected,
     required this.label,
+    required this.icon,
     required this.onTap,
-    this.icon,
     this.active = false,
     this.compact = false,
   });
@@ -547,14 +611,12 @@ class _SelectTile extends StatelessWidget {
   final bool active;
   final bool compact;
   final String label;
+  final IconData icon;
   final VoidCallback onTap;
-  final IconData? icon;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // Focus ring uses primary; "active source" keeps a soft primary tint when
-    // focus moves into the form below.
     final bg = selected
         ? theme.colorScheme.primary
         : active
@@ -569,52 +631,42 @@ class _SelectTile extends StatelessWidget {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 100),
         padding: EdgeInsets.symmetric(
-          horizontal: compact ? 14 : 20,
-          vertical: compact ? 18 : 16,
+          horizontal: 20,
+          vertical: compact ? 14 : 18,
         ),
         decoration: BoxDecoration(
           color: bg,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: selected
+            color: selected || active
                 ? theme.colorScheme.primaryContainer
-                : active
-                    ? theme.colorScheme.primary.withValues(alpha: 0.55)
-                    : Colors.transparent,
+                : Colors.transparent,
             width: 3,
           ),
           boxShadow: selected
               ? [
                   BoxShadow(
-                    color: theme.colorScheme.primary.withValues(alpha: 0.45),
-                    blurRadius: 16,
+                    color: theme.colorScheme.primary.withValues(alpha: 0.4),
+                    blurRadius: 14,
                   ),
                 ]
               : null,
         ),
         child: Row(
-          mainAxisAlignment:
-              compact ? MainAxisAlignment.center : MainAxisAlignment.start,
           children: [
-            if (icon != null) ...[
-              Icon(icon, color: fg, size: compact ? 26 : 28),
-              SizedBox(width: compact ? 8 : 12),
-            ],
-            Flexible(
+            Icon(icon, color: fg, size: compact ? 24 : 28),
+            const SizedBox(width: 12),
+            Expanded(
               child: Text(
                 label,
-                textAlign: compact ? TextAlign.center : TextAlign.start,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
                 style: theme.textTheme.titleMedium?.copyWith(
                   color: fg,
-                  fontWeight:
-                      selected || active ? FontWeight.w700 : FontWeight.w500,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                 ),
               ),
             ),
-            if (active && !selected) ...[
-              const SizedBox(width: 6),
-              Icon(Icons.check_circle, color: fg, size: 20),
-            ],
           ],
         ),
       ),
@@ -631,7 +683,7 @@ class _SelectField extends StatelessWidget {
     required this.onTap,
     this.obscureText = false,
     this.keyboardType,
-    this.textInputAction = TextInputAction.next,
+    this.textInputAction,
     this.onSubmitted,
     this.suffix,
   });
@@ -643,7 +695,7 @@ class _SelectField extends StatelessWidget {
   final VoidCallback onTap;
   final bool obscureText;
   final TextInputType? keyboardType;
-  final TextInputAction textInputAction;
+  final TextInputAction? textInputAction;
   final VoidCallback? onSubmitted;
   final Widget? suffix;
 
@@ -654,42 +706,41 @@ class _SelectField extends StatelessWidget {
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 100),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: selected ? theme.colorScheme.primary : Colors.transparent,
-            width: 3,
+            color: selected
+                ? theme.colorScheme.primary
+                : theme.colorScheme.outline.withValues(alpha: 0.35),
+            width: selected ? 3 : 1,
           ),
           boxShadow: selected
               ? [
                   BoxShadow(
-                    color: theme.colorScheme.primary.withValues(alpha: 0.35),
+                    color: theme.colorScheme.primary.withValues(alpha: 0.25),
                     blurRadius: 12,
                   ),
                 ]
               : null,
         ),
         child: TextField(
-          focusNode: focusNode,
           controller: controller,
+          focusNode: focusNode,
           obscureText: obscureText,
           keyboardType: keyboardType,
-          style: theme.textTheme.titleMedium,
+          textInputAction: textInputAction ?? TextInputAction.next,
+          onTap: onTap,
+          onSubmitted: onSubmitted == null ? null : (_) => onSubmitted!(),
           decoration: InputDecoration(
             labelText: label,
-            filled: true,
-            fillColor: theme.colorScheme.surfaceContainerHighest,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide.none,
+            border: InputBorder.none,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 14,
             ),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
             suffixIcon: suffix,
           ),
-          textInputAction: textInputAction,
-          onTap: onTap,
-          onSubmitted: (_) => onSubmitted?.call(),
         ),
       ),
     );
