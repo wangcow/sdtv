@@ -30,8 +30,24 @@ class _SdtvAppState extends State<SdtvApp> {
   }
 
   void _onMetricsChanged() {
-    // Deck docked → 1080p TV: re-fit external mpv if a session is live.
-    unawaited(widget.session.externalMpv.notifyDisplayChanged());
+    // Deck docked → 1080p TV: pass real physical pixels (Gamescope ignores
+    // bare fullscreen toggles; geometry needs an explicit size).
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    if (views.isEmpty) {
+      unawaited(widget.session.externalMpv.notifyDisplayChanged());
+      return;
+    }
+    final size = views.first.physicalSize;
+    final w = size.width.round();
+    final h = size.height.round();
+    if (w < 64 || h < 64) {
+      unawaited(widget.session.externalMpv.notifyDisplayChanged());
+      return;
+    }
+    debugPrint('sdtv: metrics → ${w}x$h (refit mpv if watching)');
+    unawaited(
+      widget.session.externalMpv.notifyDisplayChanged(width: w, height: h),
+    );
   }
 
   @override

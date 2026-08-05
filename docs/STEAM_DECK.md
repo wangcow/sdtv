@@ -30,6 +30,17 @@
 
 See [CONTROLLER.md](CONTROLLER.md) for the full button map.
 
+## Dock / TV resolution
+
+When launching from **Game Mode**, Gamescope owns the output size.
+
+1. **STEAM** → sdtv → **Properties** → **General**  
+   - Resolution (external display): **Default** or **Native** — not a fixed 1280×800.
+2. **Settings → Display** (while docked): external resolution / scaling as you prefer for the TV.
+3. If you dock **while a channel is already playing**, sdtv re-fits mpv using the new pixel size (may flash once or twice). If the picture stays small, **B** back to guide and play again — that always restarts mpv at the current output size.
+
+Channels that are actually 720p will still look soft when the window correctly fills 1080p.
+
 ## Development build (now)
 
 Until Flatpak is published, run from source on Desktop Mode:

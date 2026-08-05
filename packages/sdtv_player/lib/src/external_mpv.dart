@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 
@@ -81,6 +82,9 @@ class ExternalMpvLauncher {
 
   /// Dock / display-size watch while fullscreen (handheld → TV).
   Timer? _displayWatch;
+  Timer? _refitBurst;
+  int? _targetW;
+  int? _targetH;
   String? _lastDisplayFp;
   DateTime? _lastRefitAt;
 
@@ -730,100 +734,227 @@ class ExternalMpvLauncher {
     }
   }
 
-  /// Re-assert fullscreen when the Deck docks (800p → 1080p TV) or undocks.
+  /// Force the VO window to match the active output (Deck dock / undock).
   ///
-  /// mpv often keeps the handheld window size on the new output; toggling
-  /// fullscreen forces the compositor / gamescope to re-place the VO.
-  Future<void> refitFullscreen({String reason = 'manual'}) async {
+  /// Under Gamescope, a plain `fullscreen` toggle often does nothing — the
+  /// window keeps the handheld size. We set **explicit geometry** (Flutter
+  /// physical pixels and/or mpv `display-width`/`display-height`), allow the
+  /// window aspect to change, then re-enter fullscreen.
+  Future<void> refitFullscreen({
+    String reason = 'manual',
+    int? width,
+    int? height,
+  }) async {
     if (!isRunning) return;
     final now = DateTime.now();
     if (_lastRefitAt != null &&
-        now.difference(_lastRefitAt!) < const Duration(milliseconds: 900)) {
+        now.difference(_lastRefitAt!) < const Duration(milliseconds: 400)) {
       return;
     }
     _lastRefitAt = now;
-    debugPrint('sdtv_player: refit fullscreen ($reason)');
-    // Soft assert first (cheap).
-    await sendCommand(['set', 'fullscreen', 'yes']);
-    await sendCommand(['set', 'window-maximized', 'yes']);
+
+    // Resolve target pixels: caller → stored Flutter size → mpv display props.
+    var tw = width ?? _targetW;
+    var th = height ?? _targetH;
+    if (tw == null || th == null || tw < 64 || th < 64) {
+      final dw = _asPositiveInt(await getProperty('display-width'));
+      final dh = _asPositiveInt(await getProperty('display-height'));
+      if (dw != null && dh != null) {
+        tw = dw;
+        th = dh;
+      }
+    }
+    if (tw != null && th != null && tw >= 64 && th >= 64) {
+      _targetW = tw;
+      _targetH = th;
+    }
+
+    final geo = (tw != null && th != null && tw >= 64 && th >= 64)
+        ? '${tw}x$th'
+        : null;
+    debugPrint(
+      'sdtv_player: refit fullscreen ($reason)'
+      '${geo != null ? ' geometry=$geo' : ''}',
+    );
+
+    // Leave fullscreen so geometry can actually change (Gamescope/X11).
+    await sendCommand(['set', 'fullscreen', 'no']);
+    await sendCommand(['set', 'window-maximized', 'no']);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    if (!isRunning) return;
+
+    // Window may change aspect (800p 16:10 → 1080p 16:9); video still letterboxes.
+    await sendCommand(['set', 'keepaspect-window', 'no']);
+    await sendCommand(['set', 'keepaspect', 'yes']);
+    await sendCommand(['set', 'video-unscaled', 'no']);
     await sendCommand(['set', 'video-zoom', '0']);
     await sendCommand(['set', 'panscan', '0']);
-    // Hard toggle — needed when the output resolution changed under us.
-    await sendCommand(['set', 'fullscreen', 'no']);
-    await Future<void>.delayed(const Duration(milliseconds: 40));
+    await sendCommand(['set', 'border', 'no']);
+
+    if (geo != null) {
+      // Absolute pixel size of the window (not a scale factor).
+      await sendCommand(['set', 'geometry', geo]);
+      await sendCommand(['set', 'autofit', geo]);
+      await sendCommand(['set', 'autofit-larger', geo]);
+      // Reset any stale scale from the handheld session.
+      await sendCommand(['set', 'window-scale', '1']);
+    }
+
+    await Future<void>.delayed(const Duration(milliseconds: 50));
     if (!isRunning) return;
+    await sendCommand(['set', 'window-maximized', 'yes']);
+    await sendCommand(['set', 'fullscreen', 'yes']);
+
+    // Second pass after VO reconfig (Gamescope often needs two kicks).
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    if (!isRunning) return;
+    if (geo != null) {
+      await sendCommand(['set', 'geometry', geo]);
+    }
     await sendCommand(['set', 'fullscreen', 'yes']);
   }
 
-  /// Called from Flutter [didChangeMetrics] (dock/undock).
-  Future<void> notifyDisplayChanged() =>
-      refitFullscreen(reason: 'flutter-metrics');
+  /// Flutter [didChangeMetrics] (dock/undock). Prefer real physical pixels.
+  ///
+  /// Fires a short **burst** of refits — Gamescope often settles over 1–2s.
+  Future<void> notifyDisplayChanged({int? width, int? height}) async {
+    if (!isRunning) return;
+    if (width != null && height != null && width >= 64 && height >= 64) {
+      _targetW = width;
+      _targetH = height;
+      _lastDisplayFp = '${width}x$height';
+    }
+    _refitBurst?.cancel();
+    // Immediate + delayed passes (Gamescope often settles over 1–3s after dock).
+    unawaited(
+      refitFullscreen(
+        reason: 'flutter-metrics',
+        width: width,
+        height: height,
+      ),
+    );
+    final w = width;
+    final h = height;
+    final delays = <int>[350, 900, 1800, 3200];
+    // One timer that fires the staggered passes (cancellable on quit).
+    var pass = 0;
+    final started = DateTime.now();
+    _refitBurst = Timer.periodic(const Duration(milliseconds: 100), (t) {
+      if (!isRunning) {
+        t.cancel();
+        return;
+      }
+      final elapsed = DateTime.now().difference(started).inMilliseconds;
+      while (pass < delays.length && elapsed >= delays[pass]) {
+        final n = ++pass;
+        unawaited(
+          refitFullscreen(
+            reason: 'flutter-metrics+$n',
+            width: w,
+            height: h,
+          ),
+        );
+      }
+      if (pass >= delays.length) t.cancel();
+    });
+  }
 
   void _startDisplayWatch() {
     _stopDisplayWatch();
     _lastDisplayFp = null;
-    unawaited(_pollDisplayAndRefit(initial: true));
-    _displayWatch = Timer.periodic(const Duration(seconds: 2), (_) {
-      unawaited(_pollDisplayAndRefit());
+    // Prefer mpv's own display/window props — xrandr is often wrong under Gamescope.
+    unawaited(_pollMpvWindowVsDisplay(initial: true));
+    _displayWatch = Timer.periodic(const Duration(seconds: 3), (_) {
+      unawaited(_pollMpvWindowVsDisplay());
     });
   }
 
   void _stopDisplayWatch() {
     _displayWatch?.cancel();
     _displayWatch = null;
+    _refitBurst?.cancel();
+    _refitBurst = null;
   }
 
-  Future<void> _pollDisplayAndRefit({bool initial = false}) async {
+  /// If mpv's window (osd-*) is smaller than its reported display, re-fit.
+  Future<void> _pollMpvWindowVsDisplay({bool initial = false}) async {
     if (!isRunning) {
       _stopDisplayWatch();
       return;
     }
-    final fp = await _displayFingerprint();
-    if (fp == null) return;
-    if (initial || _lastDisplayFp == null) {
-      _lastDisplayFp = fp;
-      return;
+
+    final dw = _asPositiveInt(await getProperty('display-width'));
+    final dh = _asPositiveInt(await getProperty('display-height'));
+    final ow = _asPositiveInt(await getProperty('osd-width')) ??
+        _asPositiveInt(await getProperty('vo-configured-width'));
+    final oh = _asPositiveInt(await getProperty('osd-height')) ??
+        _asPositiveInt(await getProperty('vo-configured-height'));
+
+    // Flutter may know a newer size (dock) before mpv updates display-*.
+    final tw = _targetW;
+    final th = _targetH;
+
+    final fp = (dw != null && dh != null)
+        ? '${dw}x$dh'
+        : (tw != null && th != null ? '${tw}x$th' : null);
+    if (fp != null) {
+      if (initial || _lastDisplayFp == null) {
+        _lastDisplayFp = fp;
+      } else if (fp != _lastDisplayFp) {
+        debugPrint('sdtv_player: display fingerprint $_lastDisplayFp → $fp');
+        _lastDisplayFp = fp;
+        await refitFullscreen(
+          reason: 'display-fp:$fp',
+          width: dw ?? tw,
+          height: dh ?? th,
+        );
+        return;
+      }
     }
-    if (fp == _lastDisplayFp) return;
-    debugPrint('sdtv_player: display $_lastDisplayFp → $fp');
-    _lastDisplayFp = fp;
-    await refitFullscreen(reason: 'display:$fp');
+
+    // Window much smaller than target / display → stuck at handheld size.
+    final wantW = tw ?? dw;
+    final wantH = th ?? dh;
+    if (wantW == null || wantH == null || ow == null || oh == null) return;
+
+    final mismatchW = ow < wantW * 0.90 || ow > wantW * 1.12;
+    final mismatchH = oh < wantH * 0.90 || oh > wantH * 1.12;
+    if (mismatchW || mismatchH) {
+      debugPrint(
+        'sdtv_player: vo size ${ow}x$oh vs want ${wantW}x$wantH — refit',
+      );
+      await refitFullscreen(
+        reason: 'vo-mismatch',
+        width: wantW,
+        height: wantH,
+      );
+    }
   }
 
-  /// Best-effort current output size key (`1920x1080`, etc.).
-  static Future<String?> _displayFingerprint() async {
+  static int? _asPositiveInt(Object? v) {
+    if (v == null) return null;
+    if (v is int) return v > 0 ? v : null;
+    if (v is double) return v > 0 ? v.round() : null;
+    return int.tryParse('$v');
+  }
+
+  /// Snapshot Flutter view physical size (Gamescope nest) if available.
+  void _seedTargetFromFlutterViews() {
     try {
-      final r = await Process.run('xrandr', ['--current'])
-          .timeout(const Duration(milliseconds: 400));
-      if (r.exitCode == 0) {
-        final out = '${r.stdout}';
-        final primary = RegExp(r' connected primary (\d+)x(\d+)')
-            .firstMatch(out);
-        if (primary != null) {
-          return '${primary.group(1)}x${primary.group(2)}';
-        }
-        final any = RegExp(r' connected(?: primary)? (\d+)x(\d+)')
-            .firstMatch(out);
-        if (any != null) return '${any.group(1)}x${any.group(2)}';
-        final cur = RegExp(r'current (\d+) x (\d+)').firstMatch(out);
-        if (cur != null) return '${cur.group(1)}x${cur.group(2)}';
+      final views = ui.PlatformDispatcher.instance.views;
+      if (views.isEmpty) return;
+      final s = views.first.physicalSize;
+      final w = s.width.round();
+      final h = s.height.round();
+      if (w >= 64 && h >= 64) {
+        _targetW = w;
+        _targetH = h;
+        _lastDisplayFp = '${w}x$h';
+        debugPrint('sdtv_player: seed display target ${w}x$h');
       }
-    } catch (_) {}
-    try {
-      final r = await Process.run('xdpyinfo', [])
-          .timeout(const Duration(milliseconds: 400));
-      if (r.exitCode == 0) {
-        final m = RegExp(r'dimensions:\s+(\d+)x(\d+)').firstMatch('${r.stdout}');
-        if (m != null) return '${m.group(1)}x${m.group(2)}';
-      }
-    } catch (_) {}
-    // Gamescope / nested: resolution often in env.
-    final gx = Platform.environment['GAMESCOPE_WIDTH'] ??
-        Platform.environment['XDG_WIDTH'];
-    final gy = Platform.environment['GAMESCOPE_HEIGHT'] ??
-        Platform.environment['XDG_HEIGHT'];
-    if (gx != null && gy != null) return '${gx}x$gy';
-    return null;
+    } catch (e) {
+      debugPrint('sdtv_player: seed display target failed: $e');
+    }
   }
 
   /// Play fullscreen until quit.
@@ -976,10 +1107,13 @@ end)
         '--osd-duration=2000',
         // Larger, more readable OSC on TV / Deck.
         '--script-opts=osc-visibility=auto,osc-deadzonesize=0,osc-scalewindowed=1.5,osc-scalefullscreen=1.5,osc-valign=0.9,osc-idlescreen=no',
-        // Fit the active output (dock 1080p / handheld). Keep aspect; no 1:1 unscaled.
+        // Fit the active output (dock 1080p / handheld).
+        // keepaspect-window=no → window can become 16:9 on TV; video still letterboxes.
         '--keepaspect=yes',
+        '--keepaspect-window=no',
         '--video-unscaled=no',
         '--panscan=0',
+        '--border=no',
         '--hwdec=vaapi,vaapi-copy,auto-copy,auto',
         '--profile=fast',
         '--framedrop=vo',
@@ -1022,6 +1156,7 @@ end)
       _process = proc;
       // Launch complete — playback wait is not "launching".
       _launching = false;
+      _seedTargetFromFlutterViews();
       _startDisplayWatch();
 
       unawaited(proc.stdout.drain<void>());
