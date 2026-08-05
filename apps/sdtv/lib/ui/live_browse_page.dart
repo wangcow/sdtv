@@ -364,6 +364,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _column = 1;
       _chanIndex = idx;
     });
+    session.prefetchShortEpgAround(session.channelsInCategory, idx);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _scrollToChannelIndex(idx);
@@ -460,6 +461,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       });
       _rememberChanIndex();
       _scrollToChannelIndex(_chanIndex);
+      session.prefetchShortEpgAround(chans, _chanIndex);
     }
   }
 
@@ -1232,6 +1234,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                               final selected = _chanIndex == i;
                               final focused = _column == 1 && selected;
                               final fav = session.isFavorite(ch);
+                              final epgLine = session.shortEpgSubtitle(ch);
                               return SizedBox(
                                 height: _rowExtent,
                                 child: Padding(
@@ -1239,6 +1242,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                   child: _BrowseTile(
                                     label:
                                         '${ch.num > 0 ? '${ch.num}. ' : ''}${ch.name}',
+                                    subtitle: epgLine,
                                     icon: fav
                                         ? Icons.star_rounded
                                         : Icons.live_tv_outlined,
@@ -1250,6 +1254,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                         _chanIndex = i;
                                       });
                                       _rememberChanIndex();
+                                      session.prefetchShortEpgAround(
+                                        channels,
+                                        i,
+                                      );
                                       await _activate();
                                     },
                                     onLongPress: () async {
@@ -1728,11 +1736,13 @@ class _BrowseTile extends StatelessWidget {
     required this.onTap,
     this.onLongPress,
     this.icon,
+    this.subtitle,
     this.dimSelected = false,
     this.danger = false,
   });
 
   final String label;
+  final String? subtitle;
   final bool selected;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
@@ -1774,12 +1784,16 @@ class _BrowseTile extends StatelessWidget {
             ? theme.colorScheme.primaryContainer
             : Colors.transparent);
 
+    final subColor = selected
+        ? fg.withValues(alpha: 0.88)
+        : theme.colorScheme.onSurface.withValues(alpha: 0.65);
+
     return GestureDetector(
       onTap: onTap,
       onLongPress: onLongPress,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 100),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
           color: bg,
           borderRadius: BorderRadius.circular(12),
@@ -1804,16 +1818,36 @@ class _BrowseTile extends StatelessWidget {
               const SizedBox(width: 10),
             ],
             Expanded(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.titleMedium?.copyWith(
-                  color: fg,
-                  fontWeight: active || danger
-                      ? FontWeight.w700
-                      : FontWeight.w500,
-                ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      color: fg,
+                      fontWeight: active || danger
+                          ? FontWeight.w700
+                          : FontWeight.w500,
+                      height: 1.15,
+                    ),
+                  ),
+                  if (subtitle != null && subtitle!.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: subColor,
+                        fontWeight: FontWeight.w500,
+                        height: 1.1,
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
           ],
