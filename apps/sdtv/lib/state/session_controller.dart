@@ -1447,22 +1447,8 @@ class SessionController extends ChangeNotifier {
       debugPrint('sdtv: embed open failed ($url): $lastErr');
     }
 
-    // Last resort: software decode + first URL again (VAAPI texture issues).
-    if (player is MediaKitSdtvPlayerController) {
-      try {
-        await (player as MediaKitSdtvPlayerController).preferSoftwareDecode();
-        await player.open(candidates.first, httpHeaders: _streamHttpHeaders);
-        await Future<void>.delayed(const Duration(milliseconds: 1200));
-        if (player.state != SdtvPlayerState.error) {
-          notifyListeners();
-          return null;
-        }
-        lastErr = player.lastError;
-      } catch (e) {
-        lastErr = e.toString();
-      }
-    }
-
+    // Avoid automatic software decode — it tanks Deck embed FPS (~7fps).
+    // Prefer reporting error so the user can retry / use external mpv.
     notifyListeners();
     return lastErr ?? 'Playback failed (embedded)';
   }

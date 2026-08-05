@@ -24,6 +24,15 @@ abstract class SdtvPlayerController extends Listenable {
   /// Decode path summary for HUD (never empty after first open attempt).
   String get decodeLabel => 'decode: —';
 
+  /// Embed perf line (FPS + texture + decode). Empty for stub.
+  String get perfLabel => '';
+
+  /// Estimated output FPS (0 if unknown).
+  double get estimatedFps => 0;
+
+  /// Texture height cap used by the video controller (0 if N/A).
+  int get textureHeight => 0;
+
   /// Playback position (VOD / when stream reports time).
   Duration get position => Duration.zero;
 
@@ -85,6 +94,15 @@ class StubSdtvPlayerController extends ChangeNotifier
 
   @override
   String get decodeLabel => 'decode: stub';
+
+  @override
+  String get perfLabel => 'perf: stub';
+
+  @override
+  double get estimatedFps => 0;
+
+  @override
+  int get textureHeight => 0;
 
   @override
   VideoController? get videoController => null;
@@ -185,20 +203,21 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
         logLevel: MPVLogLevel.warn,
       ),
     );
-    // Texture size is the main lever for Flutter/linux present FPS.
-    // vaapi-copy still uploads every frame to a GL texture; 720p upload on Deck
-    // was ~7–8 Flutter FPS. Cap lower for couch IPTV (panel is ~800p anyway).
-    final texH = int.tryParse(
+    // Texture height is the main FPS lever (CPU/GPU upload into Flutter).
+    // 720p ≈ 7–8 FPS on Deck; 480p was mid-teens; default 360 targets ~24–30
+    // on typical live. Override: SDTV_VIDEO_HEIGHT=480|720
+    _textureHeight = int.tryParse(
           Platform.environment['SDTV_VIDEO_HEIGHT'] ?? '',
         ) ??
-        480;
+        360;
+    if (_textureHeight <= 0) _textureHeight = 360;
     _videoController = VideoController(
       _player,
       configuration: VideoControllerConfiguration(
         enableHardwareAcceleration: true,
         // media_kit → vo=libmpv texture. Prefer copy-mode VAAPI.
         hwdec: 'vaapi-copy,auto-copy,auto',
-        height: texH > 0 ? texH : 480,
+        height: _textureHeight,
       ),
     );
 
@@ -214,7 +233,7 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
       _resyncFromNative();
     }));
 
-    // Position ticks while audio/video advances — clears stuck "buffering" UI.
+    // Position ticks — keep _position hot but rarely notify (HUD thrash kills FPS).
     _subs.add(_player.stream.position.listen((pos) {
       if (_disposed) return;
       _position = pos;
@@ -225,10 +244,10 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
           return;
         }
       }
-      // Throttle HUD rebuilds: ~4 Hz is enough for a scrubber.
+      // ~1 Hz while playing: scrubber does not need 4+ rebuilds/sec.
       final now = DateTime.now();
       if (_lastPosNotify == null ||
-          now.difference(_lastPosNotify!) > const Duration(milliseconds: 250)) {
+          now.difference(_lastPosNotify!) > const Duration(milliseconds: 900)) {
         _lastPosNotify = now;
         notifyListeners();
       }
@@ -248,6 +267,11 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
       _setState(SdtvPlayerState.error);
       debugPrint('sdtv_player error: $message');
     }));
+
+    // Sample mpv FPS / decode path while a stream is open.
+    _perfTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      unawaited(_samplePerf());
+    });
   }
 
   late final Player _player;
@@ -258,11 +282,15 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   String? _url;
   String? _error;
   String _decodeLabel = 'decode: —';
+  String _perfLabel = 'perf: —';
+  double _estimatedFps = 0;
+  int _textureHeight = 360;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   DateTime? _lastPosNotify;
   bool _disposed = false;
   Timer? _bufferStuckTimer;
+  Timer? _perfTimer;
 
   /// libmpv properties that reduce rebuffer/stutter on weak live HLS.
   Future<void> _applyLinuxPerfProps() async {
@@ -274,8 +302,8 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
       final dynamic native = platform;
       if (native.setProperty is! Function) return;
 
-      // media_kit texture path: copy hwdec + drop frames rather than stutter.
-      const props = <String, String>{
+      // Texture VO path: drop frames freely, cheapest scale, keep audio locked.
+      final props = <String, String>{
         'hwdec': 'vaapi-copy',
         'hwdec-codecs': 'all',
         'vo': 'libmpv',
@@ -285,17 +313,29 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
         'cache': 'yes',
         'cache-pause': 'no',
         'cache-pause-initial': 'no',
-        'demuxer-max-bytes': '104857600',
-        'demuxer-max-back-bytes': '52428800',
-        'demuxer-readahead-secs': '15',
-        'cache-secs': '30',
+        'demuxer-max-bytes': '83886080',
+        'demuxer-max-back-bytes': '33554432',
+        'demuxer-readahead-secs': '8',
+        'cache-secs': '20',
         'interpolation': 'no',
-        'video-sync': 'display-vdrop',
+        // Prefer audio clock; drop video rather than stutter audio.
+        'video-sync': 'audio',
         'framedrop': 'decoder+vo',
         'opengl-pbo': 'yes',
         'opengl-swapinterval': '0',
         'vd-lavc-threads': '0',
         'audio-buffer': '0.05',
+        // Cheapest scaling into the small texture.
+        'scale': 'bilinear',
+        'cscale': 'bilinear',
+        'dscale': 'bilinear',
+        'correct-downscaling': 'no',
+        'linear-downscaling': 'no',
+        'sigmoid-upscaling': 'no',
+        'deband': 'no',
+        'dither': 'no',
+        // Cap internal VO rate so we don't upload 60fps into Flutter.
+        'vf': 'fps=$_embedTargetFps',
       };
       for (final e in props.entries) {
         try {
@@ -310,9 +350,67 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
           'vaapi-copy,auto-copy,auto-safe,auto',
         ) as Future?;
       } catch (_) {}
-      debugPrint('sdtv_player: applied Deck live/texture perf props');
+      debugPrint(
+        'sdtv_player: texture perf props texH=$_textureHeight '
+        'targetFps=$_embedTargetFps',
+      );
     } catch (e) {
       debugPrint('sdtv_player tune: $e');
+    }
+  }
+
+  /// Target FPS for the embed texture path (default 30). SDTV_EMBED_FPS=24|30
+  static int get _embedTargetFps {
+    final v = int.tryParse(Platform.environment['SDTV_EMBED_FPS'] ?? '');
+    if (v != null && v >= 15 && v <= 60) return v;
+    return 30;
+  }
+
+  Future<void> _samplePerf() async {
+    if (_disposed || _url == null) return;
+    if (_state != SdtvPlayerState.playing &&
+        _state != SdtvPlayerState.buffering) {
+      return;
+    }
+    try {
+      final dynamic native = _player.platform;
+      if (native == null || native.getProperty is! Function) return;
+
+      Future<String> prop(String name) async {
+        try {
+          final v = await native.getProperty(name);
+          if (v == null || v == false) return '';
+          return '$v'.trim();
+        } catch (_) {
+          return '';
+        }
+      }
+
+      // Prefer measured filter FPS; fall back to container.
+      var fpsStr = await prop('estimated-vf-fps');
+      if (fpsStr.isEmpty || fpsStr == '0' || fpsStr == '0.000') {
+        fpsStr = await prop('container-fps');
+      }
+      final fps = double.tryParse(fpsStr) ?? 0;
+      if (fps > 0) _estimatedFps = fps;
+
+      final hw = await prop('hwdec-current');
+      final w = await prop('width');
+      final h = await prop('height');
+      final src = w.isNotEmpty && h.isNotEmpty ? '${w}x$h' : '?';
+      final fpsShow = _estimatedFps > 0 ? _estimatedFps.toStringAsFixed(0) : '—';
+      final hwShow = (hw.isEmpty || hw == 'no')
+          ? (hw == 'no' ? 'cpu' : '?')
+          : hw;
+      final next =
+          'perf: ${fpsShow}fps · tex${_textureHeight}p · $hwShow · src $src';
+      if (next != _perfLabel) {
+        _perfLabel = next;
+        // Low-rate notify so chrome can show FPS without thrashing.
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('sdtv_player perf sample: $e');
     }
   }
 
@@ -365,6 +463,7 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
     final codecPart = codec.isEmpty ? '' : ' · $codec';
     _decodeLabel = 'decode: $hwPart$codecPart · mpv=$src';
     debugPrint('sdtv_player $_decodeLabel (hwdec=$hwdecReq current=$hw)');
+    unawaited(_samplePerf());
     if (!_disposed) notifyListeners();
   }
 
@@ -424,6 +523,15 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
 
   @override
   String get decodeLabel => _decodeLabel;
+
+  @override
+  String get perfLabel => _perfLabel;
+
+  @override
+  double get estimatedFps => _estimatedFps;
+
+  @override
+  int get textureHeight => _textureHeight;
 
   @override
   Duration get position => _position;
@@ -579,6 +687,8 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   Future<void> dispose() async {
     _disposed = true;
     _bufferStuckTimer?.cancel();
+    _perfTimer?.cancel();
+    _perfTimer = null;
     for (final s in _subs) {
       await s.cancel();
     }

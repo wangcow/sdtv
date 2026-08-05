@@ -29,6 +29,7 @@ class PlayerChrome extends StatelessWidget {
     required this.focus,
     required this.showChrome,
     this.decodeLabel,
+    this.perfLabel,
     this.onPlayPause,
     this.onSeekBack,
     this.onSeekFwd,
@@ -46,6 +47,8 @@ class PlayerChrome extends StatelessWidget {
   final PlayerChromeFocus focus;
   final bool showChrome;
   final String? decodeLabel;
+  /// e.g. perf: 28fps · tex360p · vaapi-copy · src 1280x720
+  final String? perfLabel;
 
   final VoidCallback? onPlayPause;
   final VoidCallback? onSeekBack;
@@ -224,8 +227,20 @@ class PlayerChrome extends StatelessWidget {
                   color: Colors.white54,
                 ),
               ),
-              if (decodeLabel != null && decodeLabel!.isNotEmpty) ...[
+              if (perfLabel != null && perfLabel!.isNotEmpty) ...[
                 const SizedBox(height: 4),
+                Text(
+                  perfLabel!,
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: Colors.lightGreenAccent.withValues(alpha: 0.85),
+                    fontFamily: 'monospace',
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+              if (decodeLabel != null && decodeLabel!.isNotEmpty) ...[
+                const SizedBox(height: 2),
                 Text(
                   decodeLabel!,
                   textAlign: TextAlign.center,

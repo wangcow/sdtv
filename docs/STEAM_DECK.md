@@ -87,6 +87,21 @@ Selecting a channel **starts fullscreen `mpv`**, then returns to the channel lis
   ```
 - Debug: after launch, check `~/sdtv/.sdtv-runtime.txt` for `SDTV_MPV_PATH=…`.
 
+### Embedded player / chrome spike FPS
+
+☰ → **Chrome spike** uses media_kit **texture** upload (not external mpv). FPS is lower and channel-dependent.
+
+On-screen green line while chrome is visible:
+
+`perf: 28fps · tex360p · vaapi-copy · src 1280x720`
+
+| Env (optional `~/sdtv/sdtv.env`) | Effect |
+|----------------------------------|--------|
+| `SDTV_VIDEO_HEIGHT=360` | Texture height (default **360**; try `480` for sharper / slower) |
+| `SDTV_EMBED_FPS=30` | Cap internal fps filter (default 30; try `24`) |
+
+Daily **A play** still uses external mpv (smooth). Embed perf work is for chrome/VOD.
+
 ### Smooth video (VAAPI)
 
 Stutter + `decode: cpu/software` means **software decode**.
