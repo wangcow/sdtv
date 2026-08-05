@@ -159,19 +159,23 @@ class SessionController extends ChangeNotifier {
   /// Persist last played for relaunch (category + channel key).
   Future<void> rememberLastPlayed(LiveChannel channel) async {
     // Prefer the channel's real category so we can land in that list later.
-    // If user was in ★ Favorites, still store provider categoryId from channel.
     var catId = channel.categoryId;
     if (catId.isEmpty) {
       catId = selectedCategoryId ?? '';
     }
-    // When playing from favorites, keep favorites as the guide landing spot
-    // if that was the selected column — better "where I left off" UX.
-    if (selectedCategoryId == kFavoritesCategoryId) {
+    // When playing from favorites, resume on ★ Favorites if the channel is
+    // still starred; otherwise land in its provider category.
+    if (selectedCategoryId == kFavoritesCategoryId &&
+        isFavorite(channel)) {
       catId = kFavoritesCategoryId;
     }
     lastPlayedCategoryId = catId;
     lastPlayedFavoriteKey = channel.favoriteKey;
     lastPlayedName = channel.name;
+    debugPrint(
+      'sdtv: lastPlayed save scope=$prefsScope cat=$catId '
+      'key=${channel.favoriteKey} name=${channel.name}',
+    );
     await _settings.setLastPlayed(
       prefsScope,
       categoryId: catId,
@@ -180,19 +184,68 @@ class SessionController extends ChangeNotifier {
     );
   }
 
-  /// Channel for last-played key, if still in the catalog.
+  /// Channel for last-played key / name, if still in the catalog.
   LiveChannel? get lastPlayedChannel {
     final key = lastPlayedFavoriteKey;
-    if (key == null || key.isEmpty) return null;
-    return channelForFavoriteKey(key);
+    if (key != null && key.isNotEmpty) {
+      final byKey = channelForFavoriteKey(key);
+      if (byKey != null) return byKey;
+    }
+    final name = lastPlayedName?.trim().toLowerCase();
+    if (name == null || name.isEmpty) return null;
+    for (final c in allChannels) {
+      if (c.name.trim().toLowerCase() == name) return c;
+    }
+    return null;
   }
 
   /// Index of last-played channel in [channelsInCategory], or -1.
   int get lastPlayedChannelIndex {
-    final key = lastPlayedFavoriteKey;
-    if (key == null || key.isEmpty) return -1;
+    final ch = lastPlayedChannel;
+    if (ch == null) return -1;
     final list = channelsInCategory;
-    return list.indexWhere((c) => c.favoriteKey == key);
+    final byKey = list.indexWhere((c) => c.favoriteKey == ch.favoriteKey);
+    if (byKey >= 0) return byKey;
+    return list.indexWhere((c) => c.streamId == ch.streamId && c.name == ch.name);
+  }
+
+  /// Align [selectedCategoryId] so last-played channel is in the current list.
+  /// Returns true if a resume target was applied.
+  bool applyLastPlayedSelection() {
+    _reloadLastPlayed();
+    final ch = lastPlayedChannel;
+    debugPrint(
+      'sdtv: lastPlayed load scope=$prefsScope cat=$lastPlayedCategoryId '
+      'key=$lastPlayedFavoriteKey name=$lastPlayedName '
+      'resolved=${ch?.name}',
+    );
+    if (ch == null) {
+      // Still try last category if channel gone from catalog.
+      final lastCat = lastPlayedCategoryId;
+      if (lastCat != null &&
+          lastCat.isNotEmpty &&
+          (lastCat == kFavoritesCategoryId ||
+              categories.any((c) => c.categoryId == lastCat))) {
+        selectedCategoryId = lastCat;
+        return true;
+      }
+      return false;
+    }
+
+    final lastCat = lastPlayedCategoryId;
+    if (lastCat == kFavoritesCategoryId && isFavorite(ch)) {
+      selectedCategoryId = kFavoritesCategoryId;
+    } else if (categories.any((c) => c.categoryId == ch.categoryId)) {
+      selectedCategoryId = ch.categoryId;
+    } else if (lastCat != null &&
+        lastCat.isNotEmpty &&
+        (lastCat == kFavoritesCategoryId ||
+            categories.any((c) => c.categoryId == lastCat))) {
+      selectedCategoryId = lastCat;
+    } else {
+      selectedCategoryId = ch.categoryId;
+    }
+    return true;
   }
 
   /// Star / unstar [channel]. Returns true if now favorited.
@@ -663,15 +716,16 @@ class SessionController extends ChangeNotifier {
       categories = pl.categories;
       allChannels = pl.channels;
       // Scope depends on m3uPlaylistUrl — already set above.
-      _reloadGuidePrefs();
-      selectedCategoryId = _defaultCategoryId(pl.categories);
-
       if (save) {
         await _settings.saveSession(
           useDemo: false,
           useM3u: true,
           m3uUrl: m3uPlaylistUrl,
         );
+      }
+      _reloadGuidePrefs();
+      if (!applyLastPlayedSelection()) {
+        selectedCategoryId = _defaultCategoryId(pl.categories);
       }
       phase = SessionPhase.browse;
       notifyListeners();
@@ -820,9 +874,7 @@ class SessionController extends ChangeNotifier {
     allChannels = streams;
     this.useDemo = useDemo;
     this.mockCatalog = mockCatalog;
-    _reloadGuidePrefs();
-    selectedCategoryId = _defaultCategoryId(cats);
-
+    // Save credentials first so [prefsScope] matches while loading last-played.
     if (save) {
       await _settings.saveSession(
         useDemo: useDemo,
@@ -830,37 +882,17 @@ class SessionController extends ChangeNotifier {
         credentials: credentials,
       );
     }
+    _reloadGuidePrefs();
+    if (!applyLastPlayedSelection()) {
+      selectedCategoryId = _defaultCategoryId(cats);
+    }
 
     phase = SessionPhase.browse;
     notifyListeners();
   }
 
-  /// Last played category if still valid; else ★ Favorites if starred; else
-  /// first visible provider category.
+  /// Fallback when no last-played: ★ Favorites if starred, else first visible.
   String? _defaultCategoryId(List<MediaCategory> cats) {
-    final lastCat = lastPlayedCategoryId;
-    final lastKey = lastPlayedFavoriteKey;
-    if (lastCat != null && lastCat.isNotEmpty) {
-      if (lastCat == kFavoritesCategoryId) {
-        // Land on favorites if we still have that key (or any favorites).
-        if (lastKey != null &&
-            (channelForFavoriteKey(lastKey) != null ||
-                _favoriteKeys.isNotEmpty)) {
-          return kFavoritesCategoryId;
-        }
-      } else {
-        final exists = cats.any((c) => c.categoryId == lastCat);
-        if (exists) {
-          // Prefer last cat even if hidden so "resume" still works.
-          if (lastKey == null ||
-              lastKey.isEmpty ||
-              channelForFavoriteKey(lastKey) != null ||
-              allChannels.any((c) => c.categoryId == lastCat)) {
-            return lastCat;
-          }
-        }
-      }
-    }
     if (_favoriteKeys.isNotEmpty) return kFavoritesCategoryId;
     for (final c in cats) {
       if (!_hiddenCategoryIds.contains(c.categoryId)) {
@@ -909,8 +941,12 @@ class SessionController extends ChangeNotifier {
     _watchInFlight = true;
     nowPlaying = channel;
     notifyListeners();
-    // Fire-and-forget persist (don't block spawn on disk).
-    unawaited(rememberLastPlayed(channel));
+    // Await so a quick exit after play still has prefs flushed.
+    try {
+      await rememberLastPlayed(channel);
+    } catch (e) {
+      debugPrint('sdtv: rememberLastPlayed failed: $e');
+    }
 
     try {
       final uri = resolvePlayUri(channel);
