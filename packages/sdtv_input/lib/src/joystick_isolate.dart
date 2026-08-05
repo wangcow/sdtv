@@ -9,9 +9,11 @@ import 'linux_joystick.dart';
 
 /// Joystick pump that runs in a **background isolate**.
 ///
-/// media_kit video saturates the UI isolate once frames start; async reads
-/// scheduled on the UI isolate then deliver B/A/D-pad seconds late or drop.
-/// The isolate only sends edge *indices* to the main isolate.
+/// Opens **all** `/dev/input/js*` devices and **re-scans** periodically so a
+/// pad turned on after dock (Xbox) works without restarting the app.
+///
+/// media_kit / heavy UI work can starve pad reads on the UI isolate; the
+/// isolate only sends edge *indices* to the main isolate.
 class JoystickIsolate {
   JoystickIsolate();
 
@@ -27,6 +29,9 @@ class JoystickIsolate {
   }
 
   bool get isRunning => _started && _isolate != null;
+
+  /// Paths currently open in the worker (best-effort from log messages).
+  String openPathsLabel = '';
 
   Future<bool> start() async {
     if (_started) return isRunning;
@@ -47,6 +52,22 @@ class JoystickIsolate {
         return;
       }
       if (message is String) {
+        if (message.startsWith('open ')) {
+          final path = message.substring(5);
+          if (openPathsLabel.isEmpty) {
+            openPathsLabel = path;
+          } else if (!openPathsLabel.contains(path)) {
+            openPathsLabel = '$openPathsLabel,$path';
+          }
+        } else if (message.startsWith('paths ')) {
+          openPathsLabel = message.substring(6);
+        } else if (message.startsWith('close ')) {
+          final path = message.substring(6);
+          openPathsLabel = openPathsLabel
+              .split(',')
+              .where((p) => p.isNotEmpty && p != path)
+              .join(',');
+        }
         debugPrint('sdtv_input: isolate: $message');
       }
     });
@@ -67,6 +88,13 @@ class JoystickIsolate {
     }
   }
 
+  /// Ask the worker to re-list `/dev/input/js*` (dock / pad power-on).
+  void requestRescan() {
+    try {
+      _toWorker?.send('rescan');
+    } catch (_) {}
+  }
+
   Future<void> stop() async {
     _started = false;
     try {
@@ -77,6 +105,7 @@ class JoystickIsolate {
     _isolate = null;
     _recv?.close();
     _recv = null;
+    openPathsLabel = '';
   }
 }
 
@@ -85,8 +114,9 @@ void _joystickIsolateMain(SendPort mainPort) {
   final cmd = ReceivePort();
   mainPort.send(cmd.sendPort);
 
-  RandomAccessFile? file;
   var running = true;
+  final openFiles = <String, RandomAccessFile>{};
+  final pumping = <String>{};
 
   // Mirror of LinuxJoystickReader mapping — keep in sync.
   GamepadEdge? mapButton(int number) {
@@ -117,8 +147,9 @@ void _joystickIsolateMain(SendPort mainPort) {
 
   const stickDz = 22000;
   const hatDz = 16000;
-  final axisSign = <int, int>{};
-  final buttonsDown = <int>{};
+  // Per-device state so two pads don't fight axis sign maps.
+  final axisSignByDev = <String, Map<int, int>>{};
+  final buttonsDownByDev = <String, Set<int>>{};
   GamepadEdge? heldDir;
   Timer? repeatTimer;
 
@@ -151,7 +182,7 @@ void _joystickIsolateMain(SendPort mainPort) {
     });
   }
 
-  void handleFrame(Uint8List bytes) {
+  void handleFrame(String path, Uint8List bytes) {
     final data = ByteData.sublistView(bytes);
     final value = data.getInt16(4, Endian.little);
     final type = data.getUint8(6);
@@ -161,6 +192,9 @@ void _joystickIsolateMain(SendPort mainPort) {
     const jsEventInit = 0x80;
     final kind = type & ~jsEventInit;
     final isInit = (type & jsEventInit) != 0;
+
+    final buttonsDown = buttonsDownByDev.putIfAbsent(path, () => <int>{});
+    final axisSign = axisSignByDev.putIfAbsent(path, () => <int, int>{});
 
     if (kind == jsEventButton) {
       final pressed = value != 0;
@@ -206,48 +240,86 @@ void _joystickIsolateMain(SendPort mainPort) {
     }
   }
 
-  Future<void> openAndPump() async {
-    for (var i = 0; i < 4; i++) {
-      final path = '/dev/input/js$i';
-      try {
-        file = await File(path).open(mode: FileMode.read);
-        mainPort.send('open $path');
-        break;
-      } catch (_) {
-        file = null;
-      }
-    }
+  Future<void> closePath(String path) async {
+    pumping.remove(path);
+    final f = openFiles.remove(path);
+    axisSignByDev.remove(path);
+    buttonsDownByDev.remove(path);
+    try {
+      await f?.close();
+    } catch (_) {}
+    mainPort.send('close $path');
+  }
+
+  Future<void> pumpOne(String path) async {
+    if (!running || pumping.contains(path)) return;
+    pumping.add(path);
+    final file = openFiles[path];
     if (file == null) {
-      mainPort.send('no joystick');
+      pumping.remove(path);
       return;
     }
-
-    while (running) {
-      try {
-        final bytes = await file!.read(8);
-        if (!running) break;
+    try {
+      while (running && openFiles.containsKey(path)) {
+        final bytes = await file.read(8);
+        if (!running || !openFiles.containsKey(path)) break;
         if (bytes.length == 8) {
-          handleFrame(Uint8List.fromList(bytes));
+          handleFrame(path, Uint8List.fromList(bytes));
         } else if (bytes.isEmpty) {
+          // Unplug / EOF
           break;
         }
+      }
+    } catch (_) {
+      // device gone
+    }
+    await closePath(path);
+  }
+
+  Future<void> rescan() async {
+    if (!running) return;
+    final paths = LinuxJoystickReader.listDevicePaths();
+    for (final path in paths) {
+      if (openFiles.containsKey(path)) continue;
+      try {
+        final f = await File(path).open(mode: FileMode.read);
+        openFiles[path] = f;
+        mainPort.send('open $path');
+        // Fire-and-forget pump per device.
+        unawaited(pumpOne(path));
       } catch (_) {
-        break;
+        // busy / permission / race with udev
       }
     }
-    try {
-      await file?.close();
-    } catch (_) {}
+    // Drop stale paths that vanished without EOF (rare).
+    final live = paths.toSet();
+    for (final path in openFiles.keys.toList()) {
+      if (!live.contains(path)) {
+        unawaited(closePath(path));
+      }
+    }
+    final label = openFiles.keys.toList()..sort();
+    mainPort.send(
+      label.isEmpty ? 'paths (none)' : 'paths ${label.join(',')}',
+    );
   }
 
   cmd.listen((message) {
     if (message == 'stop') {
       running = false;
       clearHold();
+      for (final path in openFiles.keys.toList()) {
+        unawaited(closePath(path));
+      }
       cmd.close();
+    } else if (message == 'rescan') {
+      unawaited(rescan());
     }
   });
 
-  // Blocking pump in isolate event loop.
-  openAndPump();
+  // Initial open + periodic hotplug (Xbox after dock, new pad, etc.).
+  unawaited(rescan());
+  Timer.periodic(const Duration(seconds: 2), (_) {
+    if (running) unawaited(rescan());
+  });
 }

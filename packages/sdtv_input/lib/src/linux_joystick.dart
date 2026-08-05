@@ -100,13 +100,46 @@ class LinuxJoystickReader {
     }
   }
 
-  /// Open the first available joystick. Safe to call after UI is showing.
+  /// Enumerate `/dev/input/js*` (hotplug-safe; not limited to js0–js3).
+  static List<String> listDevicePaths({int maxIndex = 15}) {
+    final out = <String>[];
+    try {
+      final dir = Directory('/dev/input');
+      if (dir.existsSync()) {
+        for (final ent in dir.listSync(followLinks: true)) {
+          final base = ent.path.split('/').last;
+          if (RegExp(r'^js\d+$').hasMatch(base)) {
+            out.add(ent.path);
+          }
+        }
+      }
+    } catch (_) {}
+    if (out.isEmpty) {
+      for (var i = 0; i <= maxIndex; i++) {
+        final p = '/dev/input/js$i';
+        try {
+          if (File(p).existsSync()) out.add(p);
+        } catch (_) {}
+      }
+    }
+    out.sort((a, b) {
+      int n(String p) {
+        final m = RegExp(r'js(\d+)$').firstMatch(p);
+        return int.tryParse(m?.group(1) ?? '') ?? 0;
+      }
+
+      return n(a).compareTo(n(b));
+    });
+    return out;
+  }
+
+  /// Open a single device ([devicePath]) or the first available joystick.
   Future<bool> open() async {
     await close();
 
     final candidates = <String>[
       if (devicePath != null) devicePath!,
-      for (var i = 0; i < 4; i++) '/dev/input/js$i',
+      if (devicePath == null) ...listDevicePaths(),
     ];
 
     for (final path in candidates) {

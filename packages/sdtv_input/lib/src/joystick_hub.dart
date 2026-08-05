@@ -8,6 +8,9 @@ import 'linux_joystick.dart';
 
 /// Process-wide joystick owner. Prefers a **background isolate** so media_kit
 /// video frames cannot starve pad reads on the UI isolate.
+///
+/// Opens every `/dev/input/js*` and **re-scans every ~2s** so a controller
+/// powered on after docking (e.g. Xbox) is picked up without restarting sdtv.
 class SdtvJoystickHub {
   SdtvJoystickHub._();
   static final SdtvJoystickHub instance = SdtvJoystickHub._();
@@ -15,18 +18,28 @@ class SdtvJoystickHub {
   final _listeners = <void Function(GamepadEdge)>[];
   final _iso = JoystickIsolate();
   StreamSubscription<GamepadEdge>? _sub;
-  LinuxJoystickReader? _fallback;
-  StreamSubscription<GamepadEdge>? _fallbackSub;
+  final List<LinuxJoystickReader> _fallbackReaders = [];
+  final List<StreamSubscription<GamepadEdge>> _fallbackSubs = [];
+  Timer? _fallbackHotplug;
   Future<void>? _opening;
   Future<void>? _closing;
 
   bool get isOpen =>
-      _iso.isRunning || (_fallback != null && _fallback!.isOpen);
+      _iso.isRunning || _fallbackReaders.any((r) => r.isOpen);
 
   int get listenerCount => _listeners.length;
 
-  String? get openPath =>
-      _fallback?.openPath ?? (_iso.isRunning ? 'isolate' : null);
+  String? get openPath {
+    if (_iso.isRunning) {
+      final p = _iso.openPathsLabel;
+      return p.isEmpty ? 'isolate' : p;
+    }
+    if (_fallbackReaders.isEmpty) return null;
+    return _fallbackReaders
+        .map((r) => r.openPath)
+        .whereType<String>()
+        .join(',');
+  }
 
   Future<void> acquire(void Function(GamepadEdge) onEdge) async {
     _listeners.remove(onEdge);
@@ -38,7 +51,11 @@ class SdtvJoystickHub {
     final closing = _closing;
     if (closing != null) await closing;
 
-    if (isOpen) return;
+    if (isOpen) {
+      // Already pumping — still nudge a rescan (new pad may have appeared).
+      rescan();
+      return;
+    }
     if (_opening != null) {
       await _opening;
       return;
@@ -61,20 +78,61 @@ class SdtvJoystickHub {
       return;
     }
 
-    for (var attempt = 0; attempt < 3; attempt++) {
-      if (_listeners.isEmpty) return;
-      final reader = LinuxJoystickReader();
+    await _openFallbackAll();
+    _fallbackHotplug?.cancel();
+    _fallbackHotplug = Timer.periodic(const Duration(seconds: 2), (_) {
+      unawaited(_hotplugFallback());
+    });
+  }
+
+  Future<void> _openFallbackAll() async {
+    final paths = LinuxJoystickReader.listDevicePaths();
+    final already = _fallbackReaders
+        .map((r) => r.openPath)
+        .whereType<String>()
+        .toSet();
+    for (final path in paths) {
+      if (already.contains(path)) continue;
+      final reader = LinuxJoystickReader(devicePath: path);
       final opened = await reader.open();
       if (opened) {
-        _fallback = reader;
-        debugPrint('sdtv_input: hub fallback open ${reader.openPath}');
-        _fallbackSub = reader.events.listen(_deliver);
-        return;
+        _fallbackReaders.add(reader);
+        debugPrint('sdtv_input: hub fallback open $path');
+        _fallbackSubs.add(reader.events.listen(_deliver));
+      } else {
+        await reader.dispose();
       }
-      await reader.dispose();
-      await Future<void>.delayed(Duration(milliseconds: 80 * (attempt + 1)));
     }
-    debugPrint('sdtv_input: hub — no joystick');
+    if (_fallbackReaders.isEmpty) {
+      debugPrint('sdtv_input: hub — no joystick (will retry on rescan)');
+    }
+  }
+
+  Future<void> _hotplugFallback() async {
+    if (_listeners.isEmpty) return;
+    // Drop dead readers
+    for (var i = _fallbackReaders.length - 1; i >= 0; i--) {
+      if (!_fallbackReaders[i].isOpen) {
+        try {
+          await _fallbackSubs[i].cancel();
+        } catch (_) {}
+        try {
+          await _fallbackReaders[i].dispose();
+        } catch (_) {}
+        _fallbackSubs.removeAt(i);
+        _fallbackReaders.removeAt(i);
+      }
+    }
+    await _openFallbackAll();
+  }
+
+  /// Re-list joysticks (display dock, pad power-on, lifecycle resume).
+  void rescan() {
+    if (_iso.isRunning) {
+      _iso.requestRescan();
+      return;
+    }
+    unawaited(_hotplugFallback());
   }
 
   void _deliver(GamepadEdge edge) {
@@ -91,16 +149,23 @@ class SdtvJoystickHub {
   }
 
   Future<void> _tearDown() async {
+    _fallbackHotplug?.cancel();
+    _fallbackHotplug = null;
     await _sub?.cancel();
     _sub = null;
     await _iso.stop();
-    await _fallbackSub?.cancel();
-    _fallbackSub = null;
-    final f = _fallback;
-    _fallback = null;
-    try {
-      await f?.dispose();
-    } catch (_) {}
+    for (final s in _fallbackSubs) {
+      try {
+        await s.cancel();
+      } catch (_) {}
+    }
+    _fallbackSubs.clear();
+    for (final r in _fallbackReaders) {
+      try {
+        await r.dispose();
+      } catch (_) {}
+    }
+    _fallbackReaders.clear();
   }
 
   Future<void> release(void Function(GamepadEdge) onEdge) async {

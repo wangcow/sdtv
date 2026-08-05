@@ -103,6 +103,22 @@ When launching from **Steam Game Mode** as a non-Steam game:
 
 sdtv reads standard gamepad / key events. If Steam remaps everything to mouse, couch UX breaks.
 
+### Dock + Xbox (or other) pad
+
+sdtv opens **all** `/dev/input/js*` devices and **re-scans every ~2s** (also on display metrics / resume). You can power on an Xbox controller after docking without restarting the app.
+
+If the pad still only drives the **Steam** overlay and not sdtv:
+
+- Confirm the game’s Steam Input template is **Gamepad** (not Desktop).
+- Quit to the guide and back in once (Steam sometimes rebinds only on launch).
+- Prefer leaving the pad on before opening sdtv when possible.
+
+### Dock while watching (resolution)
+
+mpv is started fullscreen. Docking handheld → 1080p TV can leave the VO at the old size. sdtv **re-asserts fullscreen** when Flutter metrics change and polls display size every 2s during watch. Brief black flash on dock is normal.
+
+Note: many IPTV channels are **native 720p** — they will still look soft on a 1080p set; that is the stream, not a wrong window size.
+
 ## Implementation notes
 
 - Semantic intents live in `packages/sdtv_input` (`SdtvConfirmIntent`, `SdtvBackIntent`, …).
