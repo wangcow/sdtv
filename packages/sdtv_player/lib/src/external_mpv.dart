@@ -459,11 +459,35 @@ class ExternalMpvLauncher {
     return p == true || p == 'yes';
   }
 
+  /// Resume live IPTV at the **current edge** (not mid old buffer).
+  ///
+  /// After pause, HLS/TS windows slide; unpause alone often replays an older
+  /// segment (or a different program's audio in the mux). Reloading [path]
+  /// matches "go back to live" behavior.
+  Future<void> resumeLiveEdge({String? title}) async {
+    Uri? url = _activeUrl;
+    if (url == null) {
+      final path = await getProperty('path');
+      if (path != null && '$path'.isNotEmpty && path != false) {
+        url = Uri.tryParse('$path');
+      }
+    }
+    if (url != null) {
+      final t = (title != null && title.trim().isNotEmpty)
+          ? title.trim()
+          : _activeTitle;
+      await loadFile(url, title: t);
+    }
+    await setPaused(false);
+    await setOscVisible(false);
+  }
+
   Future<void> setOscVisible(bool always) async {
+    // External live sessions run with --osc=no; keep IPC harmless if OSC absent.
     await sendCommand([
       'script-message',
       'osc-visibility',
-      always ? 'always' : 'auto',
+      always ? 'always' : 'never',
       'no-osd',
     ]);
   }
@@ -1082,23 +1106,8 @@ GAMEPAD_START quit
 GAMEPAD_GUIDE quit
 ''');
 
-      final pauseScript = File('${confDir.path}/sdtv-pause-osc.lua');
-      await pauseScript.writeAsString(r'''
--- sdtv: show on-screen controller while paused
-local function set_vis(mode)
-  pcall(function()
-    mp.commandv("script-message", "osc-visibility", mode, "no-osd")
-  end)
-end
-
-mp.observe_property("pause", "bool", function(_, paused)
-  if paused then
-    set_vis("always")
-  else
-    set_vis("auto")
-  end
-end)
-''');
+      // Intentionally no "force OSC on pause" script: OSC seek on live
+      // rewinds the demuxer cache (old segment / wrong program audio).
 
       // First launch may use full playlist; dock respawns use current URL only.
       var firstLaunch = true;
@@ -1159,12 +1168,14 @@ end)
           '--force-media-title=$playTitle',
           '--input-conf=${confFile.path}',
           '--input-ipc-server=$ipcPath',
-          '--script=${pauseScript.path}',
-          '--osc=yes',
+          // No OSC: seek bar on live IPTV jumps into the old cache window.
+          '--osc=no',
           '--osd-bar=yes',
           '--osd-level=1',
           '--osd-duration=2000',
-          '--script-opts=osc-visibility=auto,osc-deadzonesize=0,osc-scalewindowed=1.5,osc-scalefullscreen=1.5,osc-valign=0.9,osc-idlescreen=no',
+          // Live-friendly: don't treat the sliding window as a scrubbable VOD.
+          '--force-seekable=no',
+          '--hr-seek=no',
           '--keepaspect=yes',
           '--keepaspect-window=no',
           '--video-unscaled=no',

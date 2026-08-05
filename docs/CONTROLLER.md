@@ -98,8 +98,8 @@ Full EPG grid / program search is later.
 
 ### Watch menu (navigable pause UI)
 
-mpv’s OSC is mostly **mouse**-oriented; D-pad does not “focus” its buttons well.  
-sdtv uses a **mode switch** instead:
+mpv’s OSC seek bar is **disabled** for live (it rewound the live cache → old segment / wrong audio).  
+sdtv uses a **text menu** instead:
 
 | Mode | How you enter | D-pad / shoulders | A | B |
 |------|----------------|-------------------|---|---|
@@ -108,14 +108,14 @@ sdtv uses a **mode switch** instead:
 
 Menu rows (OSD list with ▶ cursor):
 
-1. **Resume** — unpause, hide menu  
+1. **Resume** — reload at **live edge** (not mid old buffer), then play  
 2. **Subtitles** — A / ←→ cycle tracks (Off when none)  
 3. **Audio** — A / ←→ cycle tracks  
 4. **Mute** — toggle  
 5. **Back to guide** — quit mpv  
 
-While the menu is open, channel zap and volume on the D-pad are **disabled** so you are clearly “in the menu.”  
-Live streams may still show a weak OSC seek bar (no duration); that is expected.
+While the menu is open, channel zap and volume on the D-pad are **disabled**.  
+Brief black/rebuffer on **Resume** is normal for live IPTV.
 
 ## Steam Input
 

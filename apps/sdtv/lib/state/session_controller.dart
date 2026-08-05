@@ -476,26 +476,39 @@ class SessionController extends ChangeNotifier {
   /// Open navigable pause menu (pauses playback).
   Future<void> watchOpenMenu() async {
     if (!isWatchingExternal) return;
+    // Cancel in-flight mini-guide so "No EPG…" cannot overwrite the menu.
+    _miniGuideGen++;
     watchMenuOpen = true;
     watchMenuIndex = 0;
+    // Live IPTV: do **not** enable mpv OSC — its seek bar rewinds the live
+    // cache (old segment / wrong audio). Text menu only.
+    await externalMpv.setOscVisible(false);
     await externalMpv.setPaused(true);
-    await externalMpv.setOscVisible(true);
     // Recover audio if a previous menu pass left aid=no (silent channel).
     await externalMpv.ensureAudioOn();
     await _paintWatchMenu();
     notifyListeners();
   }
 
-  /// Close menu. [resume] unpauses; otherwise stay paused with OSC auto-hide.
+  /// Close menu. [resume] unpauses at the **live edge** (reload), not old buffer.
   Future<void> watchCloseMenu({bool resume = false}) async {
     if (!isWatchingExternal) return;
     watchMenuOpen = false;
     watchMenuIndex = 0;
+    await externalMpv.setOscVisible(false);
     if (resume) {
-      await externalMpv.setPaused(false);
-      await externalMpv.setOscVisible(false);
+      // Pausing live HLS/TS keeps a sliding window; unpause alone often
+      // continues mid-buffer (loops older segment, weird audio). Jump to edge.
+      await externalMpv.resumeLiveEdge(title: _nowPlayingLabel);
+      // Brief banner so pause→resume doesn't look like a channel zap.
+      unawaited(
+        showMiniGuide(
+          channel: nowPlaying,
+          channelLineFirst: false,
+          durationMs: 3500,
+        ),
+      );
     } else {
-      await externalMpv.setOscVisible(false);
       await externalMpv.showText(
         'Paused · A menu · B guide · LB/RB ch · ↑↓ vol',
         durationMs: 2500,
@@ -850,19 +863,13 @@ class SessionController extends ChangeNotifier {
 
     if (epg == null || epg.isEmpty) {
       // M3U has no Xtream short EPG — keep the simple channel banner only.
-      if (useM3u) {
-        if (!channelLineFirst) {
-          await externalMpv.showText(
-            prefix != null ? '$prefix $label' : label,
-            durationMs: durationMs,
-          );
-        }
-        return;
+      // Never flash "No EPG" as a scary error (looked like pause/menu broke).
+      if (!channelLineFirst) {
+        await externalMpv.showText(
+          prefix != null ? '$prefix $label' : label,
+          durationMs: 2200,
+        );
       }
-      await externalMpv.showText(
-        '${prefix != null ? '$prefix ' : ''}$label\nNo EPG for this channel',
-        durationMs: durationMs,
-      );
       return;
     }
 
