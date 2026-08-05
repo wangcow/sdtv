@@ -19,11 +19,14 @@ class SdtvGamepadBinding extends StatefulWidget {
     required this.child,
     this.enabled = true,
     this.startDelay = Duration.zero,
+    /// Called when display metrics change (e.g. Deck dock → 1080p TV).
+    this.onMetricsChanged,
   });
 
   final Widget child;
   final bool enabled;
   final Duration startDelay;
+  final VoidCallback? onMetricsChanged;
 
   @override
   State<SdtvGamepadBinding> createState() => _SdtvGamepadBindingState();
@@ -62,7 +65,19 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && widget.enabled) {
       unawaited(_acquire());
+      // Dock / wake: pick up pads that appeared while we were backgrounded.
+      SdtvJoystickHub.instance.rescan();
     }
+  }
+
+  @override
+  void didChangeMetrics() {
+    // Docking Steam Deck → TV changes display size; Xbox pad often appears
+    // as a new /dev/input/js* at the same moment. Re-scan without restart.
+    if (widget.enabled) {
+      SdtvJoystickHub.instance.rescan();
+    }
+    widget.onMetricsChanged?.call();
   }
 
   void _scheduleStart() {

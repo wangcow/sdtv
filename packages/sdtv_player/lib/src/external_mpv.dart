@@ -79,6 +79,11 @@ class ExternalMpvLauncher {
   /// Recent mpv log lines (for HTTP 403-style error messages).
   final List<String> _recentLog = <String>[];
 
+  /// Dock / display-size watch while fullscreen (handheld → TV).
+  Timer? _displayWatch;
+  String? _lastDisplayFp;
+  DateTime? _lastRefitAt;
+
   bool get isRunning => _process != null || _launching;
 
   /// Steam / host noise — not a stream failure (common on Deck Game Mode).
@@ -708,6 +713,7 @@ class ExternalMpvLauncher {
   /// Ask mpv to quit (falls back to [stop] kill).
   Future<void> quit() async {
     _userQuit = true;
+    _stopDisplayWatch();
     final ok = await sendCommand(['quit']);
     if (!ok) {
       await stop();
@@ -722,6 +728,102 @@ class ExternalMpvLauncher {
     } catch (_) {
       await stop();
     }
+  }
+
+  /// Re-assert fullscreen when the Deck docks (800p → 1080p TV) or undocks.
+  ///
+  /// mpv often keeps the handheld window size on the new output; toggling
+  /// fullscreen forces the compositor / gamescope to re-place the VO.
+  Future<void> refitFullscreen({String reason = 'manual'}) async {
+    if (!isRunning) return;
+    final now = DateTime.now();
+    if (_lastRefitAt != null &&
+        now.difference(_lastRefitAt!) < const Duration(milliseconds: 900)) {
+      return;
+    }
+    _lastRefitAt = now;
+    debugPrint('sdtv_player: refit fullscreen ($reason)');
+    // Soft assert first (cheap).
+    await sendCommand(['set', 'fullscreen', 'yes']);
+    await sendCommand(['set', 'window-maximized', 'yes']);
+    await sendCommand(['set', 'video-zoom', '0']);
+    await sendCommand(['set', 'panscan', '0']);
+    // Hard toggle — needed when the output resolution changed under us.
+    await sendCommand(['set', 'fullscreen', 'no']);
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    if (!isRunning) return;
+    await sendCommand(['set', 'fullscreen', 'yes']);
+  }
+
+  /// Called from Flutter [didChangeMetrics] (dock/undock).
+  Future<void> notifyDisplayChanged() =>
+      refitFullscreen(reason: 'flutter-metrics');
+
+  void _startDisplayWatch() {
+    _stopDisplayWatch();
+    _lastDisplayFp = null;
+    unawaited(_pollDisplayAndRefit(initial: true));
+    _displayWatch = Timer.periodic(const Duration(seconds: 2), (_) {
+      unawaited(_pollDisplayAndRefit());
+    });
+  }
+
+  void _stopDisplayWatch() {
+    _displayWatch?.cancel();
+    _displayWatch = null;
+  }
+
+  Future<void> _pollDisplayAndRefit({bool initial = false}) async {
+    if (!isRunning) {
+      _stopDisplayWatch();
+      return;
+    }
+    final fp = await _displayFingerprint();
+    if (fp == null) return;
+    if (initial || _lastDisplayFp == null) {
+      _lastDisplayFp = fp;
+      return;
+    }
+    if (fp == _lastDisplayFp) return;
+    debugPrint('sdtv_player: display $_lastDisplayFp → $fp');
+    _lastDisplayFp = fp;
+    await refitFullscreen(reason: 'display:$fp');
+  }
+
+  /// Best-effort current output size key (`1920x1080`, etc.).
+  static Future<String?> _displayFingerprint() async {
+    try {
+      final r = await Process.run('xrandr', ['--current'])
+          .timeout(const Duration(milliseconds: 400));
+      if (r.exitCode == 0) {
+        final out = '${r.stdout}';
+        final primary = RegExp(r' connected primary (\d+)x(\d+)')
+            .firstMatch(out);
+        if (primary != null) {
+          return '${primary.group(1)}x${primary.group(2)}';
+        }
+        final any = RegExp(r' connected(?: primary)? (\d+)x(\d+)')
+            .firstMatch(out);
+        if (any != null) return '${any.group(1)}x${any.group(2)}';
+        final cur = RegExp(r'current (\d+) x (\d+)').firstMatch(out);
+        if (cur != null) return '${cur.group(1)}x${cur.group(2)}';
+      }
+    } catch (_) {}
+    try {
+      final r = await Process.run('xdpyinfo', [])
+          .timeout(const Duration(milliseconds: 400));
+      if (r.exitCode == 0) {
+        final m = RegExp(r'dimensions:\s+(\d+)x(\d+)').firstMatch('${r.stdout}');
+        if (m != null) return '${m.group(1)}x${m.group(2)}';
+      }
+    } catch (_) {}
+    // Gamescope / nested: resolution often in env.
+    final gx = Platform.environment['GAMESCOPE_WIDTH'] ??
+        Platform.environment['XDG_WIDTH'];
+    final gy = Platform.environment['GAMESCOPE_HEIGHT'] ??
+        Platform.environment['XDG_HEIGHT'];
+    if (gx != null && gy != null) return '${gx}x$gy';
+    return null;
   }
 
   /// Play fullscreen until quit.
@@ -874,6 +976,10 @@ end)
         '--osd-duration=2000',
         // Larger, more readable OSC on TV / Deck.
         '--script-opts=osc-visibility=auto,osc-deadzonesize=0,osc-scalewindowed=1.5,osc-scalefullscreen=1.5,osc-valign=0.9,osc-idlescreen=no',
+        // Fit the active output (dock 1080p / handheld). Keep aspect; no 1:1 unscaled.
+        '--keepaspect=yes',
+        '--video-unscaled=no',
+        '--panscan=0',
         '--hwdec=vaapi,vaapi-copy,auto-copy,auto',
         '--profile=fast',
         '--framedrop=vo',
@@ -916,6 +1022,7 @@ end)
       _process = proc;
       // Launch complete — playback wait is not "launching".
       _launching = false;
+      _startDisplayWatch();
 
       unawaited(proc.stdout.drain<void>());
       unawaited(proc.stderr.transform(SystemEncoding().decoder).forEach((line) {
@@ -939,11 +1046,16 @@ end)
         if (!ok && isRunning && !_userQuit) {
           await showPlaybackError(channelName: fallbackTitle ?? startTitle);
         }
+        // One more fullscreen assert after VO attaches (helps dock-during-start).
+        if (isRunning && !_userQuit) {
+          await sendCommand(['set', 'fullscreen', 'yes']);
+        }
       }());
 
       final code = await proc.exitCode;
       final durationMs = DateTime.now().difference(startedAt).inMilliseconds;
       final wasUser = _userQuit;
+      _stopDisplayWatch();
       _process = null;
       _cleanupIpc();
 
@@ -955,6 +1067,7 @@ end)
         userQuit: wasUser,
       );
     } catch (e, st) {
+      _stopDisplayWatch();
       _process = null;
       _cleanupIpc();
       debugPrint('sdtv_player: mpv spawn failed: $e\n$st');
@@ -966,6 +1079,7 @@ end)
       );
     } finally {
       _launching = false;
+      _stopDisplayWatch();
       final dir = confDir;
       if (dir != null) {
         try {
@@ -988,6 +1102,7 @@ end)
   /// Kill a session we started (sign-out / app exit / B while watching).
   Future<void> stop() async {
     _userQuit = true;
+    _stopDisplayWatch();
     final p = _process;
     _launching = false;
     if (p != null) {

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:sdtv_input/sdtv_input.dart';
 
@@ -27,6 +29,11 @@ class _SdtvAppState extends State<SdtvApp> {
     if (mounted) setState(() {});
   }
 
+  void _onMetricsChanged() {
+    // Deck docked → 1080p TV: re-fit external mpv if a session is live.
+    unawaited(widget.session.externalMpv.notifyDisplayChanged());
+  }
+
   @override
   void dispose() {
     widget.session.removeListener(_onSession);
@@ -38,6 +45,7 @@ class _SdtvAppState extends State<SdtvApp> {
     // One joystick owner for the whole app. Pages only push/pop pad layers
     // (SdtvInputScope) so the player never fights browse for /dev/input/js*.
     return SdtvGamepadBinding(
+      onMetricsChanged: _onMetricsChanged,
       child: MaterialApp(
         title: 'sdtv',
         debugShowCheckedModeBanner: false,
