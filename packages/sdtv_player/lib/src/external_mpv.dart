@@ -81,9 +81,23 @@ class ExternalMpvLauncher {
 
   bool get isRunning => _process != null || _launching;
 
+  /// Steam / host noise — not a stream failure (common on Deck Game Mode).
+  static bool _isNoiseLogLine(String line) {
+    final lower = line.toLowerCase();
+    return lower.contains('ld.so') ||
+        lower.contains('gameoverlay') ||
+        lower.contains('gameoverlayrenderer') ||
+        lower.contains('cannot be preloaded') ||
+        lower.contains('steamoverlay') ||
+        lower.contains('pressure-vessel') ||
+        lower.contains('libsteam') ||
+        // Harmless mpv chatter
+        lower.contains('ao/pulse') && lower.contains('broken pipe');
+  }
+
   void _noteLog(String line) {
     final t = line.trim();
-    if (t.isEmpty) return;
+    if (t.isEmpty || _isNoiseLogLine(t)) return;
     _recentLog.add(t);
     if (_recentLog.length > 40) {
       _recentLog.removeRange(0, _recentLog.length - 40);
@@ -91,6 +105,19 @@ class ExternalMpvLauncher {
   }
 
   void clearRecentLog() => _recentLog.clear();
+
+  /// True when logs look like a real stream/network failure (not Steam noise).
+  bool get hasMeaningfulStreamError {
+    final blob = _recentLog.join('\n').toLowerCase();
+    if (blob.isEmpty) return false;
+    return RegExp(
+      r'\b403\b|\b401\b|\b404\b|\b502\b|\b503\b|\b504\b|'
+      r'forbidden|unauthorized|timed out|timeout|'
+      r'connection refused|network is unreachable|no route to host|'
+      r'failed to open|failed to recognize|error opening|opening failed|'
+      r'http error|ssl|certificate|no decoder',
+    ).hasMatch(blob);
+  }
 
   /// Best-effort human error from mpv logs (TiviMate-style).
   String playbackErrorHint({String? channelName}) {
@@ -117,16 +144,18 @@ class ExternalMpvLauncher {
         blob.contains('error opening') ||
         blob.contains('opening failed')) {
       core = 'Failed to open stream';
-    } else if (blob.contains('no decoder') || blob.contains('codec')) {
+    } else if (blob.contains('no decoder') ||
+        (blob.contains('codec') && blob.contains('error'))) {
       core = 'Codec / decode error';
     } else {
       core = 'Playback failed';
     }
 
-    // Last meaningful log line for detail (truncated).
+    // Last meaningful log line for detail (truncated) — skip Steam/ld.so noise.
     String? detail;
     for (var i = _recentLog.length - 1; i >= 0; i--) {
       final line = _recentLog[i];
+      if (_isNoiseLogLine(line)) continue;
       final lower = line.toLowerCase();
       if (lower.contains('http') ||
           lower.contains('error') ||
@@ -261,9 +290,33 @@ class ExternalMpvLauncher {
   }
 
   /// Keep VAAPI hints; drop brew LD_LIBRARY_PATH so host/Flatpak mpv is clean.
+  ///
+  /// Also strip Steam Overlay [LD_PRELOAD] (gameoverlayrenderer) — Deck Game
+  /// Mode injects it into Non-Steam games; the linker warning is harmless but
+  /// was being parsed as a stream failure ("Playback failed … ld.so object…").
   static Map<String, String> _childEnvironment() {
     final env = Map<String, String>.from(Platform.environment);
     env['LD_LIBRARY_PATH'] = '/usr/lib64:/usr/lib';
+
+    final preload = env['LD_PRELOAD'];
+    if (preload != null && preload.isNotEmpty) {
+      final cleaned = preload
+          .split(RegExp(r'[:\s]+'))
+          .where((p) => p.isNotEmpty)
+          .where((p) {
+            final l = p.toLowerCase();
+            return !l.contains('gameoverlay') &&
+                !l.contains('steamoverlay') &&
+                !l.contains('libsteam');
+          })
+          .join(':');
+      if (cleaned.isEmpty) {
+        env.remove('LD_PRELOAD');
+      } else {
+        env['LD_PRELOAD'] = cleaned;
+      }
+    }
+
     if (Platform.environment['LIBVA_DRIVERS_PATH'] != null) {
       env['LIBVA_DRIVERS_PATH'] = Platform.environment['LIBVA_DRIVERS_PATH']!;
     } else if (Directory('/usr/lib64/dri').existsSync()) {
@@ -566,23 +619,31 @@ class ExternalMpvLauncher {
     return true;
   }
 
-  /// True when demuxer/decoder never really started (bad URL, 403, etc.).
+  /// True when demuxer never attached (bad URL / 403 / etc.).
+  ///
+  /// Intentionally **not** treating "VO not ready yet" as failure — slow
+  /// VAAPI / network buffer would false-positive and kick users to the guide.
   Future<bool> isPlaybackUnhealthy() async {
     if (!isRunning) return true;
+    final pause = await getProperty('pause');
+    if (pause == true || pause == 'yes') return false;
+
     final idle = await getProperty('idle-active');
     if (idle == true || idle == 'yes') return true;
+
+    // path/stream open failed: no current file
+    final path = await getProperty('path');
+    if (path == null || path == false || '$path'.isEmpty) {
+      // Still starting — only unhealthy if we also see a real log error.
+      return hasMeaningfulStreamError;
+    }
+
     final pos = await getProperty('time-pos');
-    if (pos == null) return true;
-    // Some builds report time-pos 0 while stuck buffering forever — check
-    // whether we have any decoded A/V after the grace period.
-    final vo = await getProperty('current-vo');
-    final pause = await getProperty('pause');
-    // Paused by user is healthy.
-    if (pause == true || pause == 'yes') return false;
-    // No video output selected often means open failed.
-    if (vo == null || vo == false || vo == '') {
-      final ao = await getProperty('current-ao');
-      if (ao == null || ao == false || ao == '') return true;
+    // null time-pos after grace usually means demux never started.
+    if (pos == null && hasMeaningfulStreamError) return true;
+    if (pos == null) {
+      // Buffering / slow open — not dead yet.
+      return false;
     }
     return false;
   }

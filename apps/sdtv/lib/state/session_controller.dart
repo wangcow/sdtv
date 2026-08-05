@@ -1158,10 +1158,12 @@ class SessionController extends ChangeNotifier {
       if (!result.started) {
         return result.error ?? 'mpv failed to start';
       }
-      // Fail-and-stay for the guide: surface a clear error after a fast crash.
-      if (result.failedFast && !result.userQuit) {
+      // Only bounce a snack if mpv died fast *and* logs look like a real
+      // stream error — not Steam "ld.so gameoverlay" noise.
+      if (result.failedFast &&
+          !result.userQuit &&
+          externalMpv.hasMeaningfulStreamError) {
         final hint = externalMpv.playbackErrorHint(channelName: channel.name);
-        // First line only for the snack (full text was OSD if process stayed up).
         return hint.split('\n').take(2).join(' · ');
       }
       return null;
