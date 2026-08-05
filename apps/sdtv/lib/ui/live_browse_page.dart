@@ -128,7 +128,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (session.browseCategories.isEmpty) return;
     _didRestoreLanding = true;
 
-    // Re-apply from prefs (provider category, not just favorites default).
+    // Re-apply guide position (★ Favorites or provider category + channel).
     session.applyLastPlayedSelection();
 
     if (session.selectedCategoryId == null &&
