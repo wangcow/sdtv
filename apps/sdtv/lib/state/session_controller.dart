@@ -212,22 +212,27 @@ class SessionController extends ChangeNotifier {
     );
   }
 
-  /// Persist last played for relaunch (category + channel key).
+  /// Persist last played for relaunch (guide category + channel key).
   ///
-  /// Always prefers the channel's **provider** category (not ★ Favorites) so
-  /// resume lands in US MOVIES etc. rather than the favorites list.
+  /// Saves the **guide column you were in** — so ★ Favorites stays Favorites
+  /// on reopen, not a jump into the provider category (e.g. US MOVIES).
   Future<void> rememberLastPlayed(LiveChannel channel) async {
-    var catId = channel.categoryId.trim();
-    if (catId.isEmpty) {
-      catId = (selectedCategoryId == kFavoritesCategoryId)
-          ? ''
-          : (selectedCategoryId ?? '');
+    // Prefer current guide selection (including virtual ★ Favorites).
+    // During a watch/zap session this is still the list you started from.
+    String catId;
+    final sel = selectedCategoryId;
+    if (sel == kFavoritesCategoryId) {
+      catId = kFavoritesCategoryId;
+    } else if (sel != null &&
+        sel.isNotEmpty &&
+        (sel == kFavoritesCategoryId ||
+            categories.any((c) => c.categoryId == sel))) {
+      catId = sel;
+    } else {
+      catId = channel.categoryId.trim();
     }
-    if (catId.isEmpty || catId == kFavoritesCategoryId) {
-      // Still allow favorites-only resume if that is all we know.
-      if (selectedCategoryId == kFavoritesCategoryId) {
-        catId = kFavoritesCategoryId;
-      }
+    if (catId.isEmpty) {
+      catId = channel.categoryId.trim();
     }
     lastPlayedCategoryId = catId;
     lastPlayedFavoriteKey = channel.favoriteKey;
@@ -293,13 +298,13 @@ class SessionController extends ChangeNotifier {
   bool applyLastPlayedSelection() {
     _reloadLastPlayed();
     final ch = lastPlayedChannel;
+    final lastCat = lastPlayedCategoryId;
     debugPrint(
-      'sdtv: lastPlayed apply scope=$prefsScope cat=$lastPlayedCategoryId '
+      'sdtv: lastPlayed apply scope=$prefsScope cat=$lastCat '
       'key=$lastPlayedFavoriteKey id=$lastPlayedStreamId name=$lastPlayedName '
       'resolved=${ch?.name} catId=${ch?.categoryId}',
     );
     if (ch == null) {
-      final lastCat = lastPlayedCategoryId;
       if (lastCat != null &&
           lastCat.isNotEmpty &&
           (lastCat == kFavoritesCategoryId ||
@@ -310,18 +315,31 @@ class SessionController extends ChangeNotifier {
       return false;
     }
 
-    // Prefer the channel's real provider category (US MOVIES, etc.).
+    // Honor saved guide position first (★ Favorites vs provider category).
+    if (lastCat == kFavoritesCategoryId) {
+      // Still favorited → resume in ★ Favorites with that channel focused.
+      if (isFavorite(ch)) {
+        selectedCategoryId = kFavoritesCategoryId;
+        return true;
+      }
+      // Unstarred since last play → fall through to provider category.
+    } else if (lastCat != null &&
+        lastCat.isNotEmpty &&
+        categories.any((c) => c.categoryId == lastCat) &&
+        !_hiddenCategoryIds.contains(lastCat)) {
+      selectedCategoryId = lastCat;
+      return true;
+    }
+
+    // Fallbacks: provider category, then any known cat, then favorites if starred.
     if (ch.categoryId.isNotEmpty &&
-        categories.any((c) => c.categoryId == ch.categoryId)) {
+        categories.any((c) => c.categoryId == ch.categoryId) &&
+        !_hiddenCategoryIds.contains(ch.categoryId)) {
       selectedCategoryId = ch.categoryId;
       return true;
     }
-    final lastCat = lastPlayedCategoryId;
-    if (lastCat != null &&
-        lastCat.isNotEmpty &&
-        (lastCat == kFavoritesCategoryId ||
-            categories.any((c) => c.categoryId == lastCat))) {
-      selectedCategoryId = lastCat;
+    if (isFavorite(ch)) {
+      selectedCategoryId = kFavoritesCategoryId;
       return true;
     }
     selectedCategoryId = ch.categoryId;

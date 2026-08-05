@@ -31,8 +31,10 @@ Couch navigation is the core product requirement. Every screen must work with a 
 
 ### Last played
 
-- Starting playback (or zapping to a channel) saves **category + channel** for that playlist/panel.
+- Starting playback (or zapping to a channel) saves **guide category + channel** for that playlist/panel.
+- That includes **★ Favorites** — if you were in Favorites, reopen lands there (not the provider category where the channel also lives).
 - On next connect / app launch, the guide opens on that category with the channel focused (channel column selected when resume works).
+- If the channel was unstarred since last play, resume falls back to its provider category.
 
 ### Saved playlists
 
