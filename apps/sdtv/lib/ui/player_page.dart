@@ -70,17 +70,21 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     return true;
   }
 
-  List<PlayerChromeFocus> get _focusOrder {
+  /// Horizontal chrome only: −10s · Play · +10s · Back.
+  /// Scrubber is a separate row: ↑ focus it, ↓ leave, ←/→ seek while on it.
+  List<PlayerChromeFocus> get _rowFocusOrder {
     final live = _liveMode;
     final seek = widget.session.player.canSeek && !live;
     return [
       if (seek) PlayerChromeFocus.seekBack,
       PlayerChromeFocus.playPause,
       if (seek) PlayerChromeFocus.seekFwd,
-      if (seek) PlayerChromeFocus.scrubber,
       PlayerChromeFocus.back,
     ];
   }
+
+  bool get _canUseScrubber =>
+      widget.session.player.canSeek && !_liveMode;
 
   void _bumpHud() {
     if (!_showHud && mounted) setState(() => _showHud = true);
@@ -203,7 +207,12 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   }
 
   void _moveFocus(int delta) {
-    final order = _focusOrder;
+    // On scrubber row, ←/→ seek instead of jumping to another control.
+    if (_focus == PlayerChromeFocus.scrubber) {
+      _nudgeScrub(delta);
+      return;
+    }
+    final order = _rowFocusOrder;
     if (order.isEmpty) return;
     var i = order.indexOf(_focus);
     if (i < 0) i = order.indexOf(PlayerChromeFocus.playPause);
@@ -211,6 +220,25 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     i = (i + delta) % order.length;
     if (i < 0) i += order.length;
     setState(() => _focus = order[i]);
+    _bumpHud();
+  }
+
+  PlayerChromeFocus _lastRowFocus = PlayerChromeFocus.playPause;
+
+  void _focusScrubber() {
+    if (!_canUseScrubber) return;
+    if (_focus != PlayerChromeFocus.scrubber) {
+      _lastRowFocus = _focus;
+    }
+    setState(() => _focus = PlayerChromeFocus.scrubber);
+    _bumpHud();
+  }
+
+  void _leaveScrubber() {
+    final order = _rowFocusOrder;
+    var back = _lastRowFocus;
+    if (!order.contains(back)) back = PlayerChromeFocus.playPause;
+    setState(() => _focus = back);
     _bumpHud();
   }
 
@@ -300,7 +328,11 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
           _moveFocus(1);
         } else if (dir == TraversalDirection.up) {
           if (_focus == PlayerChromeFocus.scrubber) {
+            // Already on scrubber: up still seeks backward a step.
             _nudgeScrub(-1);
+          } else if (_canUseScrubber) {
+            // Transport row → scrubber row (not another button).
+            _focusScrubber();
           } else if (live && canZap) {
             _channel(-1);
           } else {
@@ -308,7 +340,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
           }
         } else if (dir == TraversalDirection.down) {
           if (_focus == PlayerChromeFocus.scrubber) {
-            _nudgeScrub(1);
+            _leaveScrubber();
           } else if (live && canZap) {
             _channel(1);
           } else {

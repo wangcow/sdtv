@@ -217,7 +217,7 @@ class PlayerChrome extends StatelessWidget {
                 liveMode
                     ? 'A play/pause · LB/RB channel · B back · ←→ move chrome'
                     : canSeek
-                        ? 'A activate · ←→ move · ↑↓ scrub when focused · B back'
+                        ? '←→ buttons · ↑ scrubber · ←→ seek on bar · ↓ back · A · B'
                         : 'A play/pause · B back · ←→ move chrome',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodySmall?.copyWith(

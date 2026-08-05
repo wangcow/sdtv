@@ -65,8 +65,9 @@ Default live TV still uses **external fullscreen mpv** (OSD text). To try the Ti
 | Control | Action |
 |---------|--------|
 | A | Activate focused control (play/pause, ±10s, back) |
-| ← / → | Move focus across chrome buttons |
-| ↑ / ↓ | Live: zap channel · On scrubber: seek ±5% |
+| ← / → | Move focus on the **button row** (−10 · play · +10 · back). On scrubber: seek |
+| ↑ | Focus the **scrubber** (when seekable); or seek while already on it |
+| ↓ | Leave scrubber back to buttons · Live: zap channel |
 | LB / RB | Channel zap |
 | B | Focus Back, or exit if Back focused; show chrome if hidden |
 
