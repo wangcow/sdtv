@@ -176,7 +176,6 @@ class SettingsStore {
       await setActiveSourceId(null);
     }
   }
-}
 
   // —— Scoped string-list maps (favorites, hidden categories) ——
 
