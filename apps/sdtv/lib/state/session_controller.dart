@@ -576,8 +576,8 @@ class SessionController extends ChangeNotifier {
 
   /// Channel ± within the current watch list (LB/RB, ←/→, PgUp/PgDn).
   ///
-  /// Dead streams: try `.ts` then `.m3u8`, then auto-advance in [delta]
-  /// direction (skip stubs) up to a cap so free/M3U lists stay usable.
+  /// TiviMate-style: try `.ts` then `.m3u8` on **this** channel only.
+  /// On failure, **stay** and show an error (HTTP 403, etc.) — no auto-skip.
   Future<void> watchChannelAdjacent(int delta) async {
     if (!isWatchingExternal || _watchList.isEmpty) return;
     if (watchMenuOpen) return; // menu owns the pad
@@ -590,58 +590,32 @@ class SessionController extends ChangeNotifier {
     _lastZapAt = now;
 
     if (_watchList.length == 1) {
-      // Still retry formats on the only channel.
       await _zapLoadChannel(_watchList[0], announce: '→');
       return;
     }
 
+    var i = (_watchIndex + delta) % _watchList.length;
+    if (i < 0) i += _watchList.length;
+    if (i == _watchIndex) return;
+
+    final ch = _watchList[i];
+    _watchIndex = i;
+    nowPlaying = ch;
+    notifyListeners();
+
     _zapInFlight = true;
     try {
-      final n = _watchList.length;
-      final maxAttempts = n < 15 ? n : 15;
-      var i = _watchIndex;
-      var skipped = 0;
-
-      for (var attempt = 0; attempt < maxAttempts; attempt++) {
-        i = (i + delta) % n;
-        if (i < 0) i += n;
-
-        final ch = _watchList[i];
-        _watchIndex = i;
-        nowPlaying = ch;
-        notifyListeners();
-
-        final announce = skipped == 0 ? '→' : 'Skipping…';
-        final healthy = await _zapLoadChannel(ch, announce: announce);
-        if (healthy) {
-          unawaited(rememberLastPlayed(ch));
-          if (skipped > 0) {
-            final label = ch.num > 0 ? '${ch.num}. ${ch.name}' : ch.name;
-            await externalMpv.showText(
-              'OK · $label',
-              durationMs: 1600,
-            );
-          }
-          return;
-        }
-
-        skipped++;
-        debugPrint(
-          'sdtv: zap dead (${ch.name}) — skip $skipped/$maxAttempts',
-        );
+      final healthy = await _zapLoadChannel(ch, announce: '→');
+      if (healthy) {
+        unawaited(rememberLastPlayed(ch));
       }
-
-      await externalMpv.showText(
-        'No playable channel nearby',
-        durationMs: 2500,
-      );
+      // If not healthy, we already showed an error OSD and stay on this channel.
     } finally {
       _zapInFlight = false;
     }
   }
 
-  /// Load one channel during zap: primary URL, then HLS fallback; health check.
-  /// Returns true if playback looks healthy.
+  /// Load one channel during zap: primary URL, then HLS; fail-and-stay on error.
   Future<bool> _zapLoadChannel(
     LiveChannel ch, {
     required String announce,
@@ -649,11 +623,15 @@ class SessionController extends ChangeNotifier {
     final uri = resolvePlayUri(ch);
     final label = ch.num > 0 ? '${ch.num}. ${ch.name}' : ch.name;
     if (uri == null) {
-      await externalMpv.showText('$announce $label (no URL)', durationMs: 1200);
+      await externalMpv.showText(
+        'No URL\n$label\nB guide · LB/RB other channel',
+        durationMs: 4000,
+      );
       return false;
     }
 
     final fallback = resolvePlayUriFallback(ch);
+    externalMpv.clearRecentLog();
     await externalMpv.showText('$announce $label', durationMs: 1800);
     final ok = await externalMpv.loadFile(uri, title: label);
     if (!ok) {
@@ -661,11 +639,12 @@ class SessionController extends ChangeNotifier {
       if (fallback != null) {
         await externalMpv.loadFile(fallback, title: label);
       } else {
+        await externalMpv.showPlaybackError(channelName: label);
         return false;
       }
     }
 
-    return externalMpv.waitUntilHealthyOrFallback(
+    return externalMpv.ensureHealthyOrShowError(
       fallback,
       title: label,
       grace: const Duration(milliseconds: 1800),
@@ -1149,8 +1128,8 @@ class SessionController extends ChangeNotifier {
         fallbackTitle: channel.name,
       );
 
-      // Process died immediately (mpv rejected .ts) — full restart on .m3u8.
-      if (result.failedFast && fallback != null) {
+      // Process died immediately (mpv rejected .ts) — one restart on .m3u8.
+      if (result.failedFast && fallback != null && !result.userQuit) {
         debugPrint('sdtv: mpv exited fast on .ts — restarting with .m3u8');
         final hlsEntries = <({String title, Uri uri})>[];
         for (final c in playable) {
@@ -1178,6 +1157,12 @@ class SessionController extends ChangeNotifier {
       }
       if (!result.started) {
         return result.error ?? 'mpv failed to start';
+      }
+      // Fail-and-stay for the guide: surface a clear error after a fast crash.
+      if (result.failedFast && !result.userQuit) {
+        final hint = externalMpv.playbackErrorHint(channelName: channel.name);
+        // First line only for the snack (full text was OSD if process stayed up).
+        return hint.split('\n').take(2).join(' · ');
       }
       return null;
     } finally {

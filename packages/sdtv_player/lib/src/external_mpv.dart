@@ -76,7 +76,87 @@ class ExternalMpvLauncher {
 
   bool _userQuit = false;
 
+  /// Recent mpv log lines (for HTTP 403-style error messages).
+  final List<String> _recentLog = <String>[];
+
   bool get isRunning => _process != null || _launching;
+
+  void _noteLog(String line) {
+    final t = line.trim();
+    if (t.isEmpty) return;
+    _recentLog.add(t);
+    if (_recentLog.length > 40) {
+      _recentLog.removeRange(0, _recentLog.length - 40);
+    }
+  }
+
+  void clearRecentLog() => _recentLog.clear();
+
+  /// Best-effort human error from mpv logs (TiviMate-style).
+  String playbackErrorHint({String? channelName}) {
+    final blob = _recentLog.join('\n').toLowerCase();
+    String core;
+    if (RegExp(r'\b403\b|http error 403|forbidden').hasMatch(blob)) {
+      core = 'HTTP 403 Forbidden';
+    } else if (RegExp(r'\b401\b|unauthorized').hasMatch(blob)) {
+      core = 'HTTP 401 Unauthorized';
+    } else if (RegExp(r'\b404\b|not found').hasMatch(blob)) {
+      core = 'HTTP 404 Not Found';
+    } else if (RegExp(r'\b502\b|\b503\b|\b504\b').hasMatch(blob)) {
+      core = 'Server error (5xx)';
+    } else if (blob.contains('ssl') || blob.contains('certificate')) {
+      core = 'TLS/SSL error';
+    } else if (blob.contains('timed out') || blob.contains('timeout')) {
+      core = 'Connection timed out';
+    } else if (blob.contains('connection refused') ||
+        blob.contains('network is unreachable') ||
+        blob.contains('no route to host')) {
+      core = 'Network error';
+    } else if (blob.contains('failed to recognize file format') ||
+        blob.contains('failed to open') ||
+        blob.contains('error opening') ||
+        blob.contains('opening failed')) {
+      core = 'Failed to open stream';
+    } else if (blob.contains('no decoder') || blob.contains('codec')) {
+      core = 'Codec / decode error';
+    } else {
+      core = 'Playback failed';
+    }
+
+    // Last meaningful log line for detail (truncated).
+    String? detail;
+    for (var i = _recentLog.length - 1; i >= 0; i--) {
+      final line = _recentLog[i];
+      final lower = line.toLowerCase();
+      if (lower.contains('http') ||
+          lower.contains('error') ||
+          lower.contains('failed') ||
+          lower.contains('forbidden') ||
+          RegExp(r'\b[45]\d\d\b').hasMatch(lower)) {
+        detail = line.length > 90 ? '${line.substring(0, 87)}…' : line;
+        break;
+      }
+    }
+
+    final name = (channelName != null && channelName.trim().isNotEmpty)
+        ? channelName.trim()
+        : null;
+    final buf = StringBuffer(core);
+    if (name != null) buf.write('\n$name');
+    if (detail != null && !detail.toLowerCase().contains(core.toLowerCase())) {
+      buf.write('\n$detail');
+    }
+    buf.write('\nB guide · LB/RB other channel');
+    return buf.toString();
+  }
+
+  /// Show a multi-line playback error on the OSD.
+  Future<void> showPlaybackError({String? channelName}) async {
+    await showText(
+      playbackErrorHint(channelName: channelName),
+      durationMs: 5000,
+    );
+  }
 
   /// Common Flatpak app IDs for mpv (Discover / Flathub).
   static const flatpakAppIds = <String>[
@@ -540,6 +620,22 @@ class ExternalMpvLauncher {
     return true;
   }
 
+  /// Health-check after a load; on failure show a TiviMate-style error and stay.
+  Future<bool> ensureHealthyOrShowError(
+    Uri? fallback, {
+    String? title,
+    Duration grace = const Duration(milliseconds: 2000),
+  }) async {
+    final ok = await waitUntilHealthyOrFallback(
+      fallback,
+      title: title,
+      grace: grace,
+    );
+    if (ok || _userQuit || !isRunning) return ok;
+    await showPlaybackError(channelName: title);
+    return false;
+  }
+
   /// Legacy name — same as [waitUntilHealthyOrFallback].
   Future<bool> tryFallbackIfUnhealthy(
     Uri? fallback, {
@@ -590,6 +686,7 @@ class ExternalMpvLauncher {
 
     _launching = true;
     _userQuit = false;
+    clearRecentLog();
     final startedAt = DateTime.now();
     Directory? confDir;
     try {
@@ -762,6 +859,7 @@ end)
       unawaited(proc.stdout.drain<void>());
       unawaited(proc.stderr.transform(SystemEncoding().decoder).forEach((line) {
         if (line.trim().isNotEmpty) {
+          _noteLog(line);
           debugPrint('mpv: $line');
         }
       }));
@@ -772,15 +870,15 @@ end)
       unawaited(() async {
         await Future<void>.delayed(const Duration(milliseconds: 600));
         await sendCommand(['show-text', hint, 2800]);
-      }());
-
-      // Xtream: if .ts never demuxes, swap to .m3u8 without respawning mpv.
-      unawaited(
-        waitUntilHealthyOrFallback(
+        // Try .ts → .m3u8; if both fail, show error and stay (no auto-zap).
+        final ok = await waitUntilHealthyOrFallback(
           fallbackUrl,
           title: fallbackTitle ?? startTitle,
-        ),
-      );
+        );
+        if (!ok && isRunning && !_userQuit) {
+          await showPlaybackError(channelName: fallbackTitle ?? startTitle);
+        }
+      }());
 
       final code = await proc.exitCode;
       final durationMs = DateTime.now().difference(startedAt).inMilliseconds;
