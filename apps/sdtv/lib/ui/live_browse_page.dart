@@ -260,8 +260,39 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     );
   }
 
+  /// Keep [index] inside the viewport (only scrolls when the row would leave).
+  ///
+  /// Prefer this for overlay lists (manage cats / search) so the highlight
+  /// stays visible while D-pad scrolling.
+  void _ensureIndexVisible(
+    ScrollController c,
+    int index, {
+    double itemExtent = _rowExtent,
+    double headerExtent = 0,
+  }) {
+    if (!c.hasClients) return;
+    final max = c.position.maxScrollExtent;
+    final viewH = c.position.viewportDimension;
+    final itemTop = headerExtent + index * itemExtent;
+    final itemBottom = itemTop + itemExtent;
+    final viewTop = c.offset;
+    final viewBottom = c.offset + viewH;
+    double? target;
+    if (itemTop < viewTop) {
+      target = itemTop;
+    } else if (itemBottom > viewBottom) {
+      target = itemBottom - viewH;
+    }
+    if (target == null) return;
+    c.animateTo(
+      target.clamp(0.0, max),
+      duration: const Duration(milliseconds: 90),
+      curve: Curves.easeOut,
+    );
+  }
+
   void _scrollToChannelIndex(int index) {
-    _scrollTo(
+    _ensureIndexVisible(
       _chanScroll,
       index,
       itemExtent: _rowExtent,
@@ -270,12 +301,25 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   void _scrollToSearchIndex(int index) {
-    _scrollTo(
+    _ensureIndexVisible(
       _searchScroll,
       index,
       itemExtent: _rowExtent,
       headerExtent: 0,
     );
+  }
+
+  void _scrollToManageIndex(int index) {
+    // Defer until after setState so maxScrollExtent is correct.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_manageCatsOpen) return;
+      _ensureIndexVisible(
+        _manageScroll,
+        index,
+        itemExtent: _rowExtent,
+        headerExtent: 0,
+      );
+    });
   }
 
   void _rememberChanIndex() {
@@ -382,10 +426,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (_manageCatsOpen) {
       final n = session.categories.length;
       if (n == 0) return;
-      setState(() {
-        _manageIndex = (_manageIndex + delta).clamp(0, n - 1);
-      });
-      _scrollTo(_manageScroll, _manageIndex, itemExtent: _rowExtent);
+      final next = (_manageIndex + delta).clamp(0, n - 1);
+      setState(() => _manageIndex = next);
+      _scrollToManageIndex(next);
       return;
     }
     if (_menuOpen) {
@@ -1556,6 +1599,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                     )
                                   : ListView.builder(
                                       controller: _manageScroll,
+                                      // Fixed extent keeps scroll math aligned
+                                      // with the highlight (same bug as search).
+                                      itemExtent: _rowExtent,
                                       itemCount: session.categories.length,
                                       itemBuilder: (context, i) {
                                         final cat = session.categories[i];
@@ -1566,7 +1612,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                         final selected = _manageIndex == i;
                                         return Padding(
                                           padding: const EdgeInsets.only(
-                                            bottom: 8,
+                                            bottom: 6,
                                           ),
                                           child: _BrowseTile(
                                             label: hidden
