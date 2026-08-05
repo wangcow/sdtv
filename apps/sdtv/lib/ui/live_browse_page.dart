@@ -607,6 +607,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _closeSearch();
       return;
     }
+    if (_switchSourceOpen) {
+      setState(() => _switchSourceOpen = false);
+      return;
+    }
     if (_manageCatsOpen) {
       setState(() => _manageCatsOpen = false);
       return;
