@@ -77,6 +77,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       danger: false
     ),
     (
+      id: 'chrome_spike',
+      label: 'Chrome spike (embedded)',
+      icon: Icons.smart_display_outlined,
+      danger: false
+    ),
+    (
       id: 'hide_cat',
       label: 'Hide category',
       icon: Icons.visibility_off_outlined,
@@ -879,6 +885,25 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         _switchSourceOpen = true;
         _switchSourceIndex = idx;
       });
+      return;
+    }
+    if (id == 'chrome_spike') {
+      // Player chrome spike: embedded media_kit + Flutter HUD (not external mpv).
+      final chans = session.channelsInCategory;
+      if (chans.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Highlight a channel first, then open Chrome spike'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+        return;
+      }
+      final ch = chans[_chanIndex.clamp(0, chans.length - 1)];
+      setState(() => _column = 1);
+      _rememberChanIndex();
+      await _playEmbedded(ch);
       return;
     }
     if (id == 'hide_cat') {

@@ -50,7 +50,29 @@ Couch navigation is the core product requirement. Every screen must work with a 
 - **↑↓** move results · **A** on a channel **plays** it · **A** on a category opens that list · **B** closes.
 - Result model includes `GuideSearchKind.epg` for future program search — same UI.
 
-## Watching (external mpv — Phase B)
+## Player chrome spike (embedded HUD)
+
+**Chrome** = the on-video control UI (title, play/pause, scrubber, back).  
+**Spike** = a small experiment path, not the default daily player.  
+**Scrubber** = the progress bar you drag/seek along (time →).
+
+Default live TV still uses **external fullscreen mpv** (OSD text). To try the TiviMate-like bar:
+
+1. Highlight a channel in the guide  
+2. **☰ → Chrome spike (embedded)**  
+3. Video plays **inside Flutter** with a pad-focusable bottom bar  
+
+| Control | Action |
+|---------|--------|
+| A | Activate focused control (play/pause, ±10s, back) |
+| ← / → | Move focus across chrome buttons |
+| ↑ / ↓ | Live: zap channel · On scrubber: seek ±5% |
+| LB / RB | Channel zap |
+| B | Focus Back, or exit if Back focused; show chrome if hidden |
+
+Live streams show a **LIVE** badge and **no scrubber** (no useful duration). Demo HLS often **can** seek so you can try the bar.
+
+## Watching (external mpv — daily default)
 
 Flutter keeps reading the pad (Deck); mpv also has keyboard maps when it has focus (desktop).
 
