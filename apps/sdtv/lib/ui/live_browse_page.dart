@@ -609,6 +609,18 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
           ),
         ),
       );
+    } else if (session.needsAppRestartForFullDisplay) {
+      // Docked while nest stayed handheld — mpv cannot fill TV until relaunch.
+      session.clearDisplayRestartHint();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Docked at handheld resolution — STEAM → Exit sdtv → open again '
+            'for full TV (Native applies on launch only)',
+          ),
+          duration: Duration(seconds: 8),
+        ),
+      );
     }
 
     if (mounted) {
