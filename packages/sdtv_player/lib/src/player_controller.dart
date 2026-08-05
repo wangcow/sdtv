@@ -24,6 +24,19 @@ abstract class SdtvPlayerController extends Listenable {
   /// Decode path summary for HUD (never empty after first open attempt).
   String get decodeLabel => 'decode: —';
 
+  /// Playback position (VOD / when stream reports time).
+  Duration get position => Duration.zero;
+
+  /// Total duration when known; [Duration.zero] for live / unknown.
+  Duration get duration => Duration.zero;
+
+  /// True when a scrubber is meaningful (finite duration, not live).
+  bool get canSeek {
+    final d = duration;
+    return d > const Duration(seconds: 5) &&
+        d < const Duration(hours: 12);
+  }
+
   /// Non-null when using media_kit (for [Video] widget).
   VideoController? get videoController => null;
 
@@ -31,6 +44,20 @@ abstract class SdtvPlayerController extends Listenable {
   Future<void> play();
   Future<void> pause();
   Future<void> stop();
+
+  /// Seek to [position] when [canSeek]; no-op for live.
+  Future<void> seek(Duration position) async {}
+
+  /// Relative seek (e.g. ±10s) when [canSeek].
+  Future<void> seekBy(Duration delta) async {
+    if (!canSeek) return;
+    final next = position + delta;
+    final d = duration;
+    final clamped = next < Duration.zero
+        ? Duration.zero
+        : (next > d ? d : next);
+    await seek(clamped);
+  }
 
   /// Re-read native player flags into [state] (sleep/resume, stuck spinner).
   void resyncState() {}
@@ -61,10 +88,28 @@ class StubSdtvPlayerController extends ChangeNotifier
   @override
   VideoController? get videoController => null;
 
+  Duration _position = Duration.zero;
+  Duration _duration = Duration.zero;
+
+  @override
+  Duration get position => _position;
+
+  @override
+  Duration get duration => _duration;
+
+  @override
+  bool get canSeek {
+    final d = duration;
+    return d > const Duration(seconds: 5) && d < const Duration(hours: 12);
+  }
+
   @override
   Future<void> open(Uri url) async {
     _url = url.toString();
     _error = null;
+    _position = Duration.zero;
+    // Demo-ish finite duration so scrubber can be exercised in tests.
+    _duration = const Duration(minutes: 5);
     _state = SdtvPlayerState.opening;
     notifyListeners();
     _state = SdtvPlayerState.playing;
@@ -91,7 +136,29 @@ class StubSdtvPlayerController extends ChangeNotifier
   Future<void> stop() async {
     _state = SdtvPlayerState.idle;
     _url = null;
+    _position = Duration.zero;
+    _duration = Duration.zero;
     notifyListeners();
+  }
+
+  @override
+  Future<void> seek(Duration position) async {
+    if (!canSeek) return;
+    _position = position < Duration.zero
+        ? Duration.zero
+        : (position > _duration ? _duration : position);
+    notifyListeners();
+  }
+
+  @override
+  Future<void> seekBy(Duration delta) async {
+    if (!canSeek) return;
+    final next = position + delta;
+    final d = duration;
+    final clamped = next < Duration.zero
+        ? Duration.zero
+        : (next > d ? d : next);
+    await seek(clamped);
   }
 
   @override
@@ -147,14 +214,30 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
     }));
 
     // Position ticks while audio/video advances — clears stuck "buffering" UI.
-    _subs.add(_player.stream.position.listen((_) {
+    _subs.add(_player.stream.position.listen((pos) {
       if (_disposed) return;
+      _position = pos;
       if (_state == SdtvPlayerState.buffering ||
           _state == SdtvPlayerState.opening) {
         if (_player.state.playing) {
           _setState(SdtvPlayerState.playing);
+          return;
         }
       }
+      // Throttle HUD rebuilds: ~4 Hz is enough for a scrubber.
+      final now = DateTime.now();
+      if (_lastPosNotify == null ||
+          now.difference(_lastPosNotify!) > const Duration(milliseconds: 250)) {
+        _lastPosNotify = now;
+        notifyListeners();
+      }
+    }));
+
+    _subs.add(_player.stream.duration.listen((d) {
+      if (_disposed) return;
+      if (_duration == d) return;
+      _duration = d;
+      notifyListeners();
     }));
 
     _subs.add(_player.stream.error.listen((message) {
@@ -174,6 +257,9 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   String? _url;
   String? _error;
   String _decodeLabel = 'decode: —';
+  Duration _position = Duration.zero;
+  Duration _duration = Duration.zero;
+  DateTime? _lastPosNotify;
   bool _disposed = false;
   Timer? _bufferStuckTimer;
 
@@ -339,6 +425,18 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   String get decodeLabel => _decodeLabel;
 
   @override
+  Duration get position => _position;
+
+  @override
+  Duration get duration => _duration;
+
+  @override
+  bool get canSeek {
+    final d = duration;
+    return d > const Duration(seconds: 5) && d < const Duration(hours: 12);
+  }
+
+  @override
   VideoController get videoController => _videoController;
 
   Player get rawPlayer => _player;
@@ -351,6 +449,8 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
     if (_disposed) return;
     _url = url.toString();
     _error = null;
+    _position = Duration.zero;
+    _duration = Duration.zero;
     _bufferStuckTimer?.cancel();
     _setState(SdtvPlayerState.opening);
     try {
@@ -402,7 +502,32 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
       debugPrint('sdtv_player stop: $e');
     }
     _url = null;
+    _position = Duration.zero;
+    _duration = Duration.zero;
     _setState(SdtvPlayerState.idle);
+  }
+
+  @override
+  Future<void> seek(Duration position) async {
+    if (_disposed || !canSeek) return;
+    try {
+      await _player.seek(position).timeout(const Duration(milliseconds: 900));
+      _position = position;
+      notifyListeners();
+    } catch (e) {
+      debugPrint('sdtv_player seek: $e');
+    }
+  }
+
+  @override
+  Future<void> seekBy(Duration delta) async {
+    if (_disposed || !canSeek) return;
+    final next = position + delta;
+    final d = duration;
+    final clamped = next < Duration.zero
+        ? Duration.zero
+        : (next > d ? d : next);
+    await seek(clamped);
   }
 
   @override
