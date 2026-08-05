@@ -560,6 +560,7 @@ class SessionController extends ChangeNotifier {
     // Live IPTV: always loadfile. playlist-pos often updates OSD index only and
     // does not re-open the stream (especially HLS/ts).
     final label = ch.num > 0 ? '${ch.num}. ${ch.name}' : ch.name;
+    final fallback = resolvePlayUriFallback(ch);
     await externalMpv.showText('→ $label', durationMs: 2200);
     final ok = await externalMpv.loadFile(uri, title: label);
     if (!ok) {
@@ -567,6 +568,10 @@ class SessionController extends ChangeNotifier {
       await externalMpv.playlistPlayIndex(i);
       await externalMpv.setMediaTitle(label);
     }
+    // Same .ts → .m3u8 path as initial play (in-process, no respawn).
+    unawaited(
+      externalMpv.tryFallbackIfUnhealthy(fallback, title: label),
+    );
   }
 
   /// Volume ± (D-pad / arrows). Steps of 5 on mpv's 0–100 scale + OSD.
@@ -940,7 +945,10 @@ class SessionController extends ChangeNotifier {
   }
 
   /// Resolve the URL that should be handed to the player engine.
-  Uri? resolvePlayUri(LiveChannel channel) {
+  ///
+  /// [extension] is for Xtream live only (`ts` or `m3u8`). Direct M3U URLs
+  /// and demo ignore it.
+  Uri? resolvePlayUri(LiveChannel channel, {String extension = 'ts'}) {
     if (channel.hasDirectUrl) {
       return Uri.tryParse(channel.streamUrl!.trim());
     }
@@ -949,14 +957,22 @@ class SessionController extends ChangeNotifier {
     }
     final client = _client;
     if (client == null) return null;
-    // Live: prefer .ts (mpv will error visibly if bad; m3u8 retry in Phase B).
-    return client.livePlayUrl(channel.streamId, extension: 'ts');
+    return client.livePlayUrl(channel.streamId, extension: extension);
+  }
+
+  /// HLS fallback when primary is Xtream `.ts` (null for M3U/demo).
+  Uri? resolvePlayUriFallback(LiveChannel channel) {
+    if (channel.hasDirectUrl || useDemo || mockCatalog) return null;
+    if (_client == null) return null;
+    return resolvePlayUri(channel, extension: 'm3u8');
   }
 
   /// Phase A/B: mark channel now-playing and run **external mpv** until quit.
   ///
   /// Builds a session playlist from the current category (or favorites) so
   /// channel zap works via IPC and keyboard PGUP/PGDWN inside mpv.
+  ///
+  /// Xtream: starts with `.ts`, auto-retries `.m3u8` if demux fails.
   ///
   /// Returns an error string if mpv could not start; null on normal exit
   /// or when a session is already watching (re-entry ignored).
@@ -985,8 +1001,9 @@ class SessionController extends ChangeNotifier {
       if (uri == null) {
         return 'No playable URL for this channel.';
       }
+      final fallback = resolvePlayUriFallback(channel);
 
-      // Zap list = current guide column (favorites or category).
+      // Zap list = current guide column (favorites or category). Primary = .ts.
       final list = channelsInCategory;
       final entries = <({String title, Uri uri})>[];
       final playable = <LiveChannel>[];
@@ -1014,11 +1031,38 @@ class SessionController extends ChangeNotifier {
       _watchList = playable;
       _watchIndex = start;
 
-      final result = await externalMpv.playFullscreen(
+      var result = await externalMpv.playFullscreen(
         uri,
         playlist: entries,
         startIndex: start,
+        fallbackUrl: fallback,
+        fallbackTitle: channel.name,
       );
+
+      // Process died immediately (mpv rejected .ts) — full restart on .m3u8.
+      if (result.failedFast && fallback != null) {
+        debugPrint('sdtv: mpv exited fast on .ts — restarting with .m3u8');
+        final hlsEntries = <({String title, Uri uri})>[];
+        for (final c in playable) {
+          final u = resolvePlayUriFallback(c) ?? resolvePlayUri(c);
+          if (u == null) continue;
+          hlsEntries.add((title: c.name, uri: u));
+        }
+        if (hlsEntries.isEmpty) {
+          hlsEntries.add((title: channel.name, uri: fallback));
+        }
+        var hlsStart = playable.indexWhere(
+          (c) => c.favoriteKey == channel.favoriteKey,
+        );
+        if (hlsStart < 0) hlsStart = 0;
+        if (hlsStart >= hlsEntries.length) hlsStart = 0;
+        result = await externalMpv.playFullscreen(
+          fallback,
+          playlist: hlsEntries,
+          startIndex: hlsStart,
+        );
+      }
+
       if (result.busy) {
         return null;
       }
