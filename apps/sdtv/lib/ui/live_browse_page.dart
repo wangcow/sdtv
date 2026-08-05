@@ -8,6 +8,7 @@ import 'package:sdtv_core/sdtv_core.dart';
 import 'package:sdtv_input/sdtv_input.dart';
 
 import '../build_info.dart';
+import '../services/saved_source.dart';
 import '../state/session_controller.dart';
 import 'player_page.dart';
 
@@ -42,14 +43,17 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   bool _aboutOpen = false;
   bool _manageCatsOpen = false;
   bool _searchOpen = false;
+  bool _switchSourceOpen = false;
   int _menuIndex = 0;
   int _manageIndex = 0;
   int _searchIndex = 0;
+  int _switchSourceIndex = 0;
 
   final _catScroll = ScrollController();
   final _chanScroll = ScrollController();
   final _manageScroll = ScrollController();
   final _searchScroll = ScrollController();
+  final _switchScroll = ScrollController();
   final _searchCtrl = TextEditingController();
   final _searchFocus = FocusNode();
   List<GuideSearchHit> _searchHits = const [];
@@ -66,6 +70,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   static const _menuItems =
       <({String id, String label, IconData icon, bool danger})>[
     (id: 'search', label: 'Search', icon: Icons.search, danger: false),
+    (
+      id: 'switch_source',
+      label: 'Switch playlist',
+      icon: Icons.swap_horiz,
+      danger: false
+    ),
     (
       id: 'hide_cat',
       label: 'Hide category',
@@ -181,6 +191,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     _chanScroll.dispose();
     _manageScroll.dispose();
     _searchScroll.dispose();
+    _switchScroll.dispose();
     super.dispose();
   }
 
@@ -321,7 +332,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         !_menuOpen &&
         !_aboutOpen &&
         !_manageCatsOpen &&
-        !_searchOpen) {
+        !_searchOpen &&
+        !_switchSourceOpen) {
       unawaited(session.watchMenuMove(delta));
       return;
     }
@@ -331,15 +343,25 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         !_menuOpen &&
         !_aboutOpen &&
         !_manageCatsOpen &&
-        !_searchOpen) {
+        !_searchOpen &&
+        !_switchSourceOpen) {
       unawaited(session.watchVolumeDelta(delta < 0 ? 5 : -5));
       return;
     }
 
     if (!_acceptNav()) return;
 
-    // Menu / about / manage / search overlays own the D-pad.
+    // Menu / about / manage / search / switch overlays own the D-pad.
     if (_aboutOpen) return;
+    if (_switchSourceOpen) {
+      final n = session.savedSources.length;
+      if (n == 0) return;
+      setState(() {
+        _switchSourceIndex = (_switchSourceIndex + delta).clamp(0, n - 1);
+      });
+      _scrollTo(_switchScroll, _switchSourceIndex, itemExtent: _rowExtent);
+      return;
+    }
     if (_searchOpen) {
       if (_searchHits.isEmpty) return;
       // Leave the text field so arrows move results, not caret.
@@ -404,7 +426,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         !_menuOpen &&
         !_aboutOpen &&
         !_manageCatsOpen &&
-        !_searchOpen) {
+        !_searchOpen &&
+        !_switchSourceOpen) {
       unawaited(session.watchMenuAdjust(delta));
       return;
     }
@@ -413,12 +436,19 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         !_menuOpen &&
         !_aboutOpen &&
         !_manageCatsOpen &&
-        !_searchOpen) {
+        !_searchOpen &&
+        !_switchSourceOpen) {
       unawaited(session.watchChannelAdjacent(delta));
       return;
     }
 
-    if (_menuOpen || _aboutOpen || _manageCatsOpen || _searchOpen) return;
+    if (_menuOpen ||
+        _aboutOpen ||
+        _manageCatsOpen ||
+        _searchOpen ||
+        _switchSourceOpen) {
+      return;
+    }
     if (!_acceptNav()) return;
     if (delta > 0 && _column == 0) {
       _enterChannelColumn();
@@ -465,7 +495,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
     // While mpv is up: A opens/activates the watch menu (not the guide menu).
     if (session.isWatchingExternal) {
-      if (_menuOpen || _aboutOpen || _manageCatsOpen || _searchOpen) {
+      if (_menuOpen ||
+          _aboutOpen ||
+          _manageCatsOpen ||
+          _searchOpen ||
+          _switchSourceOpen) {
         await session.watchQuit();
       } else {
         await session.watchActivate();
@@ -475,6 +509,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
     if (_aboutOpen) {
       setState(() => _aboutOpen = false);
+      return;
+    }
+
+    if (_switchSourceOpen) {
+      await _activateSwitchSource();
       return;
     }
 
@@ -606,6 +645,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _closeSearch();
       return;
     }
+    if (_switchSourceOpen) {
+      setState(() => _switchSourceOpen = false);
+      return;
+    }
     if (_manageCatsOpen) {
       setState(() => _manageCatsOpen = false);
       return;
@@ -618,6 +661,19 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _menuOpen = true;
       _menuIndex = 0;
     });
+  }
+
+  Future<void> _activateSwitchSource() async {
+    final list = session.savedSources;
+    if (list.isEmpty) return;
+    final i = _switchSourceIndex.clamp(0, list.length - 1);
+    final source = list[i];
+    setState(() => _switchSourceOpen = false);
+    // Switching reloads catalog; reset guide landing for the new source.
+    _didRestoreLanding = false;
+    await session.openSavedSource(source);
+    if (!mounted) return;
+    _restoreGuideLanding();
   }
 
   void _openSearch() {
@@ -738,6 +794,30 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (id == 'cancel') return;
     if (id == 'search') {
       _openSearch();
+      return;
+    }
+    if (id == 'switch_source') {
+      final list = session.savedSources;
+      if (list.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No saved playlists yet — connect M3U/Xtream first'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+        return;
+      }
+      var idx = 0;
+      final active = session.activeSourceId;
+      if (active != null) {
+        final i = list.indexWhere((s) => s.id == active);
+        if (i >= 0) idx = i;
+      }
+      setState(() {
+        _switchSourceOpen = true;
+        _switchSourceIndex = idx;
+      });
       return;
     }
     if (id == 'hide_cat') {
@@ -882,8 +962,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       onMute: () {
         if (session.isWatchingExternal) {
           unawaited(session.watchCycleMute());
-        } else if (_searchOpen) {
-          // Don't hide cats while typing search.
+        } else if (_searchOpen || _switchSourceOpen) {
+          // Don't hide cats while searching / switching playlists.
         } else if (_manageCatsOpen) {
           unawaited(_toggleManageRow());
         } else if (!_menuOpen && !_aboutOpen) {
@@ -1212,6 +1292,87 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             const SizedBox(height: 12),
                             Text(
                               '↑↓ move · A select · B close',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.outline,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+
+              // —— Switch saved playlist ——
+              if (_switchSourceOpen) ...[
+                Positioned.fill(
+                  child: GestureDetector(
+                    onTap: () => setState(() => _switchSourceOpen = false),
+                    child: ColoredBox(
+                      color: Colors.black.withValues(alpha: 0.55),
+                    ),
+                  ),
+                ),
+                Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(
+                      maxWidth: 480,
+                      maxHeight: 480,
+                    ),
+                    child: Material(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(16),
+                      elevation: 12,
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text(
+                              'Switch playlist',
+                              style: theme.textTheme.headlineSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Saved on this device · A opens · B closes',
+                              style: theme.textTheme.bodyMedium,
+                            ),
+                            const SizedBox(height: 16),
+                            Expanded(
+                              child: ListView.builder(
+                                controller: _switchScroll,
+                                itemCount: session.savedSources.length,
+                                itemBuilder: (context, i) {
+                                  final s = session.savedSources[i];
+                                  final selected = _switchSourceIndex == i;
+                                  final active =
+                                      session.activeSourceId == s.id;
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 8),
+                                    child: _BrowseTile(
+                                      label: active
+                                          ? '${s.kindBadge} · ${s.label}  · current'
+                                          : '${s.kindBadge} · ${s.label}',
+                                      icon: s.kind == SavedSourceKind.m3u
+                                          ? Icons.playlist_play
+                                          : s.kind == SavedSourceKind.xtream
+                                              ? Icons.cloud_outlined
+                                              : Icons.play_circle_outline,
+                                      selected: selected,
+                                      onTap: () async {
+                                        setState(() => _switchSourceIndex = i);
+                                        await _activateSwitchSource();
+                                      },
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                            Text(
+                              '↑↓ move · A switch · B close · Sign out to add new',
                               style: theme.textTheme.bodySmall?.copyWith(
                                 color: theme.colorScheme.outline,
                               ),

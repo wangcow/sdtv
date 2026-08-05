@@ -34,6 +34,13 @@ Couch navigation is the core product requirement. Every screen must work with a 
 - Starting playback (or zapping to a channel) saves **category + channel** for that playlist/panel.
 - On next connect / app launch, the guide opens on that category with the channel focused (channel column selected when resume works).
 
+### Saved playlists
+
+- Successful **Demo / M3U / Xtream** connect is stored on-device (no retyping).
+- Login home lists **SAVED PLAYLISTS** — **A** opens one.
+- Guide **☰ → Switch playlist** swaps sources without signing out.
+- Favorites / hidden cats / last-played stay **per source** (scoped).
+
 ### Search
 
 - **☰ → Search** or **`/`** / **Ctrl+F** opens guide search.
