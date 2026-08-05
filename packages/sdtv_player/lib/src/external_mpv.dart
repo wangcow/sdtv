@@ -13,6 +13,8 @@ class ExternalMpvResult {
     this.error,
     this.mpvPath,
     this.busy = false,
+    this.durationMs,
+    this.userQuit = false,
   });
 
   final bool started;
@@ -23,7 +25,21 @@ class ExternalMpvResult {
   /// True when a session was already in flight (re-entry ignored).
   final bool busy;
 
+  /// Wall time from spawn to process exit (null if never started).
+  final int? durationMs;
+
+  /// True when we called [quit]/[stop] (B / menu), not a spontaneous crash.
+  final bool userQuit;
+
   bool get ok => started && error == null && !busy;
+
+  /// Process died quickly without a user quit — often a bad stream URL.
+  bool get failedFast =>
+      started &&
+      !busy &&
+      !userQuit &&
+      durationMs != null &&
+      durationMs! < 4500;
 }
 
 /// How to invoke mpv (native binary vs Flatpak app).
@@ -57,6 +73,8 @@ class ExternalMpvLauncher {
   bool _launching = false;
 
   String? _ipcPath;
+
+  bool _userQuit = false;
 
   bool get isRunning => _process != null || _launching;
 
@@ -468,8 +486,55 @@ class ExternalMpvLauncher {
     return true;
   }
 
+  /// True when demuxer/decoder never really started (bad URL, 403, etc.).
+  Future<bool> isPlaybackUnhealthy() async {
+    if (!isRunning) return true;
+    final idle = await getProperty('idle-active');
+    if (idle == true || idle == 'yes') return true;
+    final pos = await getProperty('time-pos');
+    if (pos == null) return true;
+    // Some builds report time-pos 0 while stuck buffering forever — check
+    // whether we have any decoded A/V after the grace period.
+    final vo = await getProperty('current-vo');
+    final pause = await getProperty('pause');
+    // Paused by user is healthy.
+    if (pause == true || pause == 'yes') return false;
+    // No video output selected often means open failed.
+    if (vo == null || vo == false || vo == '') {
+      final ao = await getProperty('current-ao');
+      if (ao == null || ao == false || ao == '') return true;
+    }
+    return false;
+  }
+
+  /// If still unhealthy after a short wait, [loadFile] the HLS fallback.
+  Future<bool> tryFallbackIfUnhealthy(
+    Uri? fallback, {
+    String? title,
+    Duration grace = const Duration(milliseconds: 2200),
+  }) async {
+    if (fallback == null || _userQuit) return false;
+    await Future<void>.delayed(grace);
+    if (!isRunning || _userQuit) return false;
+    if (!await isPlaybackUnhealthy()) return false;
+    debugPrint('sdtv_player: stream unhealthy — trying fallback $fallback');
+    await showText('Retrying stream (HLS)…', durationMs: 1800);
+    final ok = await loadFile(fallback, title: title);
+    if (!ok) return false;
+    await Future<void>.delayed(const Duration(milliseconds: 1800));
+    if (_userQuit || !isRunning) return ok;
+    final stillBad = await isPlaybackUnhealthy();
+    if (stillBad) {
+      debugPrint('sdtv_player: HLS fallback still unhealthy');
+    } else {
+      debugPrint('sdtv_player: HLS fallback looks OK');
+    }
+    return !stillBad;
+  }
+
   /// Ask mpv to quit (falls back to [stop] kill).
   Future<void> quit() async {
+    _userQuit = true;
     final ok = await sendCommand(['quit']);
     if (!ok) {
       await stop();
@@ -491,11 +556,16 @@ class ExternalMpvLauncher {
   /// [playlist] optional multi-entry list (category / favorites). Enables
   /// keyboard PGUP/PGDWN and in-process zap via [playlistPlayIndex].
   ///
+  /// [fallbackUrl] optional HLS (.m3u8) URL tried if the primary stream fails
+  /// to start (Xtream .ts → .m3u8).
+  ///
   /// Re-entrant: if already running, returns [ExternalMpvResult.busy].
   Future<ExternalMpvResult> playFullscreen(
     Uri url, {
     List<({String title, Uri uri})>? playlist,
     int startIndex = 0,
+    Uri? fallbackUrl,
+    String? fallbackTitle,
   }) async {
     if (_launching || _process != null) {
       debugPrint('sdtv_player: playFullscreen ignored (already running)');
@@ -503,6 +573,8 @@ class ExternalMpvLauncher {
     }
 
     _launching = true;
+    _userQuit = false;
+    final startedAt = DateTime.now();
     Directory? confDir;
     try {
       final inv = await _findMpv();
@@ -686,7 +758,19 @@ end)
         await sendCommand(['show-text', hint, 2800]);
       }());
 
+      // Xtream: if .ts never demuxes, swap to .m3u8 without respawning mpv.
+      if (fallbackUrl != null) {
+        unawaited(
+          tryFallbackIfUnhealthy(
+            fallbackUrl,
+            title: fallbackTitle ?? startTitle,
+          ),
+        );
+      }
+
       final code = await proc.exitCode;
+      final durationMs = DateTime.now().difference(startedAt).inMilliseconds;
+      final wasUser = _userQuit;
       _process = null;
       _cleanupIpc();
 
@@ -694,6 +778,8 @@ end)
         started: true,
         exitCode: code,
         mpvPath: inv.label,
+        durationMs: durationMs,
+        userQuit: wasUser,
       );
     } catch (e, st) {
       _process = null;
@@ -702,6 +788,8 @@ end)
       return ExternalMpvResult(
         started: false,
         error: 'Failed to start mpv: $e',
+        durationMs: DateTime.now().difference(startedAt).inMilliseconds,
+        userQuit: _userQuit,
       );
     } finally {
       _launching = false;
@@ -726,6 +814,7 @@ end)
 
   /// Kill a session we started (sign-out / app exit / B while watching).
   Future<void> stop() async {
+    _userQuit = true;
     final p = _process;
     _launching = false;
     if (p != null) {
