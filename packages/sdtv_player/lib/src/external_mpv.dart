@@ -844,32 +844,40 @@ class ExternalMpvLauncher {
     _displayWatch = null;
   }
 
-  /// Nest (Flutter/mpv) vs largest connected DRM mode — Gamescope letterbox.
+  /// Detect *true* mid-dock letterbox: nest still looks like Deck handheld
+  /// while an external panel is connected.
+  ///
+  /// Do **not** compare nest to the TV's max listed mode (often 4K) — a real
+  /// 1080p Native session was false-positiving and nagging to relaunch.
   Future<void> _checkDockLetterboxAndHint() async {
     if (!_sessionActive || _userQuit || _process == null) return;
 
-    final nest = _nestSize();
-    final ext = await _largestConnectedOutput();
-    if (nest == null || ext == null) return;
+    // Prefer mpv's own window size when available (more accurate under nest).
+    final ow = _asPositiveInt(await getProperty('osd-width'));
+    final oh = _asPositiveInt(await getProperty('osd-height'));
+    final nest = (ow != null && oh != null) ? (ow, oh) : _nestSize();
+    if (nest == null) return;
 
-    final nestPx = nest.$1 * nest.$2;
-    final extPx = ext.$1 * ext.$2;
-    // TV clearly larger than our nest → docked with stale handheld resolution.
-    final letterboxed = extPx > nestPx * 1.25 ||
-        (ext.$1 > nest.$1 * 1.15 && ext.$2 > nest.$2 * 1.05);
+    // Already a full HD+ nest → Native dock launch (or desktop). Never nag.
+    if (!_looksLikeHandheldNest(nest.$1, nest.$2)) {
+      needsAppRestartForFullDisplay = false;
+      return;
+    }
 
-    if (!letterboxed) {
-      // Nest matches output — good (started docked, or nest resized).
+    // Only care if something larger than the Deck panel is actually connected.
+    final hasExternal = await _hasExternalDisplayConnected();
+    if (!hasExternal) {
+      needsAppRestartForFullDisplay = false;
       return;
     }
 
     needsAppRestartForFullDisplay = true;
     debugPrint(
-      'sdtv_player: dock letterbox nest=${nest.$1}x${nest.$2} '
-      'output=${ext.$1}x${ext.$2} — need full app relaunch for Native',
+      'sdtv_player: handheld nest ${nest.$1}x${nest.$2} + external display '
+      '— relaunch sdtv while docked for Native full screen',
     );
 
-    // Fill the nest (crop video) so fewer inner bars; cannot paint outside nest.
+    // Fill the nest only (crop video); cannot paint outside Gamescope nest.
     await sendCommand(['set', 'panscan', '1.0']);
     await sendCommand(['set', 'keepaspect', 'yes']);
     await sendCommand(['set', 'fullscreen', 'yes']);
@@ -877,12 +885,26 @@ class ExternalMpvLauncher {
     if (_dockHintShown) return;
     _dockHintShown = true;
     await showText(
-      'Docked · almost full screen\n'
-      'Gamescope kept handheld size\n'
+      'Docked · handheld resolution\n'
       'STEAM → Exit sdtv → open again\n'
-      'for full TV (Native)',
-      durationMs: 8000,
+      'for full TV (Native on launch)',
+      durationMs: 7000,
     );
+  }
+
+  /// Deck-class nest: ~1280×800 / 800×1280 (with slack), not 1080p/4K.
+  static bool _looksLikeHandheldNest(int w, int h) {
+    final a = w < h ? w : h;
+    final b = w < h ? h : w;
+    // True full HD or higher — fine.
+    if (a >= 1000 && b >= 1600) return false;
+    if (w * h >= 1920 * 1000) return false;
+    // Steam Deck panel and common Game Mode nest sizes.
+    if (b <= 1400 && a <= 900) return true;
+    // 16:10-ish under ~900p short side.
+    final ar = b / a;
+    if (ar >= 1.45 && ar <= 1.75 && a <= 900) return true;
+    return false;
   }
 
   (int, int)? _nestSize() {
@@ -895,6 +917,8 @@ class ExternalMpvLauncher {
         if (w >= 64 && h >= 64) return (w, h);
       }
     } catch (_) {}
+    // Prefer live mpv window size when Flutter view is wrong/obscured.
+    // (filled asynchronously elsewhere; sync fallback below)
     if (_targetW != null && _targetH != null) {
       return (_targetW!, _targetH!);
     }
@@ -904,40 +928,35 @@ class ExternalMpvLauncher {
     return null;
   }
 
-  /// Largest connected connector mode from sysfs (no xrandr needed).
-  static Future<(int, int)?> _largestConnectedOutput() async {
+  /// True when a non-eDP connector reports connected (HDMI/DP dock).
+  static Future<bool> _hasExternalDisplayConnected() async {
     try {
       final drm = Directory('/sys/class/drm');
-      if (!await drm.exists()) return null;
-      var bestW = 0;
-      var bestH = 0;
+      if (!await drm.exists()) return false;
       await for (final ent in drm.list(followLinks: true)) {
-        final name = ent.path.split('/').last;
-        // card1-HDMI-A-1, card0-DP-1, …
+        final name = ent.path.split('/').last.toLowerCase();
+        // Skip card node itself; want cardN-CONNECTOR.
         if (!name.contains('-')) continue;
+        // Internal Deck panel — not "docked to TV".
+        if (name.contains('edp') || name.contains('dsi') || name.contains('lvds')) {
+          continue;
+        }
         final statusFile = File('${ent.path}/status');
         if (!await statusFile.exists()) continue;
         final status = (await statusFile.readAsString()).trim().toLowerCase();
-        if (status != 'connected') continue;
-        final modesFile = File('${ent.path}/modes');
-        if (!await modesFile.exists()) continue;
-        final modes = await modesFile.readAsString();
-        for (final line in modes.split('\n')) {
-          final m = RegExp(r'^(\d+)x(\d+)').firstMatch(line.trim());
-          if (m == null) continue;
-          final w = int.parse(m.group(1)!);
-          final h = int.parse(m.group(2)!);
-          if (w * h > bestW * bestH) {
-            bestW = w;
-            bestH = h;
-          }
-        }
+        if (status == 'connected') return true;
       }
-      if (bestW >= 64 && bestH >= 64) return (bestW, bestH);
     } catch (e) {
-      debugPrint('sdtv_player: drm probe failed: $e');
+      debugPrint('sdtv_player: drm external probe failed: $e');
     }
-    return null;
+    return false;
+  }
+
+  static int? _asPositiveInt(Object? v) {
+    if (v == null) return null;
+    if (v is int) return v > 0 ? v : null;
+    if (v is double) return v > 0 ? v.round() : null;
+    return int.tryParse('$v');
   }
 
   /// Snapshot Flutter view physical size (Gamescope nest) if available.
