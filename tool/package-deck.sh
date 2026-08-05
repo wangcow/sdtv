@@ -29,9 +29,13 @@ if ! command -v patchelf >/dev/null 2>&1; then
   brew install patchelf
 fi
 
-echo "Building release…"
+# Visible on the guide UI so Deck deploys are easy to verify.
+SDTV_BUILD="$(git -C "${ROOT}" rev-parse --short HEAD 2>/dev/null || echo nogit)"
+SDTV_BUILD="${SDTV_BUILD}-$(date -u +%Y%m%d-%H%M)"
+export SDTV_BUILD
+echo "Building release… (SDTV_BUILD=${SDTV_BUILD})"
 cd "${ROOT}/apps/sdtv"
-flutter build linux --release
+flutter build linux --release --dart-define="SDTV_BUILD=${SDTV_BUILD}"
 
 BUNDLE="${ROOT}/apps/sdtv/build/linux/x64/release/bundle"
 LIBDIR="${BUNDLE}/lib"

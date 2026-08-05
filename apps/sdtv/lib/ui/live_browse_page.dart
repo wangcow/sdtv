@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:io' show exit;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:sdtv_core/sdtv_core.dart';
 import 'package:sdtv_input/sdtv_input.dart';
 
+import '../build_info.dart';
 import '../state/session_controller.dart';
 import 'player_page.dart';
 
@@ -27,6 +29,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   /// Last channel row per category id (so ← categories → channels keeps place).
   final Map<String, int> _chanIndexByCategory = {};
+
+  /// Only auto-land on last-played once per page instance.
+  bool _didRestoreLanding = false;
 
   /// In-page menu (no showDialog — avoids stuck modal barriers on Deck).
   bool _menuOpen = false;
@@ -105,7 +110,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   /// Land on last-played category/channel (or session default selection).
   void _restoreGuideLanding() {
+    if (_didRestoreLanding) return;
     if (session.browseCategories.isEmpty) return;
+    _didRestoreLanding = true;
+
+    // Re-apply from prefs in case page mounted before connect finished writing.
+    session.applyLastPlayedSelection();
 
     if (session.selectedCategoryId == null) {
       session.selectCategory(session.browseCategories.first.categoryId);
@@ -116,23 +126,33 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (sel != null) {
       final i =
           session.browseCategories.indexWhere((c) => c.categoryId == sel);
-      if (i >= 0) catIdx = i;
+      if (i >= 0) {
+        catIdx = i;
+      } else {
+        // Selected cat not in list yet — keep index 0 but selection stays.
+        catIdx = 0;
+      }
     }
 
-    // Prefer last-played channel row within the selected category.
     var chanIdx = 0;
     final lastIdx = session.lastPlayedChannelIndex;
+    final hasResume = lastIdx >= 0 || session.lastPlayedChannel != null;
     if (lastIdx >= 0) {
       chanIdx = lastIdx;
       final id = session.selectedCategoryId;
       if (id != null) _chanIndexByCategory[id] = chanIdx;
     }
 
+    debugPrint(
+      'sdtv: restore landing catIdx=$catIdx chanIdx=$chanIdx '
+      'sel=${session.selectedCategoryId} lastIdx=$lastIdx '
+      'last=${session.lastPlayedName}',
+    );
+
     setState(() {
       _catIndex = catIdx;
       _chanIndex = chanIdx;
-      // Open on the channel column when we have a resume target.
-      if (lastIdx >= 0) {
+      if (hasResume && lastIdx >= 0) {
         _column = 1;
       }
     });
@@ -176,6 +196,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   void _onSession() {
     if (!mounted) return;
+    // Connect finished after first frame → still restore last-played once.
+    if (!_didRestoreLanding && session.browseCategories.isNotEmpty) {
+      _restoreGuideLanding();
+      return;
+    }
     final catCount = session.browseCategories.length;
     final chanCount = session.channelsInCategory.length;
     if (catCount > 0) {
@@ -933,6 +958,15 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             ),
                           ),
                         ),
+                        const SizedBox(width: 10),
+                        // Deploy fingerprint — must change after each package-deck.
+                        Text(
+                          SdtvBuildInfo.label,
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.outline,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
                         const Spacer(),
                         Text(
                           user,
@@ -1414,12 +1448,15 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             const SizedBox(height: 12),
                             Text(
                               'sdtv — Steam Deck IPTV player.\n'
+                              'Build: ${SdtvBuildInfo.label}\n'
                               'Demo = offline mock. M3U = playlist URL. '
                               'Connect = Xtream panel.\n'
                               'You supply legal playlists/credentials only.\n\n'
                               'Signed in as $user'
                               '${session.useDemo ? ' (demo)' : session.useM3u ? ' (m3u)' : session.mockCatalog ? ' (mock)' : ' (live)'}\n'
-                              'Channels: ${session.allChannels.length}\n\n'
+                              'Channels: ${session.allChannels.length}\n'
+                              'Last played: ${session.lastPlayedName ?? '—'}'
+                              '${session.lastPlayedCategoryId != null ? ' · ${session.lastPlayedCategoryId}' : ''}\n\n'
                               'Product of the Wangcow Corporation\n'
                               'Apache License 2.0',
                               style: theme.textTheme.bodyMedium,
