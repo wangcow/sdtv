@@ -117,17 +117,11 @@ If the pad still only drives the **Steam** overlay and not sdtv:
 
 ### Dock while watching (resolution)
 
-mpv is started fullscreen. Docking handheld → 1080p TV can leave the VO at the old (800p) size under **Gamescope**.
+mpv is started fullscreen. Docking handheld → 1080p TV **cannot** resize a live mpv window under **Gamescope** (geometry/fullscreen IPC is ignored).
 
-sdtv tries to recover by:
+sdtv recovers the same way manual reopen works: on a real size change it **quits and restarts mpv** on the current channel (~1s black, then full TV size). Zap list state stays in Flutter; only the player process is respawned.
 
-1. On Flutter metrics change — pass **physical pixel size** into mpv and set **geometry** (not just `fullscreen=yes`)
-2. Burst re-fit over ~3s (Gamescope settles slowly)
-3. While watching, compare mpv `osd-*` vs `display-*` / last Flutter size every 3s
-
-You may see brief black flashes during re-fit.
-
-**Steam game resolution:** for Non-Steam sdtv, set Properties → General → resolution for external display to **Default** or **Native** (not locked 1280×800). Otherwise Gamescope never becomes 1080p and no app can fill the TV.
+**Steam game resolution:** for Non-Steam sdtv, set Properties → General → resolution for external display to **Default** or **Native** (not locked 1280×800). Otherwise Gamescope never becomes 1080p.
 
 Note: many IPTV channels are **native 720p** — soft on a 1080p set when the window *is* full-screen; that is the stream.
 

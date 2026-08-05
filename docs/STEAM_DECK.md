@@ -37,7 +37,7 @@ When launching from **Game Mode**, Gamescope owns the output size.
 1. **STEAM** → sdtv → **Properties** → **General**  
    - Resolution (external display): **Default** or **Native** — not a fixed 1280×800.
 2. **Settings → Display** (while docked): external resolution / scaling as you prefer for the TV.
-3. If you dock **while a channel is already playing**, sdtv re-fits mpv using the new pixel size (may flash once or twice). If the picture stays small, **B** back to guide and play again — that always restarts mpv at the current output size.
+3. If you dock **while a channel is already playing**, sdtv **restarts mpv** on the same channel (~1s black) so the new process is full TV size. That matches B → play again, without leaving watch.
 
 Channels that are actually 720p will still look soft when the window correctly fills 1080p.
 
