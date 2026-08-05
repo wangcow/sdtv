@@ -507,30 +507,46 @@ class ExternalMpvLauncher {
     return false;
   }
 
-  /// If still unhealthy after a short wait, [loadFile] the HLS fallback.
-  Future<bool> tryFallbackIfUnhealthy(
+  /// Wait [grace], then either confirm healthy or try [fallback] (.m3u8).
+  ///
+  /// Returns **true** if playback looks healthy (primary or after fallback).
+  Future<bool> waitUntilHealthyOrFallback(
     Uri? fallback, {
     String? title,
-    Duration grace = const Duration(milliseconds: 2200),
+    Duration grace = const Duration(milliseconds: 2000),
   }) async {
-    if (fallback == null || _userQuit) return false;
+    if (_userQuit) return false;
     await Future<void>.delayed(grace);
     if (!isRunning || _userQuit) return false;
-    if (!await isPlaybackUnhealthy()) return false;
+    if (!await isPlaybackUnhealthy()) return true;
+
+    if (fallback == null) {
+      debugPrint('sdtv_player: stream unhealthy, no fallback URL');
+      return false;
+    }
+
     debugPrint('sdtv_player: stream unhealthy — trying fallback $fallback');
-    await showText('Retrying stream (HLS)…', durationMs: 1800);
+    await showText('Retrying stream (HLS)…', durationMs: 1500);
     final ok = await loadFile(fallback, title: title);
     if (!ok) return false;
-    await Future<void>.delayed(const Duration(milliseconds: 1800));
-    if (_userQuit || !isRunning) return ok;
+    await Future<void>.delayed(grace);
+    if (_userQuit || !isRunning) return false;
     final stillBad = await isPlaybackUnhealthy();
     if (stillBad) {
       debugPrint('sdtv_player: HLS fallback still unhealthy');
-    } else {
-      debugPrint('sdtv_player: HLS fallback looks OK');
+      return false;
     }
-    return !stillBad;
+    debugPrint('sdtv_player: HLS fallback looks OK');
+    return true;
   }
+
+  /// Legacy name — same as [waitUntilHealthyOrFallback].
+  Future<bool> tryFallbackIfUnhealthy(
+    Uri? fallback, {
+    String? title,
+    Duration grace = const Duration(milliseconds: 2000),
+  }) =>
+      waitUntilHealthyOrFallback(fallback, title: title, grace: grace);
 
   /// Ask mpv to quit (falls back to [stop] kill).
   Future<void> quit() async {
@@ -759,14 +775,12 @@ end)
       }());
 
       // Xtream: if .ts never demuxes, swap to .m3u8 without respawning mpv.
-      if (fallbackUrl != null) {
-        unawaited(
-          tryFallbackIfUnhealthy(
-            fallbackUrl,
-            title: fallbackTitle ?? startTitle,
-          ),
-        );
-      }
+      unawaited(
+        waitUntilHealthyOrFallback(
+          fallbackUrl,
+          title: fallbackTitle ?? startTitle,
+        ),
+      );
 
       final code = await proc.exitCode;
       final durationMs = DateTime.now().difference(startedAt).inMilliseconds;

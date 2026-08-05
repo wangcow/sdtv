@@ -349,6 +349,7 @@ class SessionController extends ChangeNotifier {
   int _watchIndex = 0;
   DateTime? _lastZapAt;
   DateTime? _lastVolAt;
+  bool _zapInFlight = false;
 
   /// In-player menu (pause chrome). When open, D-pad navigates the menu
   /// instead of volume/channel — like focusing a video player's control bar.
@@ -526,9 +527,13 @@ class SessionController extends ChangeNotifier {
   }
 
   /// Channel ± within the current watch list (LB/RB, ←/→, PgUp/PgDn).
+  ///
+  /// Dead streams: try `.ts` then `.m3u8`, then auto-advance in [delta]
+  /// direction (skip stubs) up to a cap so free/M3U lists stay usable.
   Future<void> watchChannelAdjacent(int delta) async {
     if (!isWatchingExternal || _watchList.isEmpty) return;
     if (watchMenuOpen) return; // menu owns the pad
+    if (_zapInFlight) return;
     final now = DateTime.now();
     if (_lastZapAt != null &&
         now.difference(_lastZapAt!) < const Duration(milliseconds: 280)) {
@@ -537,40 +542,85 @@ class SessionController extends ChangeNotifier {
     _lastZapAt = now;
 
     if (_watchList.length == 1) {
-      await externalMpv.showText(nowPlaying?.name ?? _watchList[0].name);
+      // Still retry formats on the only channel.
+      await _zapLoadChannel(_watchList[0], announce: '→');
       return;
     }
 
-    var i = (_watchIndex + delta) % _watchList.length;
-    if (i < 0) i += _watchList.length;
-    if (i == _watchIndex) return;
+    _zapInFlight = true;
+    try {
+      final n = _watchList.length;
+      final maxAttempts = n < 15 ? n : 15;
+      var i = _watchIndex;
+      var skipped = 0;
 
-    final ch = _watchList[i];
+      for (var attempt = 0; attempt < maxAttempts; attempt++) {
+        i = (i + delta) % n;
+        if (i < 0) i += n;
+
+        final ch = _watchList[i];
+        _watchIndex = i;
+        nowPlaying = ch;
+        notifyListeners();
+
+        final announce = skipped == 0 ? '→' : 'Skipping…';
+        final healthy = await _zapLoadChannel(ch, announce: announce);
+        if (healthy) {
+          unawaited(rememberLastPlayed(ch));
+          if (skipped > 0) {
+            final label = ch.num > 0 ? '${ch.num}. ${ch.name}' : ch.name;
+            await externalMpv.showText(
+              'OK · $label',
+              durationMs: 1600,
+            );
+          }
+          return;
+        }
+
+        skipped++;
+        debugPrint(
+          'sdtv: zap dead (${ch.name}) — skip $skipped/$maxAttempts',
+        );
+      }
+
+      await externalMpv.showText(
+        'No playable channel nearby',
+        durationMs: 2500,
+      );
+    } finally {
+      _zapInFlight = false;
+    }
+  }
+
+  /// Load one channel during zap: primary URL, then HLS fallback; health check.
+  /// Returns true if playback looks healthy.
+  Future<bool> _zapLoadChannel(
+    LiveChannel ch, {
+    required String announce,
+  }) async {
     final uri = resolvePlayUri(ch);
+    final label = ch.num > 0 ? '${ch.num}. ${ch.name}' : ch.name;
     if (uri == null) {
-      debugPrint('sdtv: zap skip — no URL for ${ch.name}');
-      return;
+      await externalMpv.showText('$announce $label (no URL)', durationMs: 1200);
+      return false;
     }
 
-    _watchIndex = i;
-    nowPlaying = ch;
-    notifyListeners();
-    unawaited(rememberLastPlayed(ch));
-
-    // Live IPTV: always loadfile. playlist-pos often updates OSD index only and
-    // does not re-open the stream (especially HLS/ts).
-    final label = ch.num > 0 ? '${ch.num}. ${ch.name}' : ch.name;
     final fallback = resolvePlayUriFallback(ch);
-    await externalMpv.showText('→ $label', durationMs: 2200);
+    await externalMpv.showText('$announce $label', durationMs: 1800);
     final ok = await externalMpv.loadFile(uri, title: label);
     if (!ok) {
-      debugPrint('sdtv: loadfile failed, trying playlist-play-index $i');
-      await externalMpv.playlistPlayIndex(i);
-      await externalMpv.setMediaTitle(label);
+      debugPrint('sdtv: zap loadfile failed for ${ch.name}');
+      if (fallback != null) {
+        await externalMpv.loadFile(fallback, title: label);
+      } else {
+        return false;
+      }
     }
-    // Same .ts → .m3u8 path as initial play (in-process, no respawn).
-    unawaited(
-      externalMpv.tryFallbackIfUnhealthy(fallback, title: label),
+
+    return externalMpv.waitUntilHealthyOrFallback(
+      fallback,
+      title: label,
+      grace: const Duration(milliseconds: 1800),
     );
   }
 
