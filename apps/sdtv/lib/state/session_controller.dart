@@ -442,6 +442,15 @@ class SessionController extends ChangeNotifier {
   /// the whole browse UI with this — menu / Cancel must always work.
   bool get isWatchingExternal => _watchInFlight || externalMpv.isRunning;
 
+  /// Docked mid-session with Gamescope still at handheld nest size.
+  /// Full sdtv relaunch from Steam is required for Native TV resolution.
+  bool get needsAppRestartForFullDisplay =>
+      externalMpv.needsAppRestartForFullDisplay;
+
+  void clearDisplayRestartHint() {
+    externalMpv.needsAppRestartForFullDisplay = false;
+  }
+
   /// True when pad should drive the watch menu, not zap/volume.
   bool get isWatchMenuActive => isWatchingExternal && watchMenuOpen;
 

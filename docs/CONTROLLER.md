@@ -117,13 +117,15 @@ If the pad still only drives the **Steam** overlay and not sdtv:
 
 ### Dock while watching (resolution)
 
-mpv is started fullscreen. Docking handheld → 1080p TV **cannot** resize a live mpv window under **Gamescope** (geometry/fullscreen IPC is ignored).
+**Steam Deck limitation:** Gamescope picks nest resolution at **game launch**. Docking mid-session usually keeps the handheld nest (e.g. 1280×800) scaled onto the TV — picture looks *almost* full with bars. **Native** in sdtv’s Steam properties only applies the next time you **start** sdtv while docked.
 
-sdtv recovers the same way manual reopen works: on a real size change it **quits and restarts mpv** on the current channel (~1s black, then full TV size). Zap list state stays in Flutter; only the player process is respawned.
+| Fix | Result |
+|-----|--------|
+| STEAM → Exit sdtv → open again (while docked) | Full TV nest — this is the real fix |
+| Respawn mpv / B → play again | Same nest — still almost full |
+| sdtv OSD / snack after dock | Reminds you to relaunch |
 
-**Steam game resolution:** for Non-Steam sdtv, set Properties → General → resolution for external display to **Default** or **Native** (not locked 1280×800). Otherwise Gamescope never becomes 1080p.
-
-Note: many IPTV channels are **native 720p** — soft on a 1080p set when the window *is* full-screen; that is the stream.
+Set Properties → external resolution to **Native**. Many IPTV streams are still 720p content even when the window is full 1080p.
 
 ## Implementation notes
 

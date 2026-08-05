@@ -77,7 +77,7 @@ class ExternalMpvLauncher {
 
   bool _userQuit = false;
 
-  /// Quit + re-spawn mpv for dock (geometry cannot grow under Gamescope).
+  /// Quit + re-spawn mpv only when the **nest** pixel size actually changes.
   bool _restartForDisplay = false;
 
   /// True for the whole watch session (including brief gap during respawn).
@@ -97,10 +97,15 @@ class ExternalMpvLauncher {
   Timer? _restartDebounce;
   int? _targetW;
   int? _targetH;
-  /// Size when this mpv process started (detect real dock change).
+  /// Size when this mpv process started (detect real nest resize).
   int? _processStartW;
   int? _processStartH;
   DateTime? _lastRestartAt;
+  bool _dockHintShown = false;
+
+  /// Gamescope kept the handheld nest after docking (TV is larger).
+  /// Only a **full sdtv relaunch** from Steam gets Native 1080p.
+  bool needsAppRestartForFullDisplay = false;
 
   bool get isRunning =>
       _process != null || _launching || _sessionActive;
@@ -744,7 +749,6 @@ class ExternalMpvLauncher {
       await stop();
       return;
     }
-    // Give it a moment, then force-kill if still alive.
     try {
       final p = _process;
       if (p != null) {
@@ -757,9 +761,15 @@ class ExternalMpvLauncher {
 
   /// Flutter [didChangeMetrics] (dock/undock).
   ///
-  /// Gamescope cannot grow an existing mpv window — only a **new process**
-  /// gets the docked resolution (same as B → play again). Debounced so a
-  /// flurry of metrics events only respawns once.
+  /// Important (Steam Deck / Gamescope):
+  /// - **Native** external resolution is chosen when the **game process starts**.
+  /// - Docking mid-session usually keeps the handheld nest (e.g. 1280×800 /
+  ///   16:10) letterboxed on the TV — looks "almost full".
+  /// - Respawning mpv inside that nest **cannot** fill the TV; only exiting
+  ///   sdtv and launching again while docked gets a true 1080p nest.
+  ///
+  /// If Flutter's nest size actually changes, we still respawn mpv. If the
+  /// physical TV is larger than the nest (typical dock), we hint to restart.
   Future<void> notifyDisplayChanged({int? width, int? height}) async {
     if (!_sessionActive || _userQuit) return;
 
@@ -769,27 +779,25 @@ class ExternalMpvLauncher {
       _targetW = width;
       _targetH = height;
 
-      // Ignore tiny jitter; require a real dock/undock-scale change.
       if (pw != null && ph != null) {
         final rw = (width - pw).abs() / pw;
         final rh = (height - ph).abs() / ph;
-        if (rw < 0.10 && rh < 0.10) {
+        if (rw >= 0.10 || rh >= 0.10) {
           debugPrint(
-            'sdtv_player: metrics ${width}x$height ~ process ${pw}x$ph — skip',
+            'sdtv_player: nest resize ${pw}x$ph → ${width}x$height — respawn mpv',
           );
+          _scheduleRespawn();
           return;
         }
       }
-      debugPrint(
-        'sdtv_player: metrics ${width}x$height '
-        '(was ${pw ?? '?'}x${ph ?? '?'}) → schedule mpv respawn',
-      );
-    } else {
-      debugPrint('sdtv_player: metrics (no size) → schedule mpv respawn');
     }
 
+    // Nest size unchanged (common on Deck dock) — check TV vs nest.
+    unawaited(_checkDockLetterboxAndHint());
+  }
+
+  void _scheduleRespawn() {
     _restartDebounce?.cancel();
-    // Wait for Gamescope to finish switching outputs before kill/respawn.
     _restartDebounce = Timer(const Duration(milliseconds: 700), () {
       unawaited(_requestRespawnForDisplay());
     });
@@ -797,22 +805,15 @@ class ExternalMpvLauncher {
 
   Future<void> _requestRespawnForDisplay() async {
     if (!_sessionActive || _userQuit || _process == null) return;
-    if (_activeUrl == null) {
-      debugPrint('sdtv_player: respawn skipped (no active URL)');
-      return;
-    }
+    if (_activeUrl == null) return;
     final now = DateTime.now();
     if (_lastRestartAt != null &&
         now.difference(_lastRestartAt!) < const Duration(seconds: 2)) {
       return;
     }
     _lastRestartAt = now;
-    debugPrint(
-      'sdtv_player: respawning mpv for display '
-      '(${_targetW ?? "?"}x${_targetH ?? "?"}) url=$_activeUrl',
-    );
+    debugPrint('sdtv_player: respawning mpv (nest size changed)');
     _restartForDisplay = true;
-    // Not a user quit — playFullscreen loop will start a new process.
     final ok = await sendCommand(['quit']);
     if (!ok) {
       try {
@@ -825,9 +826,16 @@ class ExternalMpvLauncher {
     _stopDisplayWatch();
     _processStartW = _targetW;
     _processStartH = _targetH;
-    // Light poll: if Flutter size already changed but metrics were missed.
-    _displayWatch = Timer.periodic(const Duration(seconds: 4), (_) {
-      unawaited(_pollFlutterSizeForRespawn());
+    _dockHintShown = false;
+    // After dock settles, compare nest to real outputs.
+    unawaited(() async {
+      await Future<void>.delayed(const Duration(seconds: 2));
+      if (_sessionActive && !_userQuit) {
+        await _checkDockLetterboxAndHint();
+      }
+    }());
+    _displayWatch = Timer.periodic(const Duration(seconds: 5), (_) {
+      unawaited(_checkDockLetterboxAndHint());
     });
   }
 
@@ -836,35 +844,100 @@ class ExternalMpvLauncher {
     _displayWatch = null;
   }
 
-  Future<void> _pollFlutterSizeForRespawn() async {
+  /// Nest (Flutter/mpv) vs largest connected DRM mode — Gamescope letterbox.
+  Future<void> _checkDockLetterboxAndHint() async {
     if (!_sessionActive || _userQuit || _process == null) return;
+
+    final nest = _nestSize();
+    final ext = await _largestConnectedOutput();
+    if (nest == null || ext == null) return;
+
+    final nestPx = nest.$1 * nest.$2;
+    final extPx = ext.$1 * ext.$2;
+    // TV clearly larger than our nest → docked with stale handheld resolution.
+    final letterboxed = extPx > nestPx * 1.25 ||
+        (ext.$1 > nest.$1 * 1.15 && ext.$2 > nest.$2 * 1.05);
+
+    if (!letterboxed) {
+      // Nest matches output — good (started docked, or nest resized).
+      return;
+    }
+
+    needsAppRestartForFullDisplay = true;
+    debugPrint(
+      'sdtv_player: dock letterbox nest=${nest.$1}x${nest.$2} '
+      'output=${ext.$1}x${ext.$2} — need full app relaunch for Native',
+    );
+
+    // Fill the nest (crop video) so fewer inner bars; cannot paint outside nest.
+    await sendCommand(['set', 'panscan', '1.0']);
+    await sendCommand(['set', 'keepaspect', 'yes']);
+    await sendCommand(['set', 'fullscreen', 'yes']);
+
+    if (_dockHintShown) return;
+    _dockHintShown = true;
+    await showText(
+      'Docked · almost full screen\n'
+      'Gamescope kept handheld size\n'
+      'STEAM → Exit sdtv → open again\n'
+      'for full TV (Native)',
+      durationMs: 8000,
+    );
+  }
+
+  (int, int)? _nestSize() {
     try {
       final views = ui.PlatformDispatcher.instance.views;
-      if (views.isEmpty) return;
-      final s = views.first.physicalSize;
-      final w = s.width.round();
-      final h = s.height.round();
-      if (w < 64 || h < 64) return;
-      final pw = _processStartW;
-      final ph = _processStartH;
-      if (pw == null || ph == null) {
-        _processStartW = w;
-        _processStartH = h;
-        _targetW = w;
-        _targetH = h;
-        return;
-      }
-      final rw = (w - pw).abs() / pw;
-      final rh = (h - ph).abs() / ph;
-      if (rw >= 0.10 || rh >= 0.10) {
-        _targetW = w;
-        _targetH = h;
-        debugPrint(
-          'sdtv_player: poll size ${w}x$h vs process ${pw}x$ph → respawn',
-        );
-        await _requestRespawnForDisplay();
+      if (views.isNotEmpty) {
+        final s = views.first.physicalSize;
+        final w = s.width.round();
+        final h = s.height.round();
+        if (w >= 64 && h >= 64) return (w, h);
       }
     } catch (_) {}
+    if (_targetW != null && _targetH != null) {
+      return (_targetW!, _targetH!);
+    }
+    if (_processStartW != null && _processStartH != null) {
+      return (_processStartW!, _processStartH!);
+    }
+    return null;
+  }
+
+  /// Largest connected connector mode from sysfs (no xrandr needed).
+  static Future<(int, int)?> _largestConnectedOutput() async {
+    try {
+      final drm = Directory('/sys/class/drm');
+      if (!await drm.exists()) return null;
+      var bestW = 0;
+      var bestH = 0;
+      await for (final ent in drm.list(followLinks: true)) {
+        final name = ent.path.split('/').last;
+        // card1-HDMI-A-1, card0-DP-1, …
+        if (!name.contains('-')) continue;
+        final statusFile = File('${ent.path}/status');
+        if (!await statusFile.exists()) continue;
+        final status = (await statusFile.readAsString()).trim().toLowerCase();
+        if (status != 'connected') continue;
+        final modesFile = File('${ent.path}/modes');
+        if (!await modesFile.exists()) continue;
+        final modes = await modesFile.readAsString();
+        for (final line in modes.split('\n')) {
+          final m = RegExp(r'^(\d+)x(\d+)').firstMatch(line.trim());
+          if (m == null) continue;
+          final w = int.parse(m.group(1)!);
+          final h = int.parse(m.group(2)!);
+          if (w * h > bestW * bestH) {
+            bestW = w;
+            bestH = h;
+          }
+        }
+      }
+      if (bestW >= 64 && bestH >= 64) return (bestW, bestH);
+    } catch (e) {
+      debugPrint('sdtv_player: drm probe failed: $e');
+    }
+    return null;
   }
 
   /// Snapshot Flutter view physical size (Gamescope nest) if available.
@@ -914,6 +987,9 @@ class ExternalMpvLauncher {
     _launching = true;
     _userQuit = false;
     _restartForDisplay = false;
+    _dockHintShown = false;
+    // Fresh watch — only set again if we detect dock letterboxing mid-session.
+    needsAppRestartForFullDisplay = false;
     clearRecentLog();
     final startedAt = DateTime.now();
 

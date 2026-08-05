@@ -32,12 +32,25 @@ See [CONTROLLER.md](CONTROLLER.md) for the full button map.
 
 ## Dock / TV resolution
 
-When launching from **Game Mode**, Gamescope owns the output size.
+When launching from **Game Mode**, **Gamescope** owns the nest size for the whole sdtv process.
 
 1. **STEAM** → sdtv → **Properties** → **General**  
-   - Resolution (external display): **Default** or **Native** — not a fixed 1280×800.
+   - Resolution (external display): **Native** (recommended) or **Default** — not a fixed 1280×800.
 2. **Settings → Display** (while docked): external resolution / scaling as you prefer for the TV.
-3. If you dock **while a channel is already playing**, sdtv **restarts mpv** on the same channel (~1s black) so the new process is full TV size. That matches B → play again, without leaving watch.
+
+### Why “almost full screen” until you restart sdtv
+
+**Native / external resolution is applied when the game starts**, not when you dock mid-session.
+
+| What you do | What you get |
+|-------------|--------------|
+| Launch sdtv **already docked** | Nest = TV (e.g. 1920×1080) → video can fill the screen |
+| Launch **handheld**, then dock | Nest often stays **1280×800 (16:10)** letterboxed on the TV → looks *almost* full |
+| **Exit sdtv** (Steam) and open again while docked | New nest at Native → full screen |
+
+mpv cannot paint outside the Gamescope nest. Restarting only the player (or “respawning” mpv) does **not** fix this — only a **full sdtv relaunch** does.
+
+sdtv detects that case and shows an on-screen / snack hint to exit and reopen.
 
 Channels that are actually 720p will still look soft when the window correctly fills 1080p.
 
