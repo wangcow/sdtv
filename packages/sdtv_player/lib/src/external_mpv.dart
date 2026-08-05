@@ -77,18 +77,33 @@ class ExternalMpvLauncher {
 
   bool _userQuit = false;
 
+  /// Quit + re-spawn mpv for dock (geometry cannot grow under Gamescope).
+  bool _restartForDisplay = false;
+
+  /// True for the whole watch session (including brief gap during respawn).
+  bool _sessionActive = false;
+
+  /// Current stream (updated on zap) — used when respawning after dock.
+  Uri? _activeUrl;
+  String? _activeTitle;
+  Uri? _activeFallback;
+  String? _activeFallbackTitle;
+
   /// Recent mpv log lines (for HTTP 403-style error messages).
   final List<String> _recentLog = <String>[];
 
   /// Dock / display-size watch while fullscreen (handheld → TV).
   Timer? _displayWatch;
-  Timer? _refitBurst;
+  Timer? _restartDebounce;
   int? _targetW;
   int? _targetH;
-  String? _lastDisplayFp;
-  DateTime? _lastRefitAt;
+  /// Size when this mpv process started (detect real dock change).
+  int? _processStartW;
+  int? _processStartH;
+  DateTime? _lastRestartAt;
 
-  bool get isRunning => _process != null || _launching;
+  bool get isRunning =>
+      _process != null || _launching || _sessionActive;
 
   /// Steam / host noise — not a stream failure (common on Deck Game Mode).
   static bool _isNoiseLogLine(String line) {
@@ -615,6 +630,10 @@ class ExternalMpvLauncher {
 
   /// Replace current playback with [url] (reliable for live channel zap).
   Future<bool> loadFile(Uri url, {String? title}) async {
+    _activeUrl = url;
+    if (title != null && title.trim().isNotEmpty) {
+      _activeTitle = title.trim();
+    }
     // Third arg "replace" clears the current item and plays immediately.
     final ok = await sendCommand(['loadfile', url.toString(), 'replace']);
     if (!ok) {
@@ -717,6 +736,8 @@ class ExternalMpvLauncher {
   /// Ask mpv to quit (falls back to [stop] kill).
   Future<void> quit() async {
     _userQuit = true;
+    _restartForDisplay = false;
+    _restartDebounce?.cancel();
     _stopDisplayWatch();
     final ok = await sendCommand(['quit']);
     if (!ok) {
@@ -734,208 +755,116 @@ class ExternalMpvLauncher {
     }
   }
 
-  /// Force the VO window to match the active output (Deck dock / undock).
+  /// Flutter [didChangeMetrics] (dock/undock).
   ///
-  /// Under Gamescope, a plain `fullscreen` toggle often does nothing — the
-  /// window keeps the handheld size. We set **explicit geometry** (Flutter
-  /// physical pixels and/or mpv `display-width`/`display-height`), allow the
-  /// window aspect to change, then re-enter fullscreen.
-  Future<void> refitFullscreen({
-    String reason = 'manual',
-    int? width,
-    int? height,
-  }) async {
-    if (!isRunning) return;
-    final now = DateTime.now();
-    if (_lastRefitAt != null &&
-        now.difference(_lastRefitAt!) < const Duration(milliseconds: 400)) {
-      return;
-    }
-    _lastRefitAt = now;
-
-    // Resolve target pixels: caller → stored Flutter size → mpv display props.
-    var tw = width ?? _targetW;
-    var th = height ?? _targetH;
-    if (tw == null || th == null || tw < 64 || th < 64) {
-      final dw = _asPositiveInt(await getProperty('display-width'));
-      final dh = _asPositiveInt(await getProperty('display-height'));
-      if (dw != null && dh != null) {
-        tw = dw;
-        th = dh;
-      }
-    }
-    if (tw != null && th != null && tw >= 64 && th >= 64) {
-      _targetW = tw;
-      _targetH = th;
-    }
-
-    final geo = (tw != null && th != null && tw >= 64 && th >= 64)
-        ? '${tw}x$th'
-        : null;
-    debugPrint(
-      'sdtv_player: refit fullscreen ($reason)'
-      '${geo != null ? ' geometry=$geo' : ''}',
-    );
-
-    // Leave fullscreen so geometry can actually change (Gamescope/X11).
-    await sendCommand(['set', 'fullscreen', 'no']);
-    await sendCommand(['set', 'window-maximized', 'no']);
-    await Future<void>.delayed(const Duration(milliseconds: 50));
-    if (!isRunning) return;
-
-    // Window may change aspect (800p 16:10 → 1080p 16:9); video still letterboxes.
-    await sendCommand(['set', 'keepaspect-window', 'no']);
-    await sendCommand(['set', 'keepaspect', 'yes']);
-    await sendCommand(['set', 'video-unscaled', 'no']);
-    await sendCommand(['set', 'video-zoom', '0']);
-    await sendCommand(['set', 'panscan', '0']);
-    await sendCommand(['set', 'border', 'no']);
-
-    if (geo != null) {
-      // Absolute pixel size of the window (not a scale factor).
-      await sendCommand(['set', 'geometry', geo]);
-      await sendCommand(['set', 'autofit', geo]);
-      await sendCommand(['set', 'autofit-larger', geo]);
-      // Reset any stale scale from the handheld session.
-      await sendCommand(['set', 'window-scale', '1']);
-    }
-
-    await Future<void>.delayed(const Duration(milliseconds: 50));
-    if (!isRunning) return;
-    await sendCommand(['set', 'window-maximized', 'yes']);
-    await sendCommand(['set', 'fullscreen', 'yes']);
-
-    // Second pass after VO reconfig (Gamescope often needs two kicks).
-    await Future<void>.delayed(const Duration(milliseconds: 120));
-    if (!isRunning) return;
-    if (geo != null) {
-      await sendCommand(['set', 'geometry', geo]);
-    }
-    await sendCommand(['set', 'fullscreen', 'yes']);
-  }
-
-  /// Flutter [didChangeMetrics] (dock/undock). Prefer real physical pixels.
-  ///
-  /// Fires a short **burst** of refits — Gamescope often settles over 1–2s.
+  /// Gamescope cannot grow an existing mpv window — only a **new process**
+  /// gets the docked resolution (same as B → play again). Debounced so a
+  /// flurry of metrics events only respawns once.
   Future<void> notifyDisplayChanged({int? width, int? height}) async {
-    if (!isRunning) return;
+    if (!_sessionActive || _userQuit) return;
+
     if (width != null && height != null && width >= 64 && height >= 64) {
+      final pw = _processStartW ?? _targetW;
+      final ph = _processStartH ?? _targetH;
       _targetW = width;
       _targetH = height;
-      _lastDisplayFp = '${width}x$height';
+
+      // Ignore tiny jitter; require a real dock/undock-scale change.
+      if (pw != null && ph != null) {
+        final rw = (width - pw).abs() / pw;
+        final rh = (height - ph).abs() / ph;
+        if (rw < 0.10 && rh < 0.10) {
+          debugPrint(
+            'sdtv_player: metrics ${width}x$height ~ process ${pw}x$ph — skip',
+          );
+          return;
+        }
+      }
+      debugPrint(
+        'sdtv_player: metrics ${width}x$height '
+        '(was ${pw ?? '?'}x${ph ?? '?'}) → schedule mpv respawn',
+      );
+    } else {
+      debugPrint('sdtv_player: metrics (no size) → schedule mpv respawn');
     }
-    _refitBurst?.cancel();
-    // Immediate + delayed passes (Gamescope often settles over 1–3s after dock).
-    unawaited(
-      refitFullscreen(
-        reason: 'flutter-metrics',
-        width: width,
-        height: height,
-      ),
-    );
-    final w = width;
-    final h = height;
-    final delays = <int>[350, 900, 1800, 3200];
-    // One timer that fires the staggered passes (cancellable on quit).
-    var pass = 0;
-    final started = DateTime.now();
-    _refitBurst = Timer.periodic(const Duration(milliseconds: 100), (t) {
-      if (!isRunning) {
-        t.cancel();
-        return;
-      }
-      final elapsed = DateTime.now().difference(started).inMilliseconds;
-      while (pass < delays.length && elapsed >= delays[pass]) {
-        final n = ++pass;
-        unawaited(
-          refitFullscreen(
-            reason: 'flutter-metrics+$n',
-            width: w,
-            height: h,
-          ),
-        );
-      }
-      if (pass >= delays.length) t.cancel();
+
+    _restartDebounce?.cancel();
+    // Wait for Gamescope to finish switching outputs before kill/respawn.
+    _restartDebounce = Timer(const Duration(milliseconds: 700), () {
+      unawaited(_requestRespawnForDisplay());
     });
+  }
+
+  Future<void> _requestRespawnForDisplay() async {
+    if (!_sessionActive || _userQuit || _process == null) return;
+    if (_activeUrl == null) {
+      debugPrint('sdtv_player: respawn skipped (no active URL)');
+      return;
+    }
+    final now = DateTime.now();
+    if (_lastRestartAt != null &&
+        now.difference(_lastRestartAt!) < const Duration(seconds: 2)) {
+      return;
+    }
+    _lastRestartAt = now;
+    debugPrint(
+      'sdtv_player: respawning mpv for display '
+      '(${_targetW ?? "?"}x${_targetH ?? "?"}) url=$_activeUrl',
+    );
+    _restartForDisplay = true;
+    // Not a user quit — playFullscreen loop will start a new process.
+    final ok = await sendCommand(['quit']);
+    if (!ok) {
+      try {
+        _process?.kill(ProcessSignal.sigterm);
+      } catch (_) {}
+    }
   }
 
   void _startDisplayWatch() {
     _stopDisplayWatch();
-    _lastDisplayFp = null;
-    // Prefer mpv's own display/window props — xrandr is often wrong under Gamescope.
-    unawaited(_pollMpvWindowVsDisplay(initial: true));
-    _displayWatch = Timer.periodic(const Duration(seconds: 3), (_) {
-      unawaited(_pollMpvWindowVsDisplay());
+    _processStartW = _targetW;
+    _processStartH = _targetH;
+    // Light poll: if Flutter size already changed but metrics were missed.
+    _displayWatch = Timer.periodic(const Duration(seconds: 4), (_) {
+      unawaited(_pollFlutterSizeForRespawn());
     });
   }
 
   void _stopDisplayWatch() {
     _displayWatch?.cancel();
     _displayWatch = null;
-    _refitBurst?.cancel();
-    _refitBurst = null;
   }
 
-  /// If mpv's window (osd-*) is smaller than its reported display, re-fit.
-  Future<void> _pollMpvWindowVsDisplay({bool initial = false}) async {
-    if (!isRunning) {
-      _stopDisplayWatch();
-      return;
-    }
-
-    final dw = _asPositiveInt(await getProperty('display-width'));
-    final dh = _asPositiveInt(await getProperty('display-height'));
-    final ow = _asPositiveInt(await getProperty('osd-width')) ??
-        _asPositiveInt(await getProperty('vo-configured-width'));
-    final oh = _asPositiveInt(await getProperty('osd-height')) ??
-        _asPositiveInt(await getProperty('vo-configured-height'));
-
-    // Flutter may know a newer size (dock) before mpv updates display-*.
-    final tw = _targetW;
-    final th = _targetH;
-
-    final fp = (dw != null && dh != null)
-        ? '${dw}x$dh'
-        : (tw != null && th != null ? '${tw}x$th' : null);
-    if (fp != null) {
-      if (initial || _lastDisplayFp == null) {
-        _lastDisplayFp = fp;
-      } else if (fp != _lastDisplayFp) {
-        debugPrint('sdtv_player: display fingerprint $_lastDisplayFp → $fp');
-        _lastDisplayFp = fp;
-        await refitFullscreen(
-          reason: 'display-fp:$fp',
-          width: dw ?? tw,
-          height: dh ?? th,
-        );
+  Future<void> _pollFlutterSizeForRespawn() async {
+    if (!_sessionActive || _userQuit || _process == null) return;
+    try {
+      final views = ui.PlatformDispatcher.instance.views;
+      if (views.isEmpty) return;
+      final s = views.first.physicalSize;
+      final w = s.width.round();
+      final h = s.height.round();
+      if (w < 64 || h < 64) return;
+      final pw = _processStartW;
+      final ph = _processStartH;
+      if (pw == null || ph == null) {
+        _processStartW = w;
+        _processStartH = h;
+        _targetW = w;
+        _targetH = h;
         return;
       }
-    }
-
-    // Window much smaller than target / display → stuck at handheld size.
-    final wantW = tw ?? dw;
-    final wantH = th ?? dh;
-    if (wantW == null || wantH == null || ow == null || oh == null) return;
-
-    final mismatchW = ow < wantW * 0.90 || ow > wantW * 1.12;
-    final mismatchH = oh < wantH * 0.90 || oh > wantH * 1.12;
-    if (mismatchW || mismatchH) {
-      debugPrint(
-        'sdtv_player: vo size ${ow}x$oh vs want ${wantW}x$wantH — refit',
-      );
-      await refitFullscreen(
-        reason: 'vo-mismatch',
-        width: wantW,
-        height: wantH,
-      );
-    }
-  }
-
-  static int? _asPositiveInt(Object? v) {
-    if (v == null) return null;
-    if (v is int) return v > 0 ? v : null;
-    if (v is double) return v > 0 ? v.round() : null;
-    return int.tryParse('$v');
+      final rw = (w - pw).abs() / pw;
+      final rh = (h - ph).abs() / ph;
+      if (rw >= 0.10 || rh >= 0.10) {
+        _targetW = w;
+        _targetH = h;
+        debugPrint(
+          'sdtv_player: poll size ${w}x$h vs process ${pw}x$ph → respawn',
+        );
+        await _requestRespawnForDisplay();
+      }
+    } catch (_) {}
   }
 
   /// Snapshot Flutter view physical size (Gamescope nest) if available.
@@ -949,7 +878,6 @@ class ExternalMpvLauncher {
       if (w >= 64 && h >= 64) {
         _targetW = w;
         _targetH = h;
-        _lastDisplayFp = '${w}x$h';
         debugPrint('sdtv_player: seed display target ${w}x$h');
       }
     } catch (e) {
@@ -965,6 +893,10 @@ class ExternalMpvLauncher {
   /// [fallbackUrl] optional HLS (.m3u8) URL tried if the primary stream fails
   /// to start (Xtream .ts → .m3u8).
   ///
+  /// On display size change (Deck dock), the process is **respawned** with the
+  /// current channel URL so Gamescope opens a full-size window — geometry
+  /// changes on a live mpv process do not work under Gamescope.
+  ///
   /// Re-entrant: if already running, returns [ExternalMpvResult.busy].
   Future<ExternalMpvResult> playFullscreen(
     Uri url, {
@@ -973,15 +905,36 @@ class ExternalMpvLauncher {
     Uri? fallbackUrl,
     String? fallbackTitle,
   }) async {
-    if (_launching || _process != null) {
+    if (_launching || _process != null || _sessionActive) {
       debugPrint('sdtv_player: playFullscreen ignored (already running)');
       return const ExternalMpvResult(started: false, busy: true);
     }
 
+    _sessionActive = true;
     _launching = true;
     _userQuit = false;
+    _restartForDisplay = false;
     clearRecentLog();
     final startedAt = DateTime.now();
+
+    // Track active media for dock respawn (zap updates via [loadFile]).
+    final entries = playlist;
+    final useListInitial = entries != null && entries.length > 1;
+    final list = useListInitial ? entries : null;
+    final start =
+        list != null ? startIndex.clamp(0, list.length - 1) : 0;
+    if (list != null) {
+      _activeUrl = list[start].uri;
+      _activeTitle = list[start].title;
+    } else {
+      _activeUrl = url;
+      _activeTitle = (playlist != null && playlist.isNotEmpty)
+          ? playlist.first.title
+          : 'sdtv';
+    }
+    _activeFallback = fallbackUrl;
+    _activeFallbackTitle = fallbackTitle ?? _activeTitle;
+
     Directory? confDir;
     try {
       final inv = await _findMpv();
@@ -997,8 +950,6 @@ class ExternalMpvLauncher {
 
       confDir = await Directory.systemTemp.createTemp('sdtv_mpv_');
       final confFile = File('${confDir.path}/input.conf');
-      // Keyboard maps matter when mpv has focus (desktop / Flatpak users).
-      // Deck pad is usually routed by Flutter → IPC; both paths stay valid.
       await confFile.writeAsString('''
 # sdtv — quit back to guide
 ESC quit
@@ -1036,13 +987,10 @@ GAMEPAD_START quit
 GAMEPAD_GUIDE quit
 ''');
 
-      // Pause chrome: keep OSC visible while paused (web-player-like transport).
-      // Works for Space/p inside mpv and for Flutter A → cycle pause.
       final pauseScript = File('${confDir.path}/sdtv-pause-osc.lua');
       await pauseScript.writeAsString(r'''
 -- sdtv: show on-screen controller while paused
 local function set_vis(mode)
-  -- no-osd avoids "OSC visibility: always" spam
   pcall(function()
     mp.commandv("script-message", "osc-visibility", mode, "no-osd")
   end)
@@ -1057,149 +1005,181 @@ mp.observe_property("pause", "bool", function(_, paused)
 end)
 ''');
 
-      final ipcPath = _newIpcPath();
-      _ipcPath = ipcPath;
-      try {
-        final stale = File(ipcPath);
-        if (await stale.exists()) await stale.delete();
-      } catch (_) {}
+      // First launch may use full playlist; dock respawns use current URL only.
+      var firstLaunch = true;
+      int? lastCode;
+      var anyStarted = false;
 
-      final entries = playlist;
-      final useList = entries != null && entries.length > 1;
-      final start = useList
-          ? startIndex.clamp(0, entries.length - 1)
-          : 0;
+      while (!_userQuit) {
+        _launching = true;
+        _restartForDisplay = false;
+        _seedTargetFromFlutterViews();
 
-      String? playlistPath;
-      if (useList) {
-        playlistPath = '${confDir.path}/session.m3u';
-        final buf = StringBuffer('#EXTM3U\n');
-        for (final e in entries) {
-          final title = e.title.replaceAll('\n', ' ').replaceAll(',', ' ');
-          buf.writeln('#EXTINF:-1,$title');
-          buf.writeln(e.uri.toString());
+        final ipcPath = _newIpcPath();
+        _ipcPath = ipcPath;
+        try {
+          final stale = File(ipcPath);
+          if (await stale.exists()) await stale.delete();
+        } catch (_) {}
+
+        final playUrl = _activeUrl ?? url;
+        final playTitle =
+            (_activeTitle != null && _activeTitle!.trim().isNotEmpty)
+                ? _activeTitle!.trim()
+                : 'sdtv';
+        final fb = _activeFallback ?? fallbackUrl;
+        final fbTitle = _activeFallbackTitle ?? fallbackTitle ?? playTitle;
+
+        final sessionList = firstLaunch ? list : null;
+        final useList = sessionList != null;
+        String? playlistPath;
+        if (sessionList != null) {
+          playlistPath = '${confDir.path}/session.m3u';
+          final buf = StringBuffer('#EXTM3U\n');
+          for (final e in sessionList) {
+            final title = e.title.replaceAll('\n', ' ').replaceAll(',', ' ');
+            buf.writeln('#EXTINF:-1,$title');
+            buf.writeln(e.uri.toString());
+          }
+          await File(playlistPath).writeAsString(buf.toString());
         }
-        await File(playlistPath).writeAsString(buf.toString());
-      }
 
-      final startTitle = useList
-          ? entries[start].title
-          : (playlist != null && playlist.isNotEmpty
-              ? playlist.first.title
-              : 'sdtv');
+        final geoArgs = <String>[];
+        if (_targetW != null &&
+            _targetH != null &&
+            _targetW! >= 64 &&
+            _targetH! >= 64) {
+          final geo = '${_targetW}x$_targetH';
+          geoArgs.addAll(['--geometry=$geo', '--autofit=$geo']);
+        }
 
-      final mpvArgs = <String>[
-        '--fullscreen',
-        '--force-window=immediate',
-        '--keep-open=no',
-        '--idle=no',
-        '--no-terminal',
-        '--msg-level=all=warn',
-        '--title=sdtv',
-        '--force-media-title=$startTitle',
-        '--input-conf=${confFile.path}',
-        '--input-ipc-server=$ipcPath',
-        '--script=${pauseScript.path}',
-        // On-screen controller = transport bar (seek/title when duration known).
-        '--osc=yes',
-        '--osd-bar=yes',
-        '--osd-level=1',
-        '--osd-duration=2000',
-        // Larger, more readable OSC on TV / Deck.
-        '--script-opts=osc-visibility=auto,osc-deadzonesize=0,osc-scalewindowed=1.5,osc-scalefullscreen=1.5,osc-valign=0.9,osc-idlescreen=no',
-        // Fit the active output (dock 1080p / handheld).
-        // keepaspect-window=no → window can become 16:9 on TV; video still letterboxes.
-        '--keepaspect=yes',
-        '--keepaspect-window=no',
-        '--video-unscaled=no',
-        '--panscan=0',
-        '--border=no',
-        '--hwdec=vaapi,vaapi-copy,auto-copy,auto',
-        '--profile=fast',
-        '--framedrop=vo',
-        ...extraArgs,
-        if (useList) ...[
-          '--playlist=$playlistPath',
-          '--playlist-start=$start',
-        ] else
-          url.toString(),
-      ];
-
-      late final String finalExec;
-      late final List<String> finalArgv;
-      if (inv.isFlatpak) {
-        finalExec = 'flatpak';
-        finalArgv = <String>[
-          'run',
-          '--filesystem=/tmp',
-          '--filesystem=host',
-          '--device=all',
-          inv.appId!,
-          ...mpvArgs,
+        final mpvArgs = <String>[
+          '--fullscreen',
+          '--force-window=immediate',
+          '--keep-open=no',
+          '--idle=no',
+          '--no-terminal',
+          '--msg-level=all=warn',
+          '--title=sdtv',
+          '--force-media-title=$playTitle',
+          '--input-conf=${confFile.path}',
+          '--input-ipc-server=$ipcPath',
+          '--script=${pauseScript.path}',
+          '--osc=yes',
+          '--osd-bar=yes',
+          '--osd-level=1',
+          '--osd-duration=2000',
+          '--script-opts=osc-visibility=auto,osc-deadzonesize=0,osc-scalewindowed=1.5,osc-scalefullscreen=1.5,osc-valign=0.9,osc-idlescreen=no',
+          '--keepaspect=yes',
+          '--keepaspect-window=no',
+          '--video-unscaled=no',
+          '--panscan=0',
+          '--border=no',
+          '--hwdec=vaapi,vaapi-copy,auto-copy,auto',
+          '--profile=fast',
+          '--framedrop=vo',
+          ...geoArgs,
+          ...extraArgs,
+          if (useList) ...[
+            '--playlist=$playlistPath',
+            '--playlist-start=$start',
+          ] else
+            playUrl.toString(),
         ];
-      } else {
-        finalExec = inv.executable;
-        finalArgv = mpvArgs;
+
+        late final String finalExec;
+        late final List<String> finalArgv;
+        if (inv.isFlatpak) {
+          finalExec = 'flatpak';
+          finalArgv = <String>[
+            'run',
+            '--filesystem=/tmp',
+            '--filesystem=host',
+            '--device=all',
+            inv.appId!,
+            ...mpvArgs,
+          ];
+        } else {
+          finalExec = inv.executable;
+          finalArgv = mpvArgs;
+        }
+
+        debugPrint(
+          'sdtv_player: external mpv ${inv.label} → $finalExec '
+          '${firstLaunch ? '' : '(display respawn) '}'
+          '${finalArgv.length > 24 ? '${finalArgv.take(20).join(' ')} …' : finalArgv.join(' ')}',
+        );
+
+        final proc = await Process.start(
+          finalExec,
+          finalArgv,
+          mode: ProcessStartMode.normal,
+          environment: _childEnvironment(),
+        );
+        _process = proc;
+        _launching = false;
+        firstLaunch = false;
+        anyStarted = true;
+        _startDisplayWatch();
+
+        unawaited(proc.stdout.drain<void>());
+        unawaited(
+          proc.stderr.transform(SystemEncoding().decoder).forEach((line) {
+            if (line.trim().isNotEmpty) {
+              _noteLog(line);
+              debugPrint('mpv: $line');
+            }
+          }),
+        );
+
+        final hint = useList
+            ? 'A pause · B back · LB/RB ch · ↑↓ vol'
+            : 'A pause · B back · ↑↓ vol';
+        unawaited(() async {
+          await Future<void>.delayed(const Duration(milliseconds: 600));
+          if (_process != proc || _userQuit) return;
+          await sendCommand(['show-text', hint, 2800]);
+          final ok = await waitUntilHealthyOrFallback(
+            fb,
+            title: fbTitle,
+          );
+          if (!ok && _process == proc && !_userQuit && !_restartForDisplay) {
+            await showPlaybackError(channelName: fbTitle);
+          }
+          if (_process == proc && !_userQuit) {
+            await sendCommand(['set', 'fullscreen', 'yes']);
+          }
+        }());
+
+        lastCode = await proc.exitCode;
+        _stopDisplayWatch();
+        if (identical(_process, proc)) {
+          _process = null;
+        }
+        _cleanupIpc();
+
+        if (_userQuit) break;
+
+        if (_restartForDisplay) {
+          _restartForDisplay = false;
+          // Let Gamescope finish settling on the new output.
+          await Future<void>.delayed(const Duration(milliseconds: 400));
+          if (_userQuit) break;
+          debugPrint('sdtv_player: re-launching mpv after display change');
+          continue;
+        }
+
+        // Natural exit (stream death / crash) — end session.
+        break;
       }
 
-      debugPrint(
-        'sdtv_player: external mpv ${inv.label} → $finalExec '
-        '${finalArgv.length > 24 ? '${finalArgv.take(20).join(' ')} …' : finalArgv.join(' ')}',
-      );
-
-      final proc = await Process.start(
-        finalExec,
-        finalArgv,
-        mode: ProcessStartMode.normal,
-        environment: _childEnvironment(),
-      );
-      _process = proc;
-      // Launch complete — playback wait is not "launching".
-      _launching = false;
-      _seedTargetFromFlutterViews();
-      _startDisplayWatch();
-
-      unawaited(proc.stdout.drain<void>());
-      unawaited(proc.stderr.transform(SystemEncoding().decoder).forEach((line) {
-        if (line.trim().isNotEmpty) {
-          _noteLog(line);
-          debugPrint('mpv: $line');
-        }
-      }));
-
-      final hint = useList
-          ? 'A pause · B back · LB/RB ch · ↑↓ vol'
-          : 'A pause · B back · ↑↓ vol';
-      unawaited(() async {
-        await Future<void>.delayed(const Duration(milliseconds: 600));
-        await sendCommand(['show-text', hint, 2800]);
-        // Try .ts → .m3u8; if both fail, show error and stay (no auto-zap).
-        final ok = await waitUntilHealthyOrFallback(
-          fallbackUrl,
-          title: fallbackTitle ?? startTitle,
-        );
-        if (!ok && isRunning && !_userQuit) {
-          await showPlaybackError(channelName: fallbackTitle ?? startTitle);
-        }
-        // One more fullscreen assert after VO attaches (helps dock-during-start).
-        if (isRunning && !_userQuit) {
-          await sendCommand(['set', 'fullscreen', 'yes']);
-        }
-      }());
-
-      final code = await proc.exitCode;
       final durationMs = DateTime.now().difference(startedAt).inMilliseconds;
-      final wasUser = _userQuit;
-      _stopDisplayWatch();
-      _process = null;
-      _cleanupIpc();
-
       return ExternalMpvResult(
-        started: true,
-        exitCode: code,
+        started: anyStarted,
+        exitCode: lastCode,
         mpvPath: inv.label,
         durationMs: durationMs,
-        userQuit: wasUser,
+        userQuit: _userQuit,
       );
     } catch (e, st) {
       _stopDisplayWatch();
@@ -1213,8 +1193,15 @@ end)
         userQuit: _userQuit,
       );
     } finally {
+      _sessionActive = false;
       _launching = false;
+      _restartForDisplay = false;
+      _restartDebounce?.cancel();
       _stopDisplayWatch();
+      _activeUrl = null;
+      _activeTitle = null;
+      _activeFallback = null;
+      _activeFallbackTitle = null;
       final dir = confDir;
       if (dir != null) {
         try {
@@ -1237,6 +1224,8 @@ end)
   /// Kill a session we started (sign-out / app exit / B while watching).
   Future<void> stop() async {
     _userQuit = true;
+    _restartForDisplay = false;
+    _restartDebounce?.cancel();
     _stopDisplayWatch();
     final p = _process;
     _launching = false;
