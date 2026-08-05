@@ -40,7 +40,8 @@ abstract class SdtvPlayerController extends Listenable {
   /// Non-null when using media_kit (for [Video] widget).
   VideoController? get videoController => null;
 
-  Future<void> open(Uri url);
+  /// Open [url] for playback. Optional [httpHeaders] (User-Agent, etc.).
+  Future<void> open(Uri url, {Map<String, String>? httpHeaders});
   Future<void> play();
   Future<void> pause();
   Future<void> stop();
@@ -104,7 +105,7 @@ class StubSdtvPlayerController extends ChangeNotifier
   }
 
   @override
-  Future<void> open(Uri url) async {
+  Future<void> open(Uri url, {Map<String, String>? httpHeaders}) async {
     _url = url.toString();
     _error = null;
     _position = Duration.zero;
@@ -445,7 +446,7 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   void resyncState() => _resyncFromNative();
 
   @override
-  Future<void> open(Uri url) async {
+  Future<void> open(Uri url, {Map<String, String>? httpHeaders}) async {
     if (_disposed) return;
     _url = url.toString();
     _error = null;
@@ -454,17 +455,61 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
     _bufferStuckTimer?.cancel();
     _setState(SdtvPlayerState.opening);
     try {
-      await _player.open(Media(url.toString()), play: true);
-      // Query after a beat — hwdec-current is often empty at open edge.
+      // Stop previous item so a failed .ts does not leave a dead demuxer.
+      try {
+        await _player.stop().timeout(const Duration(milliseconds: 600));
+      } catch (_) {}
+
+      final headers = httpHeaders ?? const <String, String>{};
+      final media = headers.isEmpty
+          ? Media(url.toString())
+          : Media(url.toString(), httpHeaders: headers);
+      debugPrint(
+        'sdtv_player: open $url'
+        '${headers.isEmpty ? '' : ' (headers=${headers.keys.join(",")})'}',
+      );
+      await _player.open(media, play: true);
+
+      // Wait briefly for playing or error (live open is async).
+      for (var i = 0; i < 20; i++) {
+        if (_disposed) return;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        if (_state == SdtvPlayerState.error) return;
+        if (_player.state.playing) {
+          _error = null;
+          _setState(SdtvPlayerState.playing);
+          break;
+        }
+        if (_player.state.buffering) {
+          _setState(SdtvPlayerState.buffering);
+        }
+      }
+
       unawaited(Future<void>.delayed(const Duration(milliseconds: 800), () {
         if (!_disposed) unawaited(_refreshDecodeLabel());
       }));
       await _refreshDecodeLabel();
-      _resyncFromNative();
+      if (_state != SdtvPlayerState.error) {
+        _resyncFromNative();
+      }
     } catch (e, st) {
       _error = e.toString();
       _setState(SdtvPlayerState.error);
       debugPrint('sdtv_player open failed: $e\n$st');
+    }
+  }
+
+  /// Soften decode path after a hard fail (chrome spike / Deck texture).
+  Future<void> preferSoftwareDecode() async {
+    if (_disposed) return;
+    try {
+      final dynamic native = _player.platform;
+      if (native != null && native.setProperty is Function) {
+        await native.setProperty('hwdec', 'no') as Future?;
+        debugPrint('sdtv_player: hwdec=no (software fallback)');
+      }
+    } catch (e) {
+      debugPrint('sdtv_player preferSoftwareDecode: $e');
     }
   }
 

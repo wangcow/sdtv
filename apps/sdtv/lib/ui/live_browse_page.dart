@@ -635,10 +635,19 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
   }
 
-  /// Fallback: old Flutter texture player (debug / no system mpv).
+  /// Chrome spike / fallback: Flutter texture player + [PlayerPage] HUD.
   Future<void> _playEmbedded(LiveChannel ch) async {
-    await session.playChannel(ch);
+    final err = await session.playChannel(ch);
     if (!mounted) return;
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Chrome spike: $err'),
+          duration: const Duration(seconds: 6),
+        ),
+      );
+      // Still open the page so the user can read on-screen error + A retry.
+    }
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => PlayerPage(session: session),

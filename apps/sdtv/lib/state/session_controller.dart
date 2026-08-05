@@ -1386,53 +1386,85 @@ class SessionController extends ChangeNotifier {
     }
   }
 
-  /// Legacy embedded media_kit open (fallback / debug). Prefer [watchChannel].
-  Future<void> playChannel(LiveChannel channel) async {
-    final previous = nowPlaying;
+  /// IPTV-friendly headers for embedded media_kit (matches panel clients).
+  static const Map<String, String> _streamHttpHeaders = {
+    'User-Agent':
+        'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 '
+            '(KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3',
+  };
+
+  /// Embedded media_kit open (chrome spike / fallback). Prefer [watchChannel]
+  /// for daily live TV (external mpv).
+  ///
+  /// Tries **HLS (.m3u8) first** — texture/libmpv path is much happier with
+  /// HLS than raw `.ts` on many panels. Returns an error string if all fail.
+  Future<String?> playChannel(LiveChannel channel) async {
     nowPlaying = channel;
     notifyListeners();
 
+    final candidates = <Uri>[];
     if (channel.hasDirectUrl) {
-      final url = Uri.parse(channel.streamUrl!.trim());
-      if (previous?.streamId == channel.streamId &&
-          player.currentUrl == url.toString() &&
-          (player.state == SdtvPlayerState.playing ||
-              player.state == SdtvPlayerState.paused ||
-              player.state == SdtvPlayerState.buffering)) {
-        return;
+      final u = Uri.tryParse(channel.streamUrl!.trim());
+      if (u != null) candidates.add(u);
+    } else if (useDemo || mockCatalog) {
+      candidates.add(Uri.parse(kDemoPlaybackUri));
+    } else {
+      // HLS first for embed; .ts second (external mpv prefers .ts).
+      final hls = resolvePlayUri(channel, extension: 'm3u8');
+      final ts = resolvePlayUri(channel, extension: 'ts');
+      if (hls != null) candidates.add(hls);
+      if (ts != null && ts.toString() != hls?.toString()) {
+        candidates.add(ts);
       }
-      await player.open(url);
-      notifyListeners();
-      return;
     }
 
-    final client = _client;
-    if (client == null) return;
+    if (candidates.isEmpty) {
+      return 'No playable URL for this channel.';
+    }
 
-    if (useDemo || mockCatalog) {
-      final url = Uri.parse(kDemoPlaybackUri);
-      if (previous != null &&
-          player.currentUrl == url.toString() &&
-          (player.state == SdtvPlayerState.playing ||
-              player.state == SdtvPlayerState.paused ||
-              player.state == SdtvPlayerState.buffering)) {
-        return;
+    // Soft reset so a prior failed open does not poison the spike.
+    try {
+      await player.stop();
+    } catch (_) {}
+
+    String? lastErr;
+    for (var i = 0; i < candidates.length; i++) {
+      final url = candidates[i];
+      debugPrint('sdtv: embed open [${i + 1}/${candidates.length}] $url');
+      await player.open(url, httpHeaders: _streamHttpHeaders);
+      // Allow demux/buffer to settle before declaring failure.
+      for (var t = 0; t < 15; t++) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        if (player.state == SdtvPlayerState.playing ||
+            player.state == SdtvPlayerState.buffering ||
+            player.state == SdtvPlayerState.paused) {
+          notifyListeners();
+          return null;
+        }
+        if (player.state == SdtvPlayerState.error) break;
       }
-      await player.open(url);
-      notifyListeners();
-      return;
+      lastErr = player.lastError;
+      debugPrint('sdtv: embed open failed ($url): $lastErr');
     }
 
-    final ts = client.livePlayUrl(channel.streamId, extension: 'ts');
-    final m3u8 = client.livePlayUrl(channel.streamId, extension: 'm3u8');
-
-    await player.open(ts);
-    await Future<void>.delayed(const Duration(milliseconds: 450));
-    if (player.state == SdtvPlayerState.error) {
-      debugPrint('sdtv: .ts open failed, trying .m3u8');
-      await player.open(m3u8);
+    // Last resort: software decode + first URL again (VAAPI texture issues).
+    if (player is MediaKitSdtvPlayerController) {
+      try {
+        await (player as MediaKitSdtvPlayerController).preferSoftwareDecode();
+        await player.open(candidates.first, httpHeaders: _streamHttpHeaders);
+        await Future<void>.delayed(const Duration(milliseconds: 1200));
+        if (player.state != SdtvPlayerState.error) {
+          notifyListeners();
+          return null;
+        }
+        lastErr = player.lastError;
+      } catch (e) {
+        lastErr = e.toString();
+      }
     }
+
     notifyListeners();
+    return lastErr ?? 'Playback failed (embedded)';
   }
 
   Future<void> playAdjacent(int delta) async {
