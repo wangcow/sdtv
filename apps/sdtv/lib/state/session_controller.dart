@@ -65,6 +65,7 @@ class SessionController extends ChangeNotifier {
   bool get isLiveProvider => !useDemo && !mockCatalog && !useM3u;
 
   /// Prefs namespace so M3U vs Xtream vs demo don't share stars / hidden cats.
+  /// Trailing slashes on server URLs are stripped so save/load scopes match.
   String get favoritesScope {
     if (useDemo || mockCatalog) return 'demo';
     if (useM3u) {
@@ -73,7 +74,8 @@ class SessionController extends ChangeNotifier {
     }
     final creds = _settings.credentials;
     if (creds == null) return 'xtream';
-    return 'xtream:${creds.baseUrl}|${creds.username}';
+    final base = creds.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    return 'xtream:$base|${creds.username.trim()}';
   }
 
   /// Same scope string as [favoritesScope] (hidden cats share the namespace).
@@ -149,50 +151,79 @@ class SessionController extends ChangeNotifier {
     _reloadLastPlayed();
   }
 
+  int? lastPlayedStreamId;
+
   void _reloadLastPlayed() {
     final m = _settings.lastPlayed(prefsScope);
     lastPlayedCategoryId = m['categoryId'];
     lastPlayedFavoriteKey = m['favoriteKey'];
     lastPlayedName = m['name'];
+    lastPlayedStreamId = int.tryParse(m['streamId'] ?? '');
+    debugPrint(
+      'sdtv: lastPlayed reload scope=$prefsScope → $m',
+    );
   }
 
   /// Persist last played for relaunch (category + channel key).
+  ///
+  /// Always prefers the channel's **provider** category (not ★ Favorites) so
+  /// resume lands in US MOVIES etc. rather than the favorites list.
   Future<void> rememberLastPlayed(LiveChannel channel) async {
-    // Prefer the channel's real category so we can land in that list later.
-    var catId = channel.categoryId;
+    var catId = channel.categoryId.trim();
     if (catId.isEmpty) {
-      catId = selectedCategoryId ?? '';
+      catId = (selectedCategoryId == kFavoritesCategoryId)
+          ? ''
+          : (selectedCategoryId ?? '');
     }
-    // When playing from favorites, resume on ★ Favorites if the channel is
-    // still starred; otherwise land in its provider category.
-    if (selectedCategoryId == kFavoritesCategoryId &&
-        isFavorite(channel)) {
-      catId = kFavoritesCategoryId;
+    if (catId.isEmpty || catId == kFavoritesCategoryId) {
+      // Still allow favorites-only resume if that is all we know.
+      if (selectedCategoryId == kFavoritesCategoryId) {
+        catId = kFavoritesCategoryId;
+      }
     }
     lastPlayedCategoryId = catId;
     lastPlayedFavoriteKey = channel.favoriteKey;
     lastPlayedName = channel.name;
+    lastPlayedStreamId = channel.streamId;
     debugPrint(
       'sdtv: lastPlayed save scope=$prefsScope cat=$catId '
-      'key=${channel.favoriteKey} name=${channel.name}',
+      'key=${channel.favoriteKey} id=${channel.streamId} name=${channel.name}',
     );
     await _settings.setLastPlayed(
       prefsScope,
       categoryId: catId,
       favoriteKey: channel.favoriteKey,
       name: channel.name,
+      streamId: channel.streamId,
     );
   }
 
-  /// Channel for last-played key / name, if still in the catalog.
+  /// Channel for last-played key / name / stream id, if still in the catalog.
   LiveChannel? get lastPlayedChannel {
     final key = lastPlayedFavoriteKey;
     if (key != null && key.isNotEmpty) {
       final byKey = channelForFavoriteKey(key);
       if (byKey != null) return byKey;
     }
+    final sid = lastPlayedStreamId;
+    if (sid != null && sid != 0) {
+      for (final c in allChannels) {
+        if (c.streamId == sid) return c;
+      }
+    }
     final name = lastPlayedName?.trim().toLowerCase();
     if (name == null || name.isEmpty) return null;
+    // Prefer match in last category if set.
+    final cat = lastPlayedCategoryId;
+    for (final c in allChannels) {
+      if (c.name.trim().toLowerCase() != name) continue;
+      if (cat == null ||
+          cat.isEmpty ||
+          cat == kFavoritesCategoryId ||
+          c.categoryId == cat) {
+        return c;
+      }
+    }
     for (final c in allChannels) {
       if (c.name.trim().toLowerCase() == name) return c;
     }
@@ -215,12 +246,11 @@ class SessionController extends ChangeNotifier {
     _reloadLastPlayed();
     final ch = lastPlayedChannel;
     debugPrint(
-      'sdtv: lastPlayed load scope=$prefsScope cat=$lastPlayedCategoryId '
-      'key=$lastPlayedFavoriteKey name=$lastPlayedName '
-      'resolved=${ch?.name}',
+      'sdtv: lastPlayed apply scope=$prefsScope cat=$lastPlayedCategoryId '
+      'key=$lastPlayedFavoriteKey id=$lastPlayedStreamId name=$lastPlayedName '
+      'resolved=${ch?.name} catId=${ch?.categoryId}',
     );
     if (ch == null) {
-      // Still try last category if channel gone from catalog.
       final lastCat = lastPlayedCategoryId;
       if (lastCat != null &&
           lastCat.isNotEmpty &&
@@ -232,19 +262,21 @@ class SessionController extends ChangeNotifier {
       return false;
     }
 
-    final lastCat = lastPlayedCategoryId;
-    if (lastCat == kFavoritesCategoryId && isFavorite(ch)) {
-      selectedCategoryId = kFavoritesCategoryId;
-    } else if (categories.any((c) => c.categoryId == ch.categoryId)) {
+    // Prefer the channel's real provider category (US MOVIES, etc.).
+    if (ch.categoryId.isNotEmpty &&
+        categories.any((c) => c.categoryId == ch.categoryId)) {
       selectedCategoryId = ch.categoryId;
-    } else if (lastCat != null &&
+      return true;
+    }
+    final lastCat = lastPlayedCategoryId;
+    if (lastCat != null &&
         lastCat.isNotEmpty &&
         (lastCat == kFavoritesCategoryId ||
             categories.any((c) => c.categoryId == lastCat))) {
       selectedCategoryId = lastCat;
-    } else {
-      selectedCategoryId = ch.categoryId;
+      return true;
     }
+    selectedCategoryId = ch.categoryId;
     return true;
   }
 

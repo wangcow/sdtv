@@ -30,6 +30,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   /// Last channel row per category id (so ← categories → channels keeps place).
   final Map<String, int> _chanIndexByCategory = {};
 
+  /// Tracks which category [session.selectedCategoryId] the UI index maps to.
+  /// Used so [session] notifies don't copy one list's row onto every category.
+  String? _indexCategoryId;
+
   /// Only auto-land on last-played once per page instance.
   bool _didRestoreLanding = false;
 
@@ -114,10 +118,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (session.browseCategories.isEmpty) return;
     _didRestoreLanding = true;
 
-    // Re-apply from prefs in case page mounted before connect finished writing.
+    // Re-apply from prefs (provider category, not just favorites default).
     session.applyLastPlayedSelection();
 
-    if (session.selectedCategoryId == null) {
+    if (session.selectedCategoryId == null &&
+        session.browseCategories.isNotEmpty) {
       session.selectCategory(session.browseCategories.first.categoryId);
     }
 
@@ -126,38 +131,32 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (sel != null) {
       final i =
           session.browseCategories.indexWhere((c) => c.categoryId == sel);
-      if (i >= 0) {
-        catIdx = i;
-      } else {
-        // Selected cat not in list yet — keep index 0 but selection stays.
-        catIdx = 0;
-      }
+      if (i >= 0) catIdx = i;
     }
 
     var chanIdx = 0;
     final lastIdx = session.lastPlayedChannelIndex;
-    final hasResume = lastIdx >= 0 || session.lastPlayedChannel != null;
     if (lastIdx >= 0) {
       chanIdx = lastIdx;
-      final id = session.selectedCategoryId;
-      if (id != null) _chanIndexByCategory[id] = chanIdx;
+      if (sel != null) _chanIndexByCategory[sel] = chanIdx;
     }
+    _indexCategoryId = sel;
 
     debugPrint(
       'sdtv: restore landing catIdx=$catIdx chanIdx=$chanIdx '
-      'sel=${session.selectedCategoryId} lastIdx=$lastIdx '
-      'last=${session.lastPlayedName}',
+      'sel=$sel lastIdx=$lastIdx last=${session.lastPlayedName} '
+      'build=${SdtvBuildInfo.label}',
     );
 
     setState(() {
       _catIndex = catIdx;
       _chanIndex = chanIdx;
-      if (hasResume && lastIdx >= 0) {
+      if (lastIdx >= 0) {
         _column = 1;
       }
     });
 
-    if (lastIdx >= 0) {
+    if (lastIdx >= 0 || catIdx > 0) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         _scrollTo(
@@ -166,7 +165,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
           itemExtent: _rowExtent,
           headerExtent: _listHeaderExtent,
         );
-        _scrollToChannelIndex(chanIdx);
+        if (lastIdx >= 0) _scrollToChannelIndex(chanIdx);
       });
     }
   }
@@ -203,20 +202,27 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     final catCount = session.browseCategories.length;
     final chanCount = session.channelsInCategory.length;
+    final sel = session.selectedCategoryId;
+
     if (catCount > 0) {
       _catIndex = _catIndex.clamp(0, catCount - 1);
-      // Keep catIndex aligned with selectedCategoryId when session changes.
-      final sel = session.selectedCategoryId;
       if (sel != null) {
-        final i = session.browseCategories.indexWhere((c) => c.categoryId == sel);
+        final i =
+            session.browseCategories.indexWhere((c) => c.categoryId == sel);
         if (i >= 0) _catIndex = i;
       }
     } else {
       _catIndex = 0;
     }
-    if (chanCount > 0) {
+
+    // Category changed via session: restore *that* category's saved row.
+    // Do NOT write the previous list's _chanIndex into the new category
+    // (that made every category share Favorites' row 0/1/2/…).
+    if (sel != null && sel != _indexCategoryId) {
+      _indexCategoryId = sel;
+      _chanIndex = chanCount > 0 ? _chanIndexFor(sel, chanCount) : 0;
+    } else if (chanCount > 0) {
       _chanIndex = _chanIndex.clamp(0, chanCount - 1);
-      _rememberChanIndex();
     } else {
       _chanIndex = 0;
     }
@@ -262,30 +268,43 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   void _rememberChanIndex() {
-    final id = session.selectedCategoryId;
+    final id = session.selectedCategoryId ?? _indexCategoryId;
     if (id == null) return;
     _chanIndexByCategory[id] = _chanIndex;
   }
 
   /// Restore last channel row for [categoryId] (clamped to list length).
+  /// Default is **0** only if this category was never opened — not "same as last cat".
   int _chanIndexFor(String categoryId, int listLength) {
     if (listLength <= 0) return 0;
-    final saved = _chanIndexByCategory[categoryId] ?? 0;
+    final saved = _chanIndexByCategory[categoryId];
+    if (saved == null) return 0;
     return saved.clamp(0, listLength - 1);
   }
 
   /// Switch provider category, keeping each list's remembered position.
   void _selectCategoryKeepingChanPos(String categoryId) {
+    // Save row under the category we are *leaving*.
     _rememberChanIndex();
+    final prevId = session.selectedCategoryId;
     session.selectCategory(categoryId);
+    // selectCategory notifies → _onSession; it restores from map using
+    // _indexCategoryId transition. Set explicitly too for clarity.
     final n = session.channelsInCategory.length;
-    _chanIndex = _chanIndexFor(categoryId, n);
+    final idx = _chanIndexFor(categoryId, n);
+    _indexCategoryId = categoryId;
+    _chanIndex = idx;
+    debugPrint(
+      'sdtv: cat switch $prevId → $categoryId chanIdx=$idx '
+      '(saved=${_chanIndexByCategory[categoryId]})',
+    );
   }
 
   void _enterChannelColumn() {
     final id = session.selectedCategoryId;
     final n = session.channelsInCategory.length;
     final idx = id == null ? 0 : _chanIndexFor(id, n);
+    _indexCategoryId = id;
     setState(() {
       _column = 1;
       _chanIndex = idx;

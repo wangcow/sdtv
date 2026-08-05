@@ -210,6 +210,7 @@ class SettingsStore {
     required String categoryId,
     required String favoriteKey,
     String name = '',
+    int? streamId,
   }) async {
     if (scope.isEmpty || favoriteKey.isEmpty) return;
     final raw = _prefs.getString(_kLastPlayed);
@@ -226,6 +227,7 @@ class SettingsStore {
       'categoryId': categoryId,
       'favoriteKey': favoriteKey,
       if (name.isNotEmpty) 'name': name,
+      if (streamId != null && streamId != 0) 'streamId': '$streamId',
     };
     await _prefs.setString(_kLastPlayed, jsonEncode(root));
   }
