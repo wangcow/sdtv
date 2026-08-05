@@ -404,6 +404,11 @@ class SessionController extends ChangeNotifier {
   bool watchMenuOpen = false;
   int watchMenuIndex = 0;
 
+  /// Short EPG cache (streamId → listing). Cleared on source switch / sign-out.
+  final Map<int, ShortEpg> _shortEpgCache = {};
+  static const _shortEpgTtl = Duration(minutes: 12);
+  int _miniGuideGen = 0;
+
   /// Order of rows in the watch menu OSD.
   static const watchMenuItems = <String>[
     'resume',
@@ -590,7 +595,17 @@ class SessionController extends ChangeNotifier {
     _lastZapAt = now;
 
     if (_watchList.length == 1) {
-      await _zapLoadChannel(_watchList[0], announce: '→');
+      final only = _watchList[0];
+      final healthy = await _zapLoadChannel(only, announce: '→');
+      if (healthy) {
+        unawaited(
+          showMiniGuide(
+            channel: only,
+            prefix: '→',
+            channelLineFirst: false,
+          ),
+        );
+      }
       return;
     }
 
@@ -608,6 +623,14 @@ class SessionController extends ChangeNotifier {
       final healthy = await _zapLoadChannel(ch, announce: '→');
       if (healthy) {
         unawaited(rememberLastPlayed(ch));
+        // Mini guide (now/next) — channel name already shown during load.
+        unawaited(
+          showMiniGuide(
+            channel: ch,
+            prefix: '→',
+            channelLineFirst: false,
+          ),
+        );
       }
       // If not healthy, we already showed an error OSD and stay on this channel.
     } finally {
@@ -632,7 +655,8 @@ class SessionController extends ChangeNotifier {
 
     final fallback = resolvePlayUriFallback(ch);
     externalMpv.clearRecentLog();
-    await externalMpv.showText('$announce $label', durationMs: 1800);
+    // Brief channel name while stream loads; full mini guide paints after healthy.
+    await externalMpv.showText('$announce $label', durationMs: 1600);
     final ok = await externalMpv.loadFile(uri, title: label);
     if (!ok) {
       debugPrint('sdtv: zap loadfile failed for ${ch.name}');
@@ -686,6 +710,151 @@ class SessionController extends ChangeNotifier {
       favoriteKeys: _favoriteKeys.toSet(),
       maxResults: maxResults,
     );
+  }
+
+  // —— Short EPG (now / next mini guide) ——
+
+  void _clearShortEpgCache() {
+    _shortEpgCache.clear();
+    _miniGuideGen++;
+  }
+
+  /// Cached short EPG if still fresh (no network).
+  ShortEpg? cachedShortEpg(LiveChannel channel) {
+    if (channel.streamId == 0 && !mockCatalog && !useDemo) return null;
+    final hit = _shortEpgCache[channel.streamId];
+    if (hit == null) return null;
+    final fetched = hit.fetchedAt;
+    if (fetched != null &&
+        DateTime.now().difference(fetched) > _shortEpgTtl) {
+      return null;
+    }
+    return hit;
+  }
+
+  /// One-line "now" under a channel name (null if unknown / M3U without EPG).
+  String? shortEpgSubtitle(LiveChannel channel) {
+    final epg = cachedShortEpg(channel);
+    return epg?.guideSubtitle();
+  }
+
+  /// Fetch short EPG for [channel] (Xtream / demo). M3U returns empty.
+  ///
+  /// Uses a short in-memory TTL cache. Safe to call often (focus changes).
+  Future<ShortEpg?> fetchShortEpg(
+    LiveChannel channel, {
+    bool force = false,
+  }) async {
+    if (useM3u) return null;
+    final id = channel.streamId;
+    // Demo/mock always has synthetic EPG even for odd ids.
+    if (id == 0 && !mockCatalog && !useDemo) return null;
+
+    if (!force) {
+      final cached = cachedShortEpg(channel);
+      if (cached != null) return cached;
+    }
+
+    final client = _client;
+    if (client == null) return null;
+
+    try {
+      final epg = await client.getShortEpg(id == 0 ? 1 : id, limit: 4);
+      // Key by real stream id when non-zero so cache maps to the channel.
+      final stored = ShortEpg(
+        streamId: id == 0 ? epg.streamId : id,
+        listings: epg.listings,
+        fetchedAt: epg.fetchedAt ?? DateTime.now(),
+      );
+      if (id != 0) {
+        _shortEpgCache[id] = stored;
+      } else if (mockCatalog || useDemo) {
+        _shortEpgCache[stored.streamId] = stored;
+      }
+      notifyListeners();
+      return stored;
+    } catch (e) {
+      debugPrint('sdtv: short EPG failed for ${channel.name}: $e');
+      return null;
+    }
+  }
+
+  /// Prefetch now/next for a few channels (guide focus neighborhood).
+  void prefetchShortEpgAround(List<LiveChannel> channels, int focusIndex) {
+    if (useM3u || _client == null) return;
+    if (channels.isEmpty) return;
+    final start = (focusIndex - 2).clamp(0, channels.length - 1);
+    final end = (focusIndex + 4).clamp(0, channels.length - 1);
+    for (var i = start; i <= end; i++) {
+      final ch = channels[i];
+      if (cachedShortEpg(ch) != null) continue;
+      unawaited(fetchShortEpg(ch));
+    }
+  }
+
+  /// TiviMate-style mini guide OSD on mpv (channel + now + next).
+  ///
+  /// [channelLineFirst] flashes the channel name while the EPG request is in
+  /// flight (skip when the zap path already showed the name).
+  Future<void> showMiniGuide({
+    LiveChannel? channel,
+    String? prefix,
+    int durationMs = 5000,
+    bool channelLineFirst = true,
+  }) async {
+    final ch = channel ?? nowPlaying;
+    if (ch == null || !isWatchingExternal) return;
+    if (watchMenuOpen) return;
+
+    final gen = ++_miniGuideGen;
+    final label = ch.num > 0 ? '${ch.num}. ${ch.name}' : ch.name;
+
+    if (channelLineFirst) {
+      await externalMpv.showText(
+        prefix != null ? '$prefix $label' : label,
+        durationMs: 1200,
+      );
+    }
+
+    final epg = await fetchShortEpg(ch);
+    if (gen != _miniGuideGen) return; // newer zap won
+    if (!isWatchingExternal || watchMenuOpen) return;
+    if (nowPlaying?.favoriteKey != ch.favoriteKey) return;
+
+    if (epg == null || epg.isEmpty) {
+      // M3U has no Xtream short EPG — keep the simple channel banner only.
+      if (useM3u) {
+        if (!channelLineFirst) {
+          await externalMpv.showText(
+            prefix != null ? '$prefix $label' : label,
+            durationMs: durationMs,
+          );
+        }
+        return;
+      }
+      await externalMpv.showText(
+        '${prefix != null ? '$prefix ' : ''}$label\nNo EPG for this channel',
+        durationMs: durationMs,
+      );
+      return;
+    }
+
+    final text = epg.formatOsd(channelLabel: label, prefix: prefix);
+    await externalMpv.showText(text, durationMs: durationMs);
+  }
+
+  /// After stream is up: wait for IPC + first health pass, then mini guide.
+  Future<void> _showMiniGuideWhenReady(LiveChannel channel) async {
+    for (var i = 0; i < 25; i++) {
+      if (!isWatchingExternal) return;
+      if (externalMpv.isRunning) break;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    // After mpv's own control hint (~0.6s) and .ts→.m3u8 grace.
+    await Future<void>.delayed(const Duration(milliseconds: 1600));
+    if (!isWatchingExternal || watchMenuOpen) return;
+    if (nowPlaying?.favoriteKey != channel.favoriteKey) return;
+    await showMiniGuide(channel: channel, channelLineFirst: true);
   }
 
   /// Resolve a stored favorite key to a live catalog channel (best-effort).
@@ -826,6 +995,7 @@ class SessionController extends ChangeNotifier {
       mockCatalog = false;
       useM3u = true;
       m3uPlaylistUrl = playlistUrl.trim();
+      _clearShortEpgCache();
       userInfo = UserInfo(
         username: 'm3u',
         status: 'Active',
@@ -994,6 +1164,7 @@ class SessionController extends ChangeNotifier {
     allChannels = streams;
     this.useDemo = useDemo;
     this.mockCatalog = mockCatalog;
+    _clearShortEpgCache();
     // Save credentials first so [prefsScope] matches while loading last-played.
     if (save) {
       await _settings.saveSession(
@@ -1119,6 +1290,9 @@ class SessionController extends ChangeNotifier {
 
       _watchList = playable;
       _watchIndex = start;
+
+      // Mini guide once mpv is up (playFullscreen blocks until quit).
+      unawaited(_showMiniGuideWhenReady(channel));
 
       var result = await externalMpv.playFullscreen(
         uri,
@@ -1292,6 +1466,7 @@ class SessionController extends ChangeNotifier {
     mockCatalog = true;
     useM3u = false;
     m3uPlaylistUrl = null;
+    _clearShortEpgCache();
     try {
       await _settings.clearSession();
     } catch (e, st) {

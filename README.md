@@ -160,7 +160,7 @@ See [docs/STEAM_DECK.md](docs/STEAM_DECK.md). Short version: install Flatpak →
 1. ~~Scaffold + controller playground~~  
 2. Xtream login (mock then optional live) + live categories/channels  
 3. libmpv playback + channel zap  
-4. Favorites / short EPG  
+4. ~~Favorites / short EPG (now·next mini guide)~~  
 5. Movies + Series + full EPG grid  
 6. Flathub
 

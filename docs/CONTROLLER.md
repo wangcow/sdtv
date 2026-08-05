@@ -62,6 +62,16 @@ Flutter keeps reading the pad (Deck); mpv also has keyboard maps when it has foc
 
 Zap walks the **current list** (★ Favorites or the category you played from).
 
+### Mini guide (short EPG — now / next)
+
+TiviMate-style banner on the mpv OSD:
+
+- **On channel open** and **after each successful zap**: channel name, **NOW** (time range + title + progress), **NEXT** (start + title).
+- Data from Xtream `get_short_epg` (demo/mock synthesizes programs). **M3U** has no panel EPG — channel name only.
+- In the **guide**, focused channels prefetch now/next; the current program appears as a **subtitle** under the channel name when cached.
+
+Full EPG grid / program search is later.
+
 ### Watch menu (navigable pause UI)
 
 mpv’s OSC is mostly **mouse**-oriented; D-pad does not “focus” its buttons well.  

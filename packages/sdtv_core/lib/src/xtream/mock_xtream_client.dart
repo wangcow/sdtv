@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import '../models/category.dart';
 import '../models/credentials.dart';
+import '../models/epg_program.dart';
 import '../models/live_channel.dart';
 import '../models/user_info.dart';
 import 'xtream_client.dart';
@@ -83,6 +84,70 @@ class MockXtreamClient implements XtreamClient {
 
   @override
   Uri livePlayUrl(int streamId, {String extension = 'ts'}) => mockPlaybackUri;
+
+  /// Synthetic now/next so demo mode exercises the mini guide.
+  @override
+  Future<ShortEpg> getShortEpg(int streamId, {int limit = 4}) async {
+    final now = DateTime.now();
+    // Align slots to half-hours so progress bars move during a session.
+    final slotMin = now.minute < 30 ? 0 : 30;
+    final slotStart = DateTime(now.year, now.month, now.day, now.hour, slotMin);
+    final names = _mockProgramNames(streamId);
+    final lim = limit.clamp(1, 8);
+    final listings = <EpgProgram>[];
+    for (var i = 0; i < lim; i++) {
+      final start = slotStart.add(Duration(minutes: 30 * i));
+      final end = start.add(const Duration(minutes: 30));
+      listings.add(
+        EpgProgram(
+          id: 'mock-$streamId-$i',
+          title: names[i % names.length],
+          description: 'Mock short EPG for stream $streamId',
+          start: start,
+          end: end,
+          channelId: 'mock.$streamId',
+        ),
+      );
+    }
+    return ShortEpg(
+      streamId: streamId,
+      listings: listings,
+      fetchedAt: now,
+    );
+  }
+
+  static List<String> _mockProgramNames(int streamId) {
+    switch (streamId % 4) {
+      case 0:
+        return const [
+          'Morning Briefing',
+          'World Desk',
+          'Market Watch',
+          'Nightly Roundup',
+        ];
+      case 1:
+        return const [
+          'Live Match: Demo FC',
+          'Halftime Analysis',
+          'Sports Desk',
+          'Highlights Hour',
+        ];
+      case 2:
+        return const [
+          'Sitcom Rerun',
+          'Prime Drama',
+          'Late Movie',
+          'After Hours',
+        ];
+      default:
+        return const [
+          'Open Mic',
+          'Talk Back',
+          'Documentary Cut',
+          'Encore',
+        ];
+    }
+  }
 
   List<MediaCategory> _parseCategories(String raw) {
     final json = jsonDecode(raw);

@@ -5,6 +5,7 @@ export 'src/m3u/m3u_loader.dart';
 export 'src/m3u/m3u_parser.dart';
 export 'src/models/category.dart';
 export 'src/models/credentials.dart';
+export 'src/models/epg_program.dart';
 export 'src/models/guide_search.dart';
 export 'src/models/live_channel.dart';
 export 'src/models/user_info.dart';

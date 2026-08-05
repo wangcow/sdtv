@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/category.dart';
 import '../models/credentials.dart';
+import '../models/epg_program.dart';
 import '../models/live_channel.dart';
 import '../models/user_info.dart';
 import 'xtream_exception.dart';
@@ -14,6 +15,9 @@ abstract class XtreamClient {
   Future<List<MediaCategory>> getLiveCategories();
   Future<List<LiveChannel>> getLiveStreams({String? categoryId});
   Uri livePlayUrl(int streamId, {String extension = 'ts'});
+
+  /// Short EPG for a live stream (now + next). Empty list if unsupported.
+  Future<ShortEpg> getShortEpg(int streamId, {int limit = 4});
 }
 
 /// HTTP implementation of [XtreamClient] against a real provider.
@@ -86,6 +90,54 @@ class HttpXtreamClient implements XtreamClient {
   @override
   Uri livePlayUrl(int streamId, {String extension = 'ts'}) =>
       credentials.liveStreamUri(streamId, extension: extension);
+
+  @override
+  Future<ShortEpg> getShortEpg(int streamId, {int limit = 4}) async {
+    if (streamId == 0) {
+      return ShortEpg(
+        streamId: streamId,
+        listings: const [],
+        fetchedAt: DateTime.now(),
+      );
+    }
+    final lim = limit.clamp(1, 12);
+    final json = await _getJson({
+      ...credentials.authQuery,
+      'action': 'get_short_epg',
+      'stream_id': '$streamId',
+      'limit': '$lim',
+    });
+    final listings = _parseEpgListings(json);
+    return ShortEpg(
+      streamId: streamId,
+      listings: listings,
+      fetchedAt: DateTime.now(),
+    );
+  }
+
+  List<EpgProgram> _parseEpgListings(dynamic json) {
+    List<dynamic>? raw;
+    if (json is List) {
+      raw = json;
+    } else if (json is Map) {
+      final map = json is Map<String, dynamic>
+          ? json
+          : Map<String, dynamic>.from(json);
+      final listings = map['epg_listings'] ?? map['listings'] ?? map['epg'];
+      if (listings is List) raw = listings;
+    }
+    if (raw == null) return const [];
+    final out = <EpgProgram>[];
+    for (final item in raw) {
+      if (item is Map<String, dynamic>) {
+        out.add(EpgProgram.fromXtreamJson(item));
+      } else if (item is Map) {
+        out.add(EpgProgram.fromXtreamJson(Map<String, dynamic>.from(item)));
+      }
+    }
+    out.sort((a, b) => a.start.compareTo(b.start));
+    return out;
+  }
 
   Future<dynamic> _getJson(Map<String, String> query) async {
     final uri = credentials.playerApiUri.replace(queryParameters: query);
