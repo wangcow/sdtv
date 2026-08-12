@@ -509,8 +509,11 @@ class SessionController extends ChangeNotifier {
         ),
       );
     } else {
-      await externalMpv.showText(
-        'Paused · A menu · B guide · LB/RB ch · ↑↓ vol',
+      await externalMpv.hideChromeOverlay();
+      await externalMpv.showLiveBanner(
+        title: _nowPlayingLabel,
+        nowLine: 'Paused',
+        hint: 'A menu  ·  B guide  ·  LB/RB ch  ·  ↑↓ vol',
         durationMs: 2500,
       );
     }
@@ -589,8 +592,14 @@ class SessionController extends ChangeNotifier {
       buf.writeln('$mark${rows[i]}');
     }
     buf.write('↑↓ move · ←→ change · A select · B close menu');
-    // Long duration; each move refreshes.
-    await externalMpv.showText(buf.toString(), durationMs: 12000);
+    await externalMpv.showChromeOverlay(
+      watchMenuAss(
+        title: _nowPlayingLabel,
+        rows: rows,
+        selected: watchMenuIndex,
+      ),
+      fallbackText: buf.toString(),
+    );
   }
 
   /// B while watching: close menu first, else quit to guide.
@@ -849,10 +858,11 @@ class SessionController extends ChangeNotifier {
     final gen = ++_miniGuideGen;
     final label = ch.num > 0 ? '${ch.num}. ${ch.name}' : ch.name;
 
+    final heading = prefix != null ? '$prefix $label' : label;
     if (channelLineFirst) {
-      await externalMpv.showText(
-        prefix != null ? '$prefix $label' : label,
-        durationMs: 1200,
+      await externalMpv.showLiveBanner(
+        title: heading,
+        durationMs: 1400,
       );
     }
 
@@ -865,16 +875,36 @@ class SessionController extends ChangeNotifier {
       // M3U has no Xtream short EPG — keep the simple channel banner only.
       // Never flash "No EPG" as a scary error (looked like pause/menu broke).
       if (!channelLineFirst) {
-        await externalMpv.showText(
-          prefix != null ? '$prefix $label' : label,
+        await externalMpv.showLiveBanner(
+          title: heading,
           durationMs: 2200,
         );
       }
       return;
     }
 
-    final text = epg.formatOsd(channelLabel: label, prefix: prefix);
-    await externalMpv.showText(text, durationMs: durationMs);
+    final when = DateTime.now();
+    final now = epg.nowAt(when);
+    final next = epg.nextAt(when);
+    String? nowLine;
+    String? nextLine;
+    String clip(String s) {
+      final t = s.replaceAll(RegExp(r'\s+'), ' ').trim();
+      return t.length <= 48 ? t : '${t.substring(0, 47)}…';
+    }
+
+    if (now != null) {
+      nowLine = 'NOW  ${now.timeRangeLabel()}  ${clip(now.title)}';
+    }
+    if (next != null) {
+      nextLine = 'NEXT ${next.startTimeLabel()}  ${clip(next.title)}';
+    }
+    await externalMpv.showLiveBanner(
+      title: heading,
+      nowLine: nowLine,
+      nextLine: nextLine,
+      durationMs: durationMs,
+    );
   }
 
   /// After stream is up: wait for IPC + first health pass, then mini guide.
@@ -1393,85 +1423,65 @@ class SessionController extends ChangeNotifier {
             '(KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3',
   };
 
-  /// Embedded media_kit open (chrome spike / fallback). Prefer [watchChannel]
+  /// Embedded media_kit open (experimental). Prefer [watchChannel]
   /// for daily live TV (external mpv).
   ///
-  /// Tries **HLS (.m3u8) first** — texture/libmpv path is much happier with
-  /// HLS than raw `.ts` on many panels. Returns an error string if all fail.
+  /// **One URL only** — do not probe .m3u8 then .ts; that double-hits the
+  /// panel and can get the account flagged. Texture size is never put on
+  /// the stream URL.
   Future<String?> playChannel(LiveChannel channel) async {
     nowPlaying = channel;
     notifyListeners();
 
-    final candidates = <Uri>[];
+    Uri? url;
     if (channel.hasDirectUrl) {
-      final u = Uri.tryParse(channel.streamUrl!.trim());
-      if (u != null) candidates.add(u);
+      url = Uri.tryParse(channel.streamUrl!.trim());
     } else if (useDemo || mockCatalog) {
-      candidates.add(Uri.parse(kDemoPlaybackUri));
+      url = Uri.parse(kDemoPlaybackUri);
     } else {
-      // HLS first for embed; .ts second (external mpv prefers .ts).
-      final hls = resolvePlayUri(channel, extension: 'm3u8');
-      final ts = resolvePlayUri(channel, extension: 'ts');
-      if (hls != null) candidates.add(hls);
-      if (ts != null && ts.toString() != hls?.toString()) {
-        candidates.add(ts);
-      }
+      url = resolvePlayUri(channel);
     }
 
-    if (candidates.isEmpty) {
+    if (url == null) {
       return 'No playable URL for this channel.';
     }
 
-    // Soft reset so a prior failed open does not poison the spike.
     try {
       await player.stop();
     } catch (_) {}
 
-    String? lastErr;
-    for (var i = 0; i < candidates.length; i++) {
-      final url = candidates[i];
-      debugPrint('sdtv: embed open [${i + 1}/${candidates.length}] $url');
-      await player.open(url, httpHeaders: _streamHttpHeaders);
-      // Allow demux/buffer to settle before declaring failure.
-      for (var t = 0; t < 15; t++) {
-        await Future<void>.delayed(const Duration(milliseconds: 100));
-        if (player.state == SdtvPlayerState.playing ||
-            player.state == SdtvPlayerState.buffering ||
-            player.state == SdtvPlayerState.paused) {
-          notifyListeners();
-          return null;
-        }
-        if (player.state == SdtvPlayerState.error) break;
+    debugPrint('sdtv: embed open $url');
+    await player.open(url, httpHeaders: _streamHttpHeaders);
+    for (var t = 0; t < 15; t++) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      if (player.state == SdtvPlayerState.playing ||
+          player.state == SdtvPlayerState.buffering ||
+          player.state == SdtvPlayerState.paused) {
+        notifyListeners();
+        return null;
       }
-      lastErr = player.lastError;
-      debugPrint('sdtv: embed open failed ($url): $lastErr');
+      if (player.state == SdtvPlayerState.error) break;
     }
 
-    // Avoid automatic software decode — it tanks Deck embed FPS (~7fps).
-    // Prefer reporting error so the user can retry / use external mpv.
     notifyListeners();
-    return lastErr ?? 'Playback failed (embedded)';
+    return player.lastError ?? 'Playback failed (embedded)';
   }
 
   Future<void> playAdjacent(int delta) async {
+    // Zap always uses external mpv (smooth). Do not open a second embed
+    // stream against the panel.
     if (isWatchingExternal) {
       await watchChannelAdjacent(delta);
       return;
     }
     final list = channelsInCategory;
-    if (list.isEmpty || nowPlaying == null) return;
-    if (list.length == 1) {
-      notifyListeners();
-      return;
-    }
-    final idx = list.indexWhere((c) => c.streamId == nowPlaying!.streamId);
-    if (idx < 0) {
-      await watchChannel(list[0]);
-      return;
-    }
-    final next = (idx + delta) % list.length;
+    if (list.isEmpty) return;
+    final idx = nowPlaying == null
+        ? 0
+        : list.indexWhere((c) => c.streamId == nowPlaying!.streamId);
+    final start = idx < 0 ? 0 : idx;
+    final next = (start + delta) % list.length;
     final i = next < 0 ? next + list.length : next;
-    if (i == idx) return;
     await watchChannel(list[i]);
   }
 

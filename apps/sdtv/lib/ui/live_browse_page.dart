@@ -78,7 +78,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     ),
     (
       id: 'chrome_spike',
-      label: 'Chrome spike (embedded)',
+      label: 'Embedded player (slow)',
       icon: Icons.smart_display_outlined,
       danger: false
     ),
@@ -897,7 +897,17 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
     if (id == 'chrome_spike') {
-      // Player chrome spike: embedded media_kit + Flutter HUD (not external mpv).
+      // Experimental Flutter-texture path. Daily watch is A → external mpv.
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Embedded is experimental and janky. '
+            'A play uses smooth mpv (OSD chrome on the video).',
+          ),
+          duration: Duration(seconds: 5),
+        ),
+      );
       final chans = session.channelsInCategory;
       if (chans.isEmpty) {
         if (!mounted) return;

@@ -6,6 +6,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 
+import 'osd_chrome.dart';
+
 /// Result of a fullscreen external [mpv] session.
 class ExternalMpvResult {
   const ExternalMpvResult({
@@ -657,6 +659,87 @@ class ExternalMpvLauncher {
     await sendCommand(['show-text', text, durationMs]);
   }
 
+  static const _chromeOverlayId = 1;
+  Timer? _chromeHideTimer;
+
+  /// Draw couch chrome on the video plane (mpv ASS overlay).
+  ///
+  /// This is the TiviMate-like bar without Flutter textures. [ass] null/empty
+  /// clears. Falls back to [showText] if overlay IPC is rejected.
+  Future<void> showChromeOverlay(
+    String? ass, {
+    int? hideAfterMs,
+    String? fallbackText,
+  }) async {
+    _chromeHideTimer?.cancel();
+    _chromeHideTimer = null;
+    if (ass == null || ass.isEmpty) {
+      await _clearChromeOverlay();
+      return;
+    }
+    final ok = await sendCommand([
+      'osd-overlay',
+      {
+        'id': _chromeOverlayId,
+        'format': 'ass-events',
+        'data': ass,
+        'res_x': 1920,
+        'res_y': 1080,
+        'z': 20,
+      },
+    ]);
+    if (!ok && fallbackText != null && fallbackText.isNotEmpty) {
+      await showText(fallbackText, durationMs: hideAfterMs ?? 4000);
+      return;
+    }
+    if (hideAfterMs != null && hideAfterMs > 0) {
+      _chromeHideTimer = Timer(Duration(milliseconds: hideAfterMs), () {
+        unawaited(_clearChromeOverlay());
+      });
+    }
+  }
+
+  Future<void> _clearChromeOverlay() async {
+    _chromeHideTimer?.cancel();
+    _chromeHideTimer = null;
+    await sendCommand([
+      'osd-overlay',
+      {
+        'id': _chromeOverlayId,
+        'format': 'none',
+        'data': '',
+      },
+    ]);
+  }
+
+  Future<void> hideChromeOverlay() => _clearChromeOverlay();
+
+  /// Convenience: live banner on the video plane.
+  Future<void> showLiveBanner({
+    required String title,
+    String? nowLine,
+    String? nextLine,
+    String? hint,
+    int durationMs = 4500,
+  }) {
+    final ass = liveBannerAss(
+      title: title,
+      nowLine: nowLine,
+      nextLine: nextLine,
+      hint: hint ?? 'A menu  ·  B guide  ·  LB/RB channel',
+    );
+    final plain = [
+      title,
+      ?nowLine,
+      ?nextLine,
+    ].join('\n');
+    return showChromeOverlay(
+      ass,
+      hideAfterMs: durationMs,
+      fallbackText: plain,
+    );
+  }
+
   /// Replace current playback with [url] (reliable for live channel zap).
   Future<bool> loadFile(Uri url, {String? title}) async {
     _activeUrl = url;
@@ -767,6 +850,7 @@ class ExternalMpvLauncher {
     _userQuit = true;
     _restartForDisplay = false;
     _restartDebounce?.cancel();
+    _chromeHideTimer?.cancel();
     _stopDisplayWatch();
     final ok = await sendCommand(['quit']);
     if (!ok) {
@@ -1168,11 +1252,20 @@ GAMEPAD_GUIDE quit
           '--force-media-title=$playTitle',
           '--input-conf=${confFile.path}',
           '--input-ipc-server=$ipcPath',
-          // No OSC: seek bar on live IPTV jumps into the old cache window.
+          // No OSC: stock seek bar on live IPTV jumps into the old cache.
+          // Couch chrome is our ASS overlay / styled show-text, not OSC.
           '--osc=no',
           '--osd-bar=yes',
           '--osd-level=1',
           '--osd-duration=2000',
+          '--osd-font-size=42',
+          '--osd-border-size=3',
+          '--osd-color=#FFFFFFFF',
+          '--osd-border-color=#CC000000',
+          '--osd-align-x=center',
+          '--osd-align-y=bottom',
+          '--osd-margin-y=52',
+          '--osd-bold=yes',
           // Live-friendly: don't treat the sliding window as a scrubbable VOD.
           '--force-seekable=no',
           '--hr-seek=no',
@@ -1332,6 +1425,7 @@ GAMEPAD_GUIDE quit
     _userQuit = true;
     _restartForDisplay = false;
     _restartDebounce?.cancel();
+    _chromeHideTimer?.cancel();
     _stopDisplayWatch();
     final p = _process;
     _launching = false;

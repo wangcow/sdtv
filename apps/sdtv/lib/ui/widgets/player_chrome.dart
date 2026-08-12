@@ -47,7 +47,7 @@ class PlayerChrome extends StatelessWidget {
   final PlayerChromeFocus focus;
   final bool showChrome;
   final String? decodeLabel;
-  /// e.g. perf: 28fps · tex360p · vaapi-copy · src 1280x720
+  /// e.g. perf: mpv 60fps · vaapi-copy · src 1280x720
   final String? perfLabel;
 
   final VoidCallback? onPlayPause;

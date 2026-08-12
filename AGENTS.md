@@ -45,6 +45,8 @@ cd packages/sdtv_core && dart test
 
 ## Phase focus
 
-- **Phase 0:** scaffold, controller playground, mocks (current)
-- **Phase 1:** login + live TV list + mpv play
-- Later: EPG, VOD, Series, Flathub
+Daily watch is **external mpv** (`vo=gpu`). Flutter is the guide. On-video chrome is mpv OSD / ASS overlay. Do **not** chase Flutter-texture FPS for live TV — Deck embed is 7–15fps and cannot match mpv picture quality.
+
+- **Now:** guide + external mpv + OSD/ASS chrome
+- Later: Movies / Series / full EPG grid / Flathub
+- **Future product (not this phase):** Flutter HUD *over* live mpv — transparent Flutter (or `mpv --wid` into a GTK hole) so widgets sit on a separate plane. Video must **never** go through `media_kit`’s `Video` texture. Gamescope Game Mode may block this; spike on desktop first.

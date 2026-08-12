@@ -203,21 +203,14 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
         logLevel: MPVLogLevel.warn,
       ),
     );
-    // Texture height is the main FPS lever (CPU/GPU upload into Flutter).
-    // 720p ≈ 7–8 FPS on Deck; 480p was mid-teens; default 360 targets ~24–30
-    // on typical live. Override: SDTV_VIDEO_HEIGHT=480|720
-    _textureHeight = int.tryParse(
-          Platform.environment['SDTV_VIDEO_HEIGHT'] ?? '',
-        ) ??
-        360;
-    if (_textureHeight <= 0) _textureHeight = 360;
+    // Embed/texture path is experimental. Forcing a small FBO and then
+    // fighting media_kit's video-params resize dropped Deck to ~2fps.
+    // Daily watch is external mpv (vo=gpu), not this texture.
     _videoController = VideoController(
       _player,
-      configuration: VideoControllerConfiguration(
+      configuration: const VideoControllerConfiguration(
         enableHardwareAcceleration: true,
-        // media_kit → vo=libmpv texture. Prefer copy-mode VAAPI.
         hwdec: 'vaapi-copy,auto-copy,auto',
-        height: _textureHeight,
       ),
     );
 
@@ -284,7 +277,7 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   String _decodeLabel = 'decode: —';
   String _perfLabel = 'perf: —';
   double _estimatedFps = 0;
-  int _textureHeight = 360;
+  final int _textureHeight = 0;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   DateTime? _lastPosNotify;
@@ -334,8 +327,6 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
         'sigmoid-upscaling': 'no',
         'deband': 'no',
         'dither': 'no',
-        // Cap internal VO rate so we don't upload 60fps into Flutter.
-        'vf': 'fps=$_embedTargetFps',
       };
       for (final e in props.entries) {
         try {
@@ -350,20 +341,10 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
           'vaapi-copy,auto-copy,auto-safe,auto',
         ) as Future?;
       } catch (_) {}
-      debugPrint(
-        'sdtv_player: texture perf props texH=$_textureHeight '
-        'targetFps=$_embedTargetFps',
-      );
+      debugPrint('sdtv_player: texture perf props (no size cap)');
     } catch (e) {
       debugPrint('sdtv_player tune: $e');
     }
-  }
-
-  /// Target FPS for the embed texture path (default 30). SDTV_EMBED_FPS=24|30
-  static int get _embedTargetFps {
-    final v = int.tryParse(Platform.environment['SDTV_EMBED_FPS'] ?? '');
-    if (v != null && v >= 15 && v <= 60) return v;
-    return 30;
   }
 
   Future<void> _samplePerf() async {
@@ -402,11 +383,9 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
       final hwShow = (hw.isEmpty || hw == 'no')
           ? (hw == 'no' ? 'cpu' : '?')
           : hw;
-      final next =
-          'perf: ${fpsShow}fps · tex${_textureHeight}p · $hwShow · src $src';
+      final next = 'perf: mpv ${fpsShow}fps · $hwShow · src $src';
       if (next != _perfLabel) {
         _perfLabel = next;
-        // Low-rate notify so chrome can show FPS without thrashing.
         notifyListeners();
       }
     } catch (e) {
