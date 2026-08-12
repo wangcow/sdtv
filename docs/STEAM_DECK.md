@@ -87,20 +87,21 @@ Selecting a channel **starts fullscreen `mpv`**, then returns to the channel lis
   ```
 - Debug: after launch, check `~/sdtv/.sdtv-runtime.txt` for `SDTV_MPV_PATH=…`.
 
-### Embedded player / chrome spike FPS
+### Watch chrome (daily path)
 
-☰ → **Chrome spike** uses media_kit **texture** upload (not external mpv). FPS is lower and channel-dependent.
+**A** on a channel starts **external mpv** (hardware decode, 60fps). Couch chrome is drawn **on the video plane** (mpv ASS overlay / styled OSD) — not through Flutter.
 
-On-screen green line while chrome is visible:
+Stock mpv OSC (the seek bar) stays **off**. On live IPTV it rewinds the cache. Pause (**A**) opens sdtv’s text/ASS menu instead.
 
-`perf: 28fps · tex360p · vaapi-copy · src 1280x720`
+☰ → **Embedded player (slow)** is a leftover Flutter-texture experiment. It will never match TiviMate smoothness on Deck (Flutter has no SurfaceView). Don’t use it for daily watching; it also used to probe two stream URLs per channel.
 
-| Env (optional `~/sdtv/sdtv.env`) | Effect |
-|----------------------------------|--------|
-| `SDTV_VIDEO_HEIGHT=360` | Texture height (default **360**; try `480` for sharper / slower) |
-| `SDTV_EMBED_FPS=30` | Cap internal fps filter (default 30; try `24`) |
+Daily **A play** is the product path.
 
-Daily **A play** still uses external mpv (smooth). Embed perf work is for chrome/VOD.
+### Future: Flutter HUD over mpv
+
+A later product, not the live path: keep **mpv painting the picture** and put a **transparent Flutter chrome** on top (or embed mpv with `--wid` under `FlView`). Same image as today; real Flutter widgets for the bar.
+
+That is **not** the media_kit `Video` texture. Gamescope Game Mode may refuse two stacked windows — prototype on desktop, then Deck. Until then, chrome stays on mpv’s OSD/ASS overlay.
 
 ### Smooth video (VAAPI)
 
