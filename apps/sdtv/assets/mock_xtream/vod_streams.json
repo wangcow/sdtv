@@ -1,0 +1,32 @@
+[
+  {
+    "stream_id": 9001,
+    "name": "Demo Feature",
+    "category_id": "10",
+    "stream_icon": "",
+    "container_extension": "mp4",
+    "plot": "Public test HLS used as a stand-in movie.",
+    "rating": "7.2",
+    "num": 1
+  },
+  {
+    "stream_id": 9002,
+    "name": "Another Title",
+    "category_id": "10",
+    "stream_icon": "",
+    "container_extension": "mkv",
+    "plot": "Second mock action title.",
+    "rating": "6.4",
+    "num": 2
+  },
+  {
+    "stream_id": 9003,
+    "name": "Laugh Track",
+    "category_id": "11",
+    "stream_icon": "",
+    "container_extension": "mp4",
+    "plot": "Mock comedy.",
+    "rating": "5.8",
+    "num": 3
+  }
+]

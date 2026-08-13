@@ -23,8 +23,10 @@ class LiveBrowsePage extends StatefulWidget {
 }
 
 class _LiveBrowsePageState extends State<LiveBrowsePage> {
-  /// 0 = categories, 1 = channels
+  /// 0 = categories, 1 = channels / movies
   int _column = 0;
+  /// Header LIVE | MOVIES has pad focus.
+  bool _sectionFocus = false;
   int _catIndex = 0;
   int _chanIndex = 0;
 
@@ -217,15 +219,20 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _restoreGuideLanding();
       return;
     }
-    final catCount = session.browseCategories.length;
-    final chanCount = session.channelsInCategory.length;
-    final sel = session.selectedCategoryId;
+    final movies = session.guideSection == GuideSection.movies;
+    final catList =
+        movies ? session.browseVodCategories : session.browseCategories;
+    final catCount = catList.length;
+    final chanCount = movies
+        ? session.vodInCategory.length
+        : session.channelsInCategory.length;
+    final sel =
+        movies ? session.selectedVodCategoryId : session.selectedCategoryId;
 
     if (catCount > 0) {
       _catIndex = _catIndex.clamp(0, catCount - 1);
       if (sel != null) {
-        final i =
-            session.browseCategories.indexWhere((c) => c.categoryId == sel);
+        final i = catList.indexWhere((c) => c.categoryId == sel);
         if (i >= 0) _catIndex = i;
       }
     } else {
@@ -400,7 +407,19 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
 
+    if (_sectionFocus) {
+      if (delta > 0) {
+        setState(() => _sectionFocus = false);
+      }
+      return;
+    }
+
     if (!_acceptNav()) return;
+
+    if (delta < 0 && _column == 0 && _catIndex == 0) {
+      setState(() => _sectionFocus = true);
+      return;
+    }
 
     // Menu / about / manage / search / switch overlays own the D-pad.
     if (_aboutOpen) return;
@@ -445,15 +464,20 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
 
-    final cats = session.browseCategories;
-    final chans = session.channelsInCategory;
+    final movies = session.guideSection == GuideSection.movies;
+    final cats =
+        movies ? session.browseVodCategories : session.browseCategories;
 
     if (_column == 0) {
       if (cats.isEmpty) return;
       setState(() {
         _catIndex = (_catIndex + delta).clamp(0, cats.length - 1);
       });
-      _selectCategoryKeepingChanPos(cats[_catIndex].categoryId);
+      if (movies) {
+        session.selectVodCategory(cats[_catIndex].categoryId);
+      } else {
+        _selectCategoryKeepingChanPos(cats[_catIndex].categoryId);
+      }
       _scrollTo(
         _catScroll,
         _catIndex,
@@ -461,14 +485,39 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         headerExtent: _listHeaderExtent,
       );
     } else {
-      if (chans.isEmpty) return;
+      final n = movies
+          ? session.vodInCategory.length
+          : session.channelsInCategory.length;
+      if (n == 0) return;
       setState(() {
-        _chanIndex = (_chanIndex + delta).clamp(0, chans.length - 1);
+        _chanIndex = (_chanIndex + delta).clamp(0, n - 1);
       });
       _rememberChanIndex();
       _scrollToChannelIndex(_chanIndex);
-      session.prefetchShortEpgAround(chans, _chanIndex);
+      if (!movies) {
+        session.prefetchShortEpgAround(session.channelsInCategory, _chanIndex);
+      }
     }
+  }
+
+  Future<void> _switchSection(GuideSection section) async {
+    if (session.guideSection == section) return;
+    await session.setGuideSection(section);
+    if (!mounted) return;
+    if (section == GuideSection.movies) {
+      final cats = session.browseVodCategories;
+      if (cats.isNotEmpty) session.selectVodCategory(cats.first.categoryId);
+    }
+    if (!mounted) return;
+    setState(() {
+      _catIndex = 0;
+      _chanIndex = 0;
+      _column = 0;
+      _sectionFocus = true;
+      _indexCategoryId = section == GuideSection.movies
+          ? session.selectedVodCategoryId
+          : session.selectedCategoryId;
+    });
   }
 
   void _moveHorizontal(int delta) {
@@ -482,7 +531,18 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       unawaited(session.watchMenuAdjust(delta));
       return;
     }
-    // Watching, menu closed: ←/→ = previous / next channel.
+    if (_sectionFocus &&
+        !session.isWatchingExternal &&
+        !_menuOpen &&
+        !_aboutOpen &&
+        !_manageCatsOpen &&
+        !_searchOpen &&
+        !_switchSourceOpen) {
+      unawaited(_switchSection(delta > 0 ? GuideSection.movies : GuideSection.live));
+      return;
+    }
+
+    // Watching, menu closed: ←/→ = previous / next channel (or VOD seek).
     if (session.isWatchingExternal &&
         !_menuOpen &&
         !_aboutOpen &&
@@ -583,12 +643,40 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
 
+    if (_sectionFocus) {
+      setState(() => _sectionFocus = false);
+      return;
+    }
+
+    final movies = session.guideSection == GuideSection.movies;
+
     // Categories: enter channel column only (restore last row for this cat).
     if (_column == 0) {
+      if (movies) {
+        final cats = session.browseVodCategories;
+        if (cats.isEmpty) return;
+        session.selectVodCategory(cats[_catIndex.clamp(0, cats.length - 1)].categoryId);
+        setState(() => _column = 1);
+        return;
+      }
       final cats = session.browseCategories;
       if (cats.isEmpty) return;
       _selectCategoryKeepingChanPos(cats[_catIndex].categoryId);
       _enterChannelColumn();
+      return;
+    }
+
+    if (movies) {
+      final list = session.vodInCategory;
+      if (list.isEmpty) return;
+      final item = list[_chanIndex.clamp(0, list.length - 1)];
+      final err = await session.watchVod(item);
+      if (!mounted) return;
+      if (err != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(err), duration: const Duration(seconds: 6)),
+        );
+      }
       return;
     }
 
@@ -1050,8 +1138,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final cats = session.browseCategories;
+    final movies = session.guideSection == GuideSection.movies;
+    final cats = movies ? session.browseVodCategories : session.browseCategories;
     final channels = session.channelsInCategory;
+    final vods = session.vodInCategory;
     final user = session.userInfo?.username ?? 'user';
     final catTitle = cats.isEmpty
         ? 'All'
@@ -1131,6 +1221,18 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                     padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
                     child: Row(
                       children: [
+                        _SectionChip(
+                          label: 'LIVE',
+                          selected: !movies,
+                          focused: _sectionFocus && !movies,
+                        ),
+                        const SizedBox(width: 8),
+                        _SectionChip(
+                          label: 'MOVIES',
+                          selected: movies,
+                          focused: _sectionFocus && movies,
+                        ),
+                        const SizedBox(width: 16),
                         Text(
                           'sdtv',
                           style: theme.textTheme.headlineSmall?.copyWith(
@@ -1199,9 +1301,14 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                   child: Align(
                                     alignment: Alignment.centerLeft,
                                     child: Text(
-                                      hiddenN > 0
-                                          ? 'CATEGORIES · $hiddenN hidden'
-                                          : 'CATEGORIES',
+                                      movies
+                                          ? (session.vodError ??
+                                              (hiddenN > 0
+                                                  ? 'MOVIES · $hiddenN hidden'
+                                                  : 'MOVIES'))
+                                          : (hiddenN > 0
+                                              ? 'CATEGORIES · $hiddenN hidden'
+                                              : 'CATEGORIES'),
                                       style:
                                           theme.textTheme.labelSmall?.copyWith(
                                         color: theme.colorScheme.outline,
@@ -1214,7 +1321,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                               final i = index - 1;
                               // Show cursor even when focus is on the other column.
                               final selected = _catIndex == i;
-                              final focused = _column == 0 && selected;
+                              final focused =
+                                  !_sectionFocus && _column == 0 && selected;
                               final isFavCat =
                                   cats[i].categoryId == kFavoritesCategoryId;
                               return SizedBox(
@@ -1235,10 +1343,17 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                       setState(() {
                                         _catIndex = i;
                                         _column = 0;
+                                        _sectionFocus = false;
                                       });
-                                      _selectCategoryKeepingChanPos(
-                                        cats[i].categoryId,
-                                      );
+                                      if (movies) {
+                                        session.selectVodCategory(
+                                          cats[i].categoryId,
+                                        );
+                                      } else {
+                                        _selectCategoryKeepingChanPos(
+                                          cats[i].categoryId,
+                                        );
+                                      }
                                     },
                                   ),
                                 ),
@@ -1255,8 +1370,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                           child: ListView.builder(
                             controller: _chanScroll,
                             padding: const EdgeInsets.fromLTRB(16, 8, 24, 24),
-                            itemCount:
-                                channels.isEmpty ? 2 : channels.length + 1,
+                            itemCount: movies
+                                ? (vods.isEmpty ? 2 : vods.length + 1)
+                                : (channels.isEmpty ? 2 : channels.length + 1),
                             itemBuilder: (context, index) {
                               if (index == 0) {
                                 return SizedBox(
@@ -1264,7 +1380,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                   child: Align(
                                     alignment: Alignment.centerLeft,
                                     child: Text(
-                                      'CHANNELS · $catTitle',
+                                      movies
+                                          ? 'TITLES · $catTitle'
+                                          : 'CHANNELS · $catTitle',
                                       style:
                                           theme.textTheme.labelSmall?.copyWith(
                                         color: theme.colorScheme.outline,
@@ -1274,7 +1392,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                   ),
                                 );
                               }
-                              if (channels.isEmpty) {
+                              if (!movies && channels.isEmpty) {
                                 final emptyMsg = session.isFavoritesCategory
                                     ? 'No favorites yet.\n'
                                         'Open any category · highlight a channel · Y to star'
@@ -1282,6 +1400,44 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                 return Text(
                                   emptyMsg,
                                   style: theme.textTheme.bodyLarge,
+                                );
+                              }
+                              if (movies && vods.isEmpty) {
+                                return Text(
+                                  session.vodError ??
+                                      (session.vodCatalogReady
+                                          ? 'No movies in this category.'
+                                          : 'Loading movies…'),
+                                  style: theme.textTheme.bodyLarge,
+                                );
+                              }
+                              if (movies) {
+                                final i = index - 1;
+                                final v = vods[i];
+                                final selected = _chanIndex == i;
+                                final focused = _column == 1 && selected;
+                                final saved = session.vodResumeSeconds(v);
+                                return SizedBox(
+                                  height: _rowExtent,
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(bottom: 6),
+                                    child: _BrowseTile(
+                                      label: v.name,
+                                      subtitle: saved > 15
+                                          ? 'Resume ${Duration(seconds: saved).inMinutes}m'
+                                          : (v.plot.isEmpty ? v.rating : v.plot),
+                                      icon: Icons.movie_outlined,
+                                      selected: focused,
+                                      dimSelected: selected && !focused,
+                                      onTap: () async {
+                                        setState(() {
+                                          _column = 1;
+                                          _chanIndex = i;
+                                        });
+                                        await _activate();
+                                      },
+                                    ),
+                                  ),
                                 );
                               }
                               final i = index - 1;
@@ -1779,6 +1935,49 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
               ],
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SectionChip extends StatelessWidget {
+  const _SectionChip({
+    required this.label,
+    required this.selected,
+    required this.focused,
+  });
+
+  final String label;
+  final bool selected;
+  final bool focused;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final bg = focused
+        ? theme.colorScheme.primary
+        : selected
+            ? theme.colorScheme.primary.withValues(alpha: 0.35)
+            : theme.colorScheme.surfaceContainerHighest;
+    final fg = focused ? theme.colorScheme.onPrimary : theme.colorScheme.onSurface;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: focused || selected
+              ? theme.colorScheme.primary
+              : theme.colorScheme.outline.withValues(alpha: 0.4),
+        ),
+      ),
+      child: Text(
+        label,
+        style: theme.textTheme.labelLarge?.copyWith(
+          color: fg,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.8,
         ),
       ),
     );

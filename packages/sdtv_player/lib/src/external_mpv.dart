@@ -7,6 +7,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 
 import 'osd_chrome.dart';
+import 'play_error.dart';
 
 /// Result of a fullscreen external [mpv] session.
 class ExternalMpvResult {
@@ -90,6 +91,10 @@ class ExternalMpvLauncher {
   String? _activeTitle;
   Uri? _activeFallback;
   String? _activeFallbackTitle;
+  bool _vodMode = false;
+  Duration? _vodStartAt;
+
+  bool get isVodSession => _vodMode;
 
   /// Recent mpv log lines (for HTTP 403-style error messages).
   final List<String> _recentLog = <String>[];
@@ -150,37 +155,23 @@ class ExternalMpvLauncher {
     ).hasMatch(blob);
   }
 
+  /// Classified error from mpv logs + optional stall probe (`cache`, `eof`, …).
+  SdtvPlayError playError({String? stallKind}) {
+    return classifyPlayError(_recentLog.join('\n'), stallKind: stallKind);
+  }
+
+  /// One-line reason for OSD (`E403  HTTP 403 Forbidden`).
+  String playbackErrorCode({String fallback = 'Playback failed', String? stallKind}) {
+    final e = playError(stallKind: stallKind);
+    if (e.code == 'A-UNK' && fallback != 'Playback failed') {
+      return fallback;
+    }
+    return e.line;
+  }
+
   /// Best-effort human error from mpv logs (TiviMate-style).
   String playbackErrorHint({String? channelName}) {
-    final blob = _recentLog.join('\n').toLowerCase();
-    String core;
-    if (RegExp(r'\b403\b|http error 403|forbidden').hasMatch(blob)) {
-      core = 'HTTP 403 Forbidden';
-    } else if (RegExp(r'\b401\b|unauthorized').hasMatch(blob)) {
-      core = 'HTTP 401 Unauthorized';
-    } else if (RegExp(r'\b404\b|not found').hasMatch(blob)) {
-      core = 'HTTP 404 Not Found';
-    } else if (RegExp(r'\b502\b|\b503\b|\b504\b').hasMatch(blob)) {
-      core = 'Server error (5xx)';
-    } else if (blob.contains('ssl') || blob.contains('certificate')) {
-      core = 'TLS/SSL error';
-    } else if (blob.contains('timed out') || blob.contains('timeout')) {
-      core = 'Connection timed out';
-    } else if (blob.contains('connection refused') ||
-        blob.contains('network is unreachable') ||
-        blob.contains('no route to host')) {
-      core = 'Network error';
-    } else if (blob.contains('failed to recognize file format') ||
-        blob.contains('failed to open') ||
-        blob.contains('error opening') ||
-        blob.contains('opening failed')) {
-      core = 'Failed to open stream';
-    } else if (blob.contains('no decoder') ||
-        (blob.contains('codec') && blob.contains('error'))) {
-      core = 'Codec / decode error';
-    } else {
-      core = 'Playback failed';
-    }
+    final core = playbackErrorCode();
 
     // Last meaningful log line for detail (truncated) — skip Steam/ld.so noise.
     String? detail;
@@ -466,6 +457,31 @@ class ExternalMpvLauncher {
   /// After pause, HLS/TS windows slide; unpause alone often replays an older
   /// segment (or a different program's audio in the mux). Reloading [path]
   /// matches "go back to live" behavior.
+  Future<bool> seekBy(Duration delta) async {
+    return sendCommand(['seek', delta.inSeconds, 'relative']);
+  }
+
+  Future<bool> seekTo(Duration position) async {
+    final s = position.inSeconds;
+    return sendCommand(['seek', s < 0 ? 0 : s, 'absolute']);
+  }
+
+  Future<Duration> timePos() async {
+    final raw = await getProperty('time-pos');
+    if (raw is num) return Duration(milliseconds: (raw * 1000).round());
+    final n = double.tryParse('$raw');
+    if (n == null) return Duration.zero;
+    return Duration(milliseconds: (n * 1000).round());
+  }
+
+  Future<Duration> duration() async {
+    final raw = await getProperty('duration');
+    if (raw is num) return Duration(milliseconds: (raw * 1000).round());
+    final n = double.tryParse('$raw');
+    if (n == null) return Duration.zero;
+    return Duration(milliseconds: (n * 1000).round());
+  }
+
   Future<void> resumeLiveEdge({String? title}) async {
     Uri? url = _activeUrl;
     if (url == null) {
@@ -662,10 +678,15 @@ class ExternalMpvLauncher {
   static const _chromeOverlayId = 1;
   Timer? _chromeHideTimer;
 
-  /// Draw couch chrome on the video plane (mpv ASS overlay).
+  /// Whether to use mpv `osd-overlay` (ASS). Off by default.
   ///
-  /// This is the TiviMate-like bar without Flutter textures. [ass] null/empty
-  /// clears. Falls back to [showText] if overlay IPC is rejected.
+  /// Some Deck / Flatpak mpv builds treat a named-arg overlay table as fatal
+  /// and **exit**. That pops Flutter back to the guide (audio just stops).
+  /// Opt in with `SDTV_MPV_OVERLAY=1` once a build is known-good.
+  static bool get _assOverlayEnabled =>
+      Platform.environment['SDTV_MPV_OVERLAY'] == '1';
+
+  /// Couch chrome on the video plane. Default is [showText] (safe).
   Future<void> showChromeOverlay(
     String? ass, {
     int? hideAfterMs,
@@ -673,8 +694,13 @@ class ExternalMpvLauncher {
   }) async {
     _chromeHideTimer?.cancel();
     _chromeHideTimer = null;
-    if (ass == null || ass.isEmpty) {
-      await _clearChromeOverlay();
+    final text = fallbackText;
+    if (!_assOverlayEnabled || ass == null || ass.isEmpty) {
+      if (text != null && text.isNotEmpty) {
+        await showText(text, durationMs: hideAfterMs ?? 4000);
+      } else {
+        await _clearChromeOverlay();
+      }
       return;
     }
     final ok = await sendCommand([
@@ -688,8 +714,10 @@ class ExternalMpvLauncher {
         'z': 20,
       },
     ]);
-    if (!ok && fallbackText != null && fallbackText.isNotEmpty) {
-      await showText(fallbackText, durationMs: hideAfterMs ?? 4000);
+    if (!ok) {
+      if (text != null && text.isNotEmpty) {
+        await showText(text, durationMs: hideAfterMs ?? 4000);
+      }
       return;
     }
     if (hideAfterMs != null && hideAfterMs > 0) {
@@ -702,6 +730,7 @@ class ExternalMpvLauncher {
   Future<void> _clearChromeOverlay() async {
     _chromeHideTimer?.cancel();
     _chromeHideTimer = null;
+    if (!_assOverlayEnabled) return;
     await sendCommand([
       'osd-overlay',
       {
@@ -761,30 +790,26 @@ class ExternalMpvLauncher {
 
   /// True when demuxer never attached (bad URL / 403 / etc.).
   ///
-  /// Intentionally **not** treating "VO not ready yet" as failure — slow
-  /// VAAPI / network buffer would false-positive and kick users to the guide.
+  /// Do **not** treat `idle-active` as dead: `--keep-open=yes` / `--idle=yes`
+  /// report idle during start, cache pause, and EOF-hold. That used to
+  /// trigger an HLS `loadfile` ~2s in (same beat as the old kick-to-guide).
   Future<bool> isPlaybackUnhealthy() async {
     if (!isRunning) return true;
     final pause = await getProperty('pause');
     if (pause == true || pause == 'yes') return false;
 
-    final idle = await getProperty('idle-active');
-    if (idle == true || idle == 'yes') return true;
+    final cache = await getProperty('paused-for-cache');
+    if (cache == true || cache == 'yes') return false;
 
-    // path/stream open failed: no current file
     final path = await getProperty('path');
-    if (path == null || path == false || '$path'.isEmpty) {
+    final hasPath = path != null && path != false && '$path'.isNotEmpty;
+    if (!hasPath) {
       // Still starting — only unhealthy if we also see a real log error.
       return hasMeaningfulStreamError;
     }
 
     final pos = await getProperty('time-pos');
-    // null time-pos after grace usually means demux never started.
     if (pos == null && hasMeaningfulStreamError) return true;
-    if (pos == null) {
-      // Buffering / slow open — not dead yet.
-      return false;
-    }
     return false;
   }
 
@@ -1104,6 +1129,8 @@ class ExternalMpvLauncher {
     int startIndex = 0,
     Uri? fallbackUrl,
     String? fallbackTitle,
+    bool vod = false,
+    Duration? startAt,
   }) async {
     if (_launching || _process != null || _sessionActive) {
       debugPrint('sdtv_player: playFullscreen ignored (already running)');
@@ -1113,6 +1140,8 @@ class ExternalMpvLauncher {
     _sessionActive = true;
     _launching = true;
     _userQuit = false;
+    _vodMode = vod;
+    _vodStartAt = startAt;
     _restartForDisplay = false;
     _dockHintShown = false;
     // Fresh watch — only set again if we detect dock letterboxing mid-session.
@@ -1244,8 +1273,10 @@ GAMEPAD_GUIDE quit
         final mpvArgs = <String>[
           '--fullscreen',
           '--force-window=immediate',
-          '--keep-open=no',
-          '--idle=no',
+          // Stay in the player if a live item EOFs. keep-open=no exits mpv
+          // → Flutter pops the guide. Do not set idle=yes: health check
+          // used to treat idle-active as "dead" and reload HLS (~2s hitch).
+          '--keep-open=yes',
           '--no-terminal',
           '--msg-level=all=warn',
           '--title=sdtv',
@@ -1266,9 +1297,15 @@ GAMEPAD_GUIDE quit
           '--osd-align-y=bottom',
           '--osd-margin-y=52',
           '--osd-bold=yes',
-          // Live-friendly: don't treat the sliding window as a scrubbable VOD.
-          '--force-seekable=no',
-          '--hr-seek=no',
+          if (vod) ...[
+            '--force-seekable=yes',
+            '--hr-seek=yes',
+            if (startAt != null && startAt.inSeconds > 5)
+              '--start=${startAt.inSeconds}',
+          ] else ...[
+            '--force-seekable=no',
+            '--hr-seek=no',
+          ],
           '--keepaspect=yes',
           '--keepaspect-window=no',
           '--video-unscaled=no',

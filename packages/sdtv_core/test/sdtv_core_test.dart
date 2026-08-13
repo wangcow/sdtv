@@ -77,6 +77,26 @@ void main() {
       expect(sports.single.name, 'Mock Sports HD');
     });
 
+    test('lists VOD categories and movies', () async {
+      final fixtureDir = Directory(
+        '${Directory.current.path}/../../tool/mock_xtream/fixtures',
+      );
+      final client = MockXtreamClient(
+        authJson: authJson,
+        liveCategoriesJson: categoriesJson,
+        liveStreamsJson: streamsJson,
+        vodCategoriesJson:
+            File('${fixtureDir.path}/vod_categories.json').readAsStringSync(),
+        vodStreamsJson:
+            File('${fixtureDir.path}/vod_streams.json').readAsStringSync(),
+      );
+      final cats = await client.getVodCategories();
+      expect(cats.map((c) => c.categoryName), contains('Action'));
+      final action = await client.getVodStreams(categoryId: '10');
+      expect(action, hasLength(2));
+      expect(action.first.name, 'Demo Feature');
+    });
+
     test('builds live play URL without exposing secrets in toString of creds',
         () {
       final creds = XtreamCredentials(
@@ -88,6 +108,10 @@ void main() {
       expect(
         creds.liveStreamUri(42).toString(),
         'http://example.com:8080/live/u/secret/42.ts',
+      );
+      expect(
+        creds.movieStreamUri(9, extension: 'mkv').toString(),
+        'http://example.com:8080/movie/u/secret/9.mkv',
       );
     });
   });

@@ -27,6 +27,8 @@ const kDemoPlaybackUri = String.fromEnvironment(
 /// Virtual category id for starred channels (not from provider).
 const kFavoritesCategoryId = '__sdtv_favorites__';
 
+enum GuideSection { live, movies }
+
 /// App-wide session: Xtream client, live catalog, player.
 class SessionController extends ChangeNotifier {
   SessionController({
@@ -55,6 +57,15 @@ class SessionController extends ChangeNotifier {
   List<LiveChannel> allChannels = const [];
   String? selectedCategoryId;
   LiveChannel? nowPlaying;
+
+  GuideSection guideSection = GuideSection.live;
+  List<MediaCategory> vodCategories = const [];
+  List<VodItem> allVod = const [];
+  String? selectedVodCategoryId;
+  VodItem? nowPlayingVod;
+  bool watchingVod = false;
+  bool vodCatalogReady = false;
+  String? vodError;
 
   /// Ordered favorite keys for the current [favoritesScope].
   List<String> _favoriteKeys = const [];
@@ -422,6 +433,16 @@ class SessionController extends ChangeNotifier {
   bool watchMenuOpen = false;
   int watchMenuIndex = 0;
 
+  /// True when the menu is the stall/error sheet (Retry / Back), not pause.
+  bool watchStallOpen = false;
+
+  Timer? _stallWatch;
+  DateTime? _stallSince;
+  double? _lastStallPos;
+  bool _sawPlaybackClock = false;
+  String? _stallKind;
+  static const _stallAfter = Duration(seconds: 15);
+
   /// Short EPG cache (streamId → listing). Cleared on source switch / sign-out.
   final Map<int, ShortEpg> _shortEpgCache = {};
   static const _shortEpgTtl = Duration(minutes: 12);
@@ -435,6 +456,23 @@ class SessionController extends ChangeNotifier {
     'mute',
     'guide',
   ];
+
+  static const _stallMenuItems = <String>[
+    'retry',
+    'guide',
+  ];
+
+  static const _vodMenuItems = <String>[
+    'resume',
+    'seekBack',
+    'seekFwd',
+    'subtitles',
+    'audio',
+    'mute',
+    'guide',
+  ];
+
+  Timer? _vodProgressWatch;
 
   /// External watch session active (mpv running or handoff in progress).
   ///
@@ -454,9 +492,28 @@ class SessionController extends ChangeNotifier {
   /// True when pad should drive the watch menu, not zap/volume.
   bool get isWatchMenuActive => isWatchingExternal && watchMenuOpen;
 
+  bool get moviesAvailable =>
+      !useM3u || mockCatalog || useDemo || vodCategories.isNotEmpty;
+
+  List<MediaCategory> get browseVodCategories {
+    final hidden = _hiddenCategoryIds;
+    return vodCategories.where((c) => !hidden.contains(c.categoryId)).toList();
+  }
+
+  int vodResumeSeconds(VodItem item) =>
+      _settings.vodProgressSeconds(prefsScope, item.favoriteKey);
+
+  List<VodItem> get vodInCategory {
+    final id = selectedVodCategoryId;
+    if (id == null || id.isEmpty) return allVod;
+    return allVod.where((v) => v.categoryId == id).toList();
+  }
+
   String get _nowPlayingLabel {
+    final vod = nowPlayingVod;
+    if (vod != null) return vod.name;
     final ch = nowPlaying;
-    if (ch == null) return 'Live';
+    if (ch == null) return watchingVod ? 'Movie' : 'Live';
     return ch.num > 0 ? '${ch.num}. ${ch.name}' : ch.name;
   }
 
@@ -494,26 +551,32 @@ class SessionController extends ChangeNotifier {
   Future<void> watchCloseMenu({bool resume = false}) async {
     if (!isWatchingExternal) return;
     watchMenuOpen = false;
+    watchStallOpen = false;
     watchMenuIndex = 0;
     await externalMpv.setOscVisible(false);
     if (resume) {
-      // Pausing live HLS/TS keeps a sliding window; unpause alone often
-      // continues mid-buffer (loops older segment, weird audio). Jump to edge.
-      await externalMpv.resumeLiveEdge(title: _nowPlayingLabel);
-      // Brief banner so pause→resume doesn't look like a channel zap.
-      unawaited(
-        showMiniGuide(
-          channel: nowPlaying,
-          channelLineFirst: false,
-          durationMs: 3500,
-        ),
-      );
+      if (watchingVod) {
+        await externalMpv.setPaused(false);
+      } else {
+        // Pausing live HLS/TS keeps a sliding window; unpause alone often
+        // continues mid-buffer (loops older segment, weird audio). Jump to edge.
+        await externalMpv.resumeLiveEdge(title: _nowPlayingLabel);
+        unawaited(
+          showMiniGuide(
+            channel: nowPlaying,
+            channelLineFirst: false,
+            durationMs: 3500,
+          ),
+        );
+      }
     } else {
       await externalMpv.hideChromeOverlay();
       await externalMpv.showLiveBanner(
-        title: _nowPlayingLabel,
+        title: watchingVod ? _nowPlayingLabel : _nowPlayingLabel,
         nowLine: 'Paused',
-        hint: 'A menu  ·  B guide  ·  LB/RB ch  ·  ↑↓ vol',
+        hint: watchingVod
+            ? 'A menu  ·  B movies  ·  ←→ seek'
+            : 'A menu  ·  B guide  ·  LB/RB ch  ·  ↑↓ vol',
         durationMs: 2500,
       );
     }
@@ -522,7 +585,10 @@ class SessionController extends ChangeNotifier {
 
   Future<void> watchMenuMove(int delta) async {
     if (!isWatchMenuActive) return;
-    final n = watchMenuItems.length;
+    final items = watchStallOpen
+        ? _stallMenuItems
+        : (watchingVod ? _vodMenuItems : watchMenuItems);
+    final n = items.length;
     watchMenuIndex = (watchMenuIndex + delta) % n;
     if (watchMenuIndex < 0) watchMenuIndex += n;
     await _paintWatchMenu();
@@ -531,7 +597,12 @@ class SessionController extends ChangeNotifier {
 
   /// ←/→ on a row: cycle value (subs / audio) or no-op.
   Future<void> watchMenuAdjust(int delta) async {
-    if (!isWatchMenuActive) return;
+    if (!isWatchMenuActive || watchStallOpen) return;
+    if (watchingVod) {
+      await externalMpv.seekBy(Duration(seconds: delta > 0 ? 10 : -10));
+      await _paintWatchMenu();
+      return;
+    }
     final id = watchMenuItems[watchMenuIndex];
     switch (id) {
       case 'subtitles':
@@ -550,11 +621,27 @@ class SessionController extends ChangeNotifier {
 
   Future<void> watchMenuConfirm() async {
     if (!isWatchMenuActive) return;
-    final id = watchMenuItems[watchMenuIndex];
+    if (watchStallOpen) {
+      final id = _stallMenuItems[watchMenuIndex.clamp(0, _stallMenuItems.length - 1)];
+      if (id == 'retry') {
+        await watchRetryStream();
+      } else {
+        await watchQuit();
+      }
+      return;
+    }
+    final items = watchingVod ? _vodMenuItems : watchMenuItems;
+    final id = items[watchMenuIndex.clamp(0, items.length - 1)];
     switch (id) {
       case 'resume':
         await externalMpv.ensureAudioOn();
         await watchCloseMenu(resume: true);
+      case 'seekBack':
+        await externalMpv.seekBy(const Duration(seconds: -10));
+        await _paintWatchMenu();
+      case 'seekFwd':
+        await externalMpv.seekBy(const Duration(seconds: 10));
+        await _paintWatchMenu();
       case 'subtitles':
         await externalMpv.cycleSubtitleTrack();
         await _paintWatchMenu();
@@ -572,6 +659,14 @@ class SessionController extends ChangeNotifier {
   }
 
   Future<void> _paintWatchMenu() async {
+    if (watchStallOpen) {
+      await _paintStallMenu();
+      return;
+    }
+    if (watchingVod) {
+      await _paintVodMenu();
+      return;
+    }
     final sub = await externalMpv.subtitleLabel();
     final aud = await externalMpv.audioLabel();
     final muted = await externalMpv.getProperty('mute');
@@ -602,9 +697,246 @@ class SessionController extends ChangeNotifier {
     );
   }
 
+  Future<void> _paintStallMenu() async {
+    const rows = ['Retry', 'Back to guide'];
+    final idx = watchMenuIndex.clamp(0, rows.length - 1);
+    final reason = externalMpv.playError(stallKind: _stallKind).line;
+    final buf = StringBuffer('$reason\n$_nowPlayingLabel\n\n');
+    for (var i = 0; i < rows.length; i++) {
+      final mark = i == idx ? '▶ ' : '   ';
+      buf.writeln('$mark${rows[i]}');
+    }
+    buf.write('A select · B guide');
+    await externalMpv.showChromeOverlay(
+      watchMenuAss(
+        title: '$reason · $_nowPlayingLabel',
+        rows: rows,
+        selected: idx,
+        hint: 'A select  ·  B guide',
+      ),
+      fallbackText: buf.toString(),
+    );
+  }
+
+  static String _fmtDur(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    if (h > 0) return '$h:$m:$s';
+    return '$m:$s';
+  }
+
+  Future<void> _paintVodMenu() async {
+    final pos = await externalMpv.timePos();
+    final dur = await externalMpv.duration();
+    final sub = await externalMpv.subtitleLabel();
+    final aud = await externalMpv.audioLabel();
+    final muted = await externalMpv.getProperty('mute');
+    final muteLabel =
+        (muted == true || muted == 'yes') ? 'On' : 'Off';
+    final timeLine = dur.inSeconds > 0
+        ? '${_fmtDur(pos)} / ${_fmtDur(dur)}'
+        : _fmtDur(pos);
+    final rows = <String>[
+      'Resume',
+      '−10 seconds',
+      '+10 seconds',
+      'Subtitles: $sub',
+      'Audio: $aud',
+      'Mute: $muteLabel',
+      'Back to movies',
+    ];
+    final buf = StringBuffer('❚❚  $_nowPlayingLabel\n$timeLine\n');
+    for (var i = 0; i < rows.length; i++) {
+      final mark = i == watchMenuIndex ? '▶ ' : '   ';
+      buf.writeln('$mark${rows[i]}');
+    }
+    buf.write('↑↓ move · A select · ←→ seek 10s · B movies');
+    await externalMpv.showChromeOverlay(
+      watchMenuAss(
+        title: '$_nowPlayingLabel  $timeLine',
+        rows: rows,
+        selected: watchMenuIndex,
+        hint: '↑↓ move  ·  A select  ·  ←→ seek  ·  B movies',
+      ),
+      fallbackText: buf.toString(),
+    );
+  }
+
+  void _startVodProgressWatch() {
+    _stopVodProgressWatch();
+    _vodProgressWatch = Timer.periodic(const Duration(seconds: 10), (_) {
+      unawaited(_saveVodProgress());
+    });
+  }
+
+  void _stopVodProgressWatch() {
+    _vodProgressWatch?.cancel();
+    _vodProgressWatch = null;
+  }
+
+  Future<void> _saveVodProgress() async {
+    final item = nowPlayingVod;
+    if (item == null || !watchingVod) return;
+    try {
+      final pos = await externalMpv.timePos();
+      await _settings.setVodProgressSeconds(
+        prefsScope,
+        item.favoriteKey,
+        pos.inSeconds,
+      );
+    } catch (e) {
+      debugPrint('sdtv: vod progress save: $e');
+    }
+  }
+
+  Future<void> seekVodBy(Duration delta) async {
+    if (!watchingVod || !isWatchingExternal) return;
+    await externalMpv.seekBy(delta);
+  }
+
+  void _startStallWatch() {
+    _stopStallWatch();
+    _stallSince = null;
+    _lastStallPos = null;
+    _sawPlaybackClock = false;
+    _stallKind = null;
+    _stallWatch = Timer.periodic(const Duration(seconds: 1), (_) {
+      unawaited(_pollStall());
+    });
+  }
+
+  void _stopStallWatch() {
+    _stallWatch?.cancel();
+    _stallWatch = null;
+    _stallSince = null;
+    _lastStallPos = null;
+    _sawPlaybackClock = false;
+  }
+
+  Future<void> _pollStall() async {
+    if (!isWatchingExternal || !externalMpv.isRunning) return;
+    if (watchStallOpen) {
+      // Keep the error OSD from timing out.
+      if (_stallSince != null &&
+          DateTime.now().difference(_stallSince!) >
+              const Duration(seconds: 8)) {
+        _stallSince = DateTime.now();
+        await _paintStallMenu();
+      }
+      return;
+    }
+    if (watchMenuOpen || _zapInFlight) {
+      _stallSince = null;
+      return;
+    }
+
+    final stalled = await _looksStalled();
+    if (!stalled) {
+      _stallSince = null;
+      return;
+    }
+    _stallSince ??= DateTime.now();
+    if (DateTime.now().difference(_stallSince!) < _stallAfter) return;
+    await _openStallMenu();
+  }
+
+  Future<bool> _looksStalled() async {
+    if (await externalMpv.isPaused()) return false;
+
+    final cache = await externalMpv.getProperty('paused-for-cache');
+    if (cache == true || cache == 'yes') {
+      _stallKind = 'cache';
+      return true;
+    }
+
+    final eof = await externalMpv.getProperty('eof-reached');
+    if (eof == true || eof == 'yes') {
+      _stallKind = 'eof';
+      return true;
+    }
+
+    final idle = await externalMpv.getProperty('idle-active');
+    if (idle == true || idle == 'yes') {
+      _stallKind = 'idle';
+      return true;
+    }
+
+    final coreIdle = await externalMpv.getProperty('core-idle');
+    if (coreIdle == true || coreIdle == 'yes') {
+      _stallKind = 'core-idle';
+      return true;
+    }
+
+    final raw = await externalMpv.getProperty('time-pos');
+    final pos = raw is num ? raw.toDouble() : double.tryParse('$raw');
+    if (pos != null) {
+      final last = _lastStallPos;
+      _lastStallPos = pos;
+      if (last == null) return false;
+      if ((pos - last).abs() >= 0.35) {
+        _sawPlaybackClock = true;
+        return false;
+      }
+      // Many live feeds report a frozen clock while video is fine.
+      // Only treat a stuck clock as death after we have seen it move.
+      if (_sawPlaybackClock) {
+        _stallKind = 'clock';
+        return true;
+      }
+      return false;
+    }
+    return false;
+  }
+
+  Future<void> _openStallMenu() async {
+    if (!isWatchingExternal || watchMenuOpen) return;
+    debugPrint('sdtv: stream stall ≥${_stallAfter.inSeconds}s — error menu');
+    _miniGuideGen++;
+    watchMenuOpen = true;
+    watchStallOpen = true;
+    watchMenuIndex = 0;
+    await externalMpv.setOscVisible(false);
+    await _paintStallMenu();
+    notifyListeners();
+  }
+
+  /// Reload the current live URL (or HLS fallback) after a stall.
+  Future<void> watchRetryStream() async {
+    if (!isWatchingExternal) return;
+    watchStallOpen = false;
+    watchMenuOpen = false;
+    watchMenuIndex = 0;
+    _stallSince = null;
+    _lastStallPos = null;
+    _sawPlaybackClock = false;
+    notifyListeners();
+
+    final ch = nowPlaying;
+    await externalMpv.showText('Retrying…', durationMs: 1500);
+    await externalMpv.resumeLiveEdge(title: _nowPlayingLabel);
+    final fallback = ch == null ? null : resolvePlayUriFallback(ch);
+    final ok = await externalMpv.ensureHealthyOrShowError(
+      fallback,
+      title: _nowPlayingLabel,
+      grace: const Duration(milliseconds: 1800),
+    );
+    if (ok) {
+      unawaited(
+        showMiniGuide(channel: ch, channelLineFirst: false, durationMs: 3000),
+      );
+    } else if (isWatchingExternal) {
+      await _openStallMenu();
+    }
+  }
+
   /// B while watching: close menu first, else quit to guide.
   Future<void> watchBack() async {
     if (!isWatchingExternal) return;
+    if (watchStallOpen) {
+      await watchQuit();
+      return;
+    }
     if (watchMenuOpen) {
       await watchCloseMenu(resume: false);
       return;
@@ -616,7 +948,9 @@ class SessionController extends ChangeNotifier {
   Future<void> watchQuit() async {
     if (!isWatchingExternal) return;
     debugPrint('sdtv: watchQuit');
+    _stopStallWatch();
     watchMenuOpen = false;
+    watchStallOpen = false;
     watchMenuIndex = 0;
     await externalMpv.quit();
     // exitCode path clears _watchInFlight; if kill raced, force-clear.
@@ -633,9 +967,16 @@ class SessionController extends ChangeNotifier {
   /// TiviMate-style: try `.ts` then `.m3u8` on **this** channel only.
   /// On failure, **stay** and show an error (HTTP 403, etc.) — no auto-skip.
   Future<void> watchChannelAdjacent(int delta) async {
+    if (watchingVod) {
+      await seekVodBy(Duration(seconds: delta > 0 ? 10 : -10));
+      return;
+    }
     if (!isWatchingExternal || _watchList.isEmpty) return;
-    if (watchMenuOpen) return; // menu owns the pad
+    if (watchMenuOpen) return; // menu / stall owns the pad
     if (_zapInFlight) return;
+    _stallSince = null;
+    _lastStallPos = null;
+    _sawPlaybackClock = false;
     final now = DateTime.now();
     if (_lastZapAt != null &&
         now.difference(_lastZapAt!) < const Duration(milliseconds: 280)) {
@@ -914,8 +1255,9 @@ class SessionController extends ChangeNotifier {
       if (externalMpv.isRunning) break;
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
-    // After mpv's own control hint (~0.6s) and .ts→.m3u8 grace.
-    await Future<void>.delayed(const Duration(milliseconds: 1600));
+    // After hint + health grace. Don't pile EPG HTTP on the panel at the
+    // same moment as the 2s stream health check (one-line accounts blip).
+    await Future<void>.delayed(const Duration(milliseconds: 3200));
     if (!isWatchingExternal || watchMenuOpen) return;
     if (nowPlaying?.favoriteKey != channel.favoriteKey) return;
     await showMiniGuide(channel: channel, channelLineFirst: true);
@@ -1082,6 +1424,8 @@ class SessionController extends ChangeNotifier {
         await _rememberSavedSource(SavedSource.m3u(url: m3uPlaylistUrl!));
       }
       phase = SessionPhase.browse;
+      vodCatalogReady = true;
+      vodError = 'Movies need an Xtream panel (not M3U).';
       notifyListeners();
     } on XtreamException catch (e) {
       errorMessage = e.message;
@@ -1250,6 +1594,7 @@ class SessionController extends ChangeNotifier {
 
     phase = SessionPhase.browse;
     notifyListeners();
+    unawaited(loadVodCatalog());
   }
 
   /// Fallback when no last-played: ★ Favorites if starred, else first visible.
@@ -1266,6 +1611,105 @@ class SessionController extends ChangeNotifier {
   void selectCategory(String categoryId) {
     selectedCategoryId = categoryId;
     notifyListeners();
+  }
+
+  void selectVodCategory(String categoryId) {
+    selectedVodCategoryId = categoryId;
+    notifyListeners();
+  }
+
+  Future<void> setGuideSection(GuideSection section) async {
+    if (guideSection == section) return;
+    guideSection = section;
+    notifyListeners();
+    if (section == GuideSection.movies && !vodCatalogReady) {
+      await loadVodCatalog();
+    }
+  }
+
+  Future<void> loadVodCatalog() async {
+    if (useM3u && !useDemo && !mockCatalog) {
+      vodCategories = const [];
+      allVod = const [];
+      vodCatalogReady = true;
+      vodError = 'Movies need an Xtream panel (not M3U).';
+      notifyListeners();
+      return;
+    }
+    final client = _client;
+    if (client == null) {
+      vodError = 'No catalog client.';
+      notifyListeners();
+      return;
+    }
+    vodError = null;
+    notifyListeners();
+    try {
+      final cats = await client.getVodCategories();
+      final items = await client.getVodStreams();
+      vodCategories = cats;
+      allVod = items;
+      vodCatalogReady = true;
+      if (selectedVodCategoryId == null && cats.isNotEmpty) {
+        selectedVodCategoryId = cats.first.categoryId;
+      }
+      debugPrint('sdtv: VOD catalog cats=${cats.length} items=${items.length}');
+    } catch (e) {
+      vodError = e.toString();
+      vodCatalogReady = true;
+      debugPrint('sdtv: VOD catalog failed: $e');
+    }
+    notifyListeners();
+  }
+
+  Uri? resolveVodPlayUri(VodItem item) {
+    if (useDemo || mockCatalog) return Uri.parse(kDemoPlaybackUri);
+    return _client?.vodPlayUrl(item);
+  }
+
+  Future<String?> watchVod(VodItem item) async {
+    if (_watchInFlight || externalMpv.isRunning) {
+      debugPrint('sdtv: watchVod ignored (already watching)');
+      return null;
+    }
+    watchingVod = true;
+    nowPlayingVod = item;
+    nowPlaying = null;
+    _watchInFlight = true;
+    notifyListeners();
+
+    final uri = resolveVodPlayUri(item);
+    if (uri == null) {
+      _watchInFlight = false;
+      watchingVod = false;
+      return 'No playable URL for this title.';
+    }
+
+    final saved = _settings.vodProgressSeconds(prefsScope, item.favoriteKey);
+    final startAt = saved > 15 ? Duration(seconds: saved) : null;
+    _startStallWatch();
+    _startVodProgressWatch();
+    try {
+      final result = await externalMpv.playFullscreen(
+        uri,
+        fallbackTitle: item.name,
+        vod: true,
+        startAt: startAt,
+      );
+      await _saveVodProgress();
+      if (result.busy) return null;
+      if (!result.started) return result.error ?? 'mpv failed to start';
+      return null;
+    } finally {
+      _stopVodProgressWatch();
+      _stopStallWatch();
+      _watchInFlight = false;
+      watchingVod = false;
+      nowPlayingVod = null;
+      watchMenuOpen = false;
+      watchStallOpen = false;
+      notifyListeners();
+    }
   }
 
   /// Resolve the URL that should be handed to the player engine.
@@ -1311,6 +1755,8 @@ class SessionController extends ChangeNotifier {
     }
 
     _watchInFlight = true;
+    watchingVod = false;
+    nowPlayingVod = null;
     nowPlaying = channel;
     notifyListeners();
     // Await so a quick exit after play still has prefs flushed.
@@ -1357,6 +1803,7 @@ class SessionController extends ChangeNotifier {
 
       // Mini guide once mpv is up (playFullscreen blocks until quit).
       unawaited(_showMiniGuideWhenReady(channel));
+      _startStallWatch();
 
       var result = await externalMpv.playFullscreen(
         uri,
@@ -1406,11 +1853,13 @@ class SessionController extends ChangeNotifier {
       }
       return null;
     } finally {
+      _stopStallWatch();
       _watchInFlight = false;
       nowPlaying = null;
       _watchList = const [];
       _watchIndex = 0;
       watchMenuOpen = false;
+      watchStallOpen = false;
       watchMenuIndex = 0;
       notifyListeners();
     }
@@ -1494,11 +1943,13 @@ class SessionController extends ChangeNotifier {
     } catch (e, st) {
       debugPrint('sdtv: stopPlayback error: $e\n$st');
     }
+    _stopStallWatch();
     _watchInFlight = false;
     nowPlaying = null;
     _watchList = const [];
     _watchIndex = 0;
     watchMenuOpen = false;
+    watchStallOpen = false;
     watchMenuIndex = 0;
     if (notify) notifyListeners();
   }

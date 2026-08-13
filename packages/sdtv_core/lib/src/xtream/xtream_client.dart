@@ -7,6 +7,7 @@ import '../models/credentials.dart';
 import '../models/epg_program.dart';
 import '../models/live_channel.dart';
 import '../models/user_info.dart';
+import '../models/vod_item.dart';
 import 'xtream_exception.dart';
 
 /// Abstraction over Xtream player_api so UI can use live or mock clients.
@@ -18,6 +19,10 @@ abstract class XtreamClient {
 
   /// Short EPG for a live stream (now + next). Empty list if unsupported.
   Future<ShortEpg> getShortEpg(int streamId, {int limit = 4});
+
+  Future<List<MediaCategory>> getVodCategories();
+  Future<List<VodItem>> getVodStreams({String? categoryId});
+  Uri vodPlayUrl(VodItem item);
 }
 
 /// HTTP implementation of [XtreamClient] against a real provider.
@@ -114,6 +119,33 @@ class HttpXtreamClient implements XtreamClient {
       fetchedAt: DateTime.now(),
     );
   }
+
+  @override
+  Future<List<MediaCategory>> getVodCategories() async {
+    final json = await _getJson({
+      ...credentials.authQuery,
+      'action': 'get_vod_categories',
+    });
+    return _parseList(json, MediaCategory.fromJson);
+  }
+
+  @override
+  Future<List<VodItem>> getVodStreams({String? categoryId}) async {
+    final query = {
+      ...credentials.authQuery,
+      'action': 'get_vod_streams',
+      if (categoryId != null) 'category_id': categoryId,
+    };
+    final json = await _getJson(query);
+    return _parseList(json, VodItem.fromJson);
+  }
+
+  @override
+  Uri vodPlayUrl(VodItem item) =>
+      credentials.movieStreamUri(
+        item.streamId,
+        extension: item.containerExtension,
+      );
 
   List<EpgProgram> _parseEpgListings(dynamic json) {
     List<dynamic>? raw;

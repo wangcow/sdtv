@@ -9,6 +9,7 @@ export 'src/models/epg_program.dart';
 export 'src/models/guide_search.dart';
 export 'src/models/live_channel.dart';
 export 'src/models/user_info.dart';
+export 'src/models/vod_item.dart';
 export 'src/xtream/xtream_client.dart';
 export 'src/xtream/xtream_exception.dart';
 export 'src/xtream/mock_xtream_client.dart';
