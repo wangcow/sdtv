@@ -4,6 +4,12 @@
 
 Couch navigation is the core product requirement. Every screen must work with a **gamepad** and a **keyboard** (desktop / future Flatpak users).
 
+## Live / Movies
+
+Top chips: **LIVE** · **MOVIES**. From the first category, **↑** focuses the chips · **←/→** switch · **↓** or **A** back to the list. Movies use Xtream `get_vod_*` (M3U has no movie catalog). Demo uses a mock list + public HLS.
+
+While a movie is playing: **A** menu (Resume, ±10s, subs, audio, mute, back) · **←/→** or **LB/RB** seek 10s · **B** back to Movies. Position is saved every 10s (continue watching). No live-edge reload.
+
 ## Guide (browse)
 
 | Action | Deck / Xbox | Keyboard |
@@ -102,6 +108,29 @@ Menu rows (OSD list with ▶ cursor):
 
 While the menu is open, channel zap and volume on the D-pad are **disabled**.  
 Brief black/rebuffer on **Resume** is normal for live IPTV.
+
+### Stall / dead stream
+
+If the picture is frozen or buffering for **15 seconds**, sdtv opens an error sheet. The first line is a **code + reason**:
+
+| Code | Meaning |
+|------|---------|
+| `E401`–`E504` | HTTP from the panel (mpv log) |
+| `E-TMO` / `E-NET` / `E-TLS` | Timeout, network, TLS |
+| `E-OPEN` / `E-DEC` | Couldn’t open / decode |
+| `A-BUF` | Buffering 15s, no HTTP line |
+| `A-EOF` | Stream ended (keep-open hold) |
+| `A-IDLE` / `A-HOLD` | mpv idle / playback stopped |
+| `A-STALL` | Clock ran, then froze |
+| `A-MPV` / `A-IPC` | mpv didn’t start / IPC died |
+| `A-UNK` | Unclassified |
+
+`E*` = provider/network. `A-*` = sdtv/mpv probe, not an HTTP status.
+
+1. **Retry** — reload at live edge (then HLS if needed)  
+2. **Back to guide** — quit mpv  
+
+**A** selects · **B** goes to the guide. After a successful retry the 15s clock starts over.
 
 ## Steam Input
 

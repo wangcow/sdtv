@@ -5,6 +5,7 @@ import '../models/credentials.dart';
 import '../models/epg_program.dart';
 import '../models/live_channel.dart';
 import '../models/user_info.dart';
+import '../models/vod_item.dart';
 import 'xtream_client.dart';
 import 'xtream_exception.dart';
 
@@ -14,6 +15,8 @@ class MockXtreamClient implements XtreamClient {
     required this.authJson,
     required this.liveCategoriesJson,
     required this.liveStreamsJson,
+    this.vodCategoriesJson = '[]',
+    this.vodStreamsJson = '[]',
     XtreamCredentials? credentials,
   }) : credentials = credentials ??
             XtreamCredentials(
@@ -45,6 +48,8 @@ class MockXtreamClient implements XtreamClient {
   final String authJson;
   final String liveCategoriesJson;
   final String liveStreamsJson;
+  final String vodCategoriesJson;
+  final String vodStreamsJson;
   final XtreamCredentials credentials;
 
   @override
@@ -84,6 +89,31 @@ class MockXtreamClient implements XtreamClient {
 
   @override
   Uri livePlayUrl(int streamId, {String extension = 'ts'}) => mockPlaybackUri;
+
+  @override
+  Future<List<MediaCategory>> getVodCategories() async {
+    return _parseCategories(vodCategoriesJson);
+  }
+
+  @override
+  Future<List<VodItem>> getVodStreams({String? categoryId}) async {
+    final json = jsonDecode(vodStreamsJson);
+    if (json is! List) {
+      throw XtreamException('VOD streams fixture must be an array');
+    }
+    final all = json.map((item) {
+      if (item is Map<String, dynamic>) return VodItem.fromJson(item);
+      if (item is Map) {
+        return VodItem.fromJson(Map<String, dynamic>.from(item));
+      }
+      throw XtreamException('VOD stream row must be an object');
+    }).toList();
+    if (categoryId == null) return all;
+    return all.where((c) => c.categoryId == categoryId).toList();
+  }
+
+  @override
+  Uri vodPlayUrl(VodItem item) => mockPlaybackUri;
 
   /// Synthetic now/next so demo mode exercises the mini guide.
   @override

@@ -10,11 +10,17 @@ Future<MockXtreamClient> loadMockXtreamClient({
       await rootBundle.loadString('assets/mock_xtream/live_categories.json');
   final streams =
       await rootBundle.loadString('assets/mock_xtream/live_streams.json');
+  final vodCats =
+      await rootBundle.loadString('assets/mock_xtream/vod_categories.json');
+  final vodStreams =
+      await rootBundle.loadString('assets/mock_xtream/vod_streams.json');
 
   return MockXtreamClient(
     authJson: auth,
     liveCategoriesJson: cats,
     liveStreamsJson: streams,
+    vodCategoriesJson: vodCats,
+    vodStreamsJson: vodStreams,
     credentials: credentials ??
         XtreamCredentials(
           baseUrl: 'http://mock.sdtv.local',

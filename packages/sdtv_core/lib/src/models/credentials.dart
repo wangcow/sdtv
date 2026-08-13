@@ -50,6 +50,14 @@ class XtreamCredentials {
     );
   }
 
+  /// VOD / movie play URL (`/movie/user/pass/id.ext`).
+  Uri movieStreamUri(int streamId, {String extension = 'mp4'}) {
+    final ext = extension.trim().replaceAll('.', '');
+    return Uri.parse(
+      '$baseUrl/movie/$username/$password/$streamId.${ext.isEmpty ? 'mp4' : ext}',
+    );
+  }
+
   Map<String, String> get authQuery => {
         'username': username,
         'password': password,

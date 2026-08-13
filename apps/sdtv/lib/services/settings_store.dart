@@ -27,6 +27,8 @@ class SettingsStore {
   /// JSON list of [SavedSource] maps.
   static const _kSavedSources = 'saved_sources.v1';
   static const _kActiveSourceId = 'saved_sources.activeId';
+  /// JSON map: scope → { vodKey → seconds }.
+  static const _kVodProgress = 'vod_progress.v1';
 
   static Future<SettingsStore> open() async {
     final prefs = await SharedPreferences.getInstance();
@@ -318,5 +320,58 @@ class SettingsStore {
       if (streamId != null && streamId != 0) 'streamId': '$streamId',
     };
     await _prefs.setString(_kLastPlayed, jsonEncode(root));
+  }
+
+  // —— VOD continue-watching (seconds, scoped) ——
+
+  Map<String, Map<String, int>> _vodProgressRoot() {
+    final raw = _prefs.getString(_kVodProgress);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return {};
+      final out = <String, Map<String, int>>{};
+      for (final e in decoded.entries) {
+        final inner = e.value;
+        if (inner is! Map) continue;
+        final m = <String, int>{};
+        for (final p in inner.entries) {
+          final sec = p.value is int
+              ? p.value as int
+              : int.tryParse('${p.value}') ?? 0;
+          if (sec > 0) m['${p.key}'] = sec;
+        }
+        if (m.isNotEmpty) out['${e.key}'] = m;
+      }
+      return out;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  int vodProgressSeconds(String scope, String vodKey) {
+    if (scope.isEmpty || vodKey.isEmpty) return 0;
+    return _vodProgressRoot()[scope]?[vodKey] ?? 0;
+  }
+
+  Future<void> setVodProgressSeconds(
+    String scope,
+    String vodKey,
+    int seconds,
+  ) async {
+    if (scope.isEmpty || vodKey.isEmpty) return;
+    final root = _vodProgressRoot();
+    final inner = Map<String, int>.from(root[scope] ?? {});
+    if (seconds <= 5) {
+      inner.remove(vodKey);
+    } else {
+      inner[vodKey] = seconds;
+    }
+    if (inner.isEmpty) {
+      root.remove(scope);
+    } else {
+      root[scope] = inner;
+    }
+    await _prefs.setString(_kVodProgress, jsonEncode(root));
   }
 }
