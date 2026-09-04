@@ -29,6 +29,8 @@ class SettingsStore {
   static const _kActiveSourceId = 'saved_sources.activeId';
   /// JSON map: scope → { vodKey → seconds }.
   static const _kVodProgress = 'vod_progress.v1';
+  /// JSON map: scope → { section: live|movies, vodCategoryId }.
+  static const _kGuideLanding = 'guide_landing.v1';
 
   static Future<SettingsStore> open() async {
     final prefs = await SharedPreferences.getInstance();
@@ -322,6 +324,54 @@ class SettingsStore {
     await _prefs.setString(_kLastPlayed, jsonEncode(root));
   }
 
+  /// Last guide tab + Movies category (not last-played live channel).
+  Map<String, String> guideLanding(String scope) {
+    if (scope.isEmpty) return const {};
+    final raw = _prefs.getString(_kGuideLanding);
+    if (raw == null || raw.isEmpty) return const {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return const {};
+      final entry = decoded[scope];
+      if (entry is! Map) return const {};
+      final out = <String, String>{};
+      for (final e in entry.entries) {
+        final v = '${e.value}';
+        if (v.isNotEmpty) out['${e.key}'] = v;
+      }
+      return out;
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  Future<void> setGuideLanding(
+    String scope, {
+    required String section,
+    String? vodCategoryId,
+    String? seriesCategoryId,
+  }) async {
+    if (scope.isEmpty) return;
+    final raw = _prefs.getString(_kGuideLanding);
+    Map<String, dynamic> root = {};
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) {
+          root = Map<String, dynamic>.from(decoded);
+        }
+      } catch (_) {}
+    }
+    root[scope] = {
+      'section': section,
+      if (vodCategoryId != null && vodCategoryId.isNotEmpty)
+        'vodCategoryId': vodCategoryId,
+      if (seriesCategoryId != null && seriesCategoryId.isNotEmpty)
+        'seriesCategoryId': seriesCategoryId,
+    };
+    await _prefs.setString(_kGuideLanding, jsonEncode(root));
+  }
+
   // —— VOD continue-watching (seconds, scoped) ——
 
   Map<String, Map<String, int>> _vodProgressRoot() {
@@ -373,5 +423,58 @@ class SettingsStore {
       root[scope] = inner;
     }
     await _prefs.setString(_kVodProgress, jsonEncode(root));
+  }
+
+  static const _kSeriesResume = 'series_resume.v1';
+
+  /// Last episode for a series: episodeId, season, episodeNum.
+  Map<String, String> seriesResume(String scope, String seriesId) {
+    if (scope.isEmpty || seriesId.isEmpty) return const {};
+    final raw = _prefs.getString(_kSeriesResume);
+    if (raw == null || raw.isEmpty) return const {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return const {};
+      final byScope = decoded[scope];
+      if (byScope is! Map) return const {};
+      final entry = byScope[seriesId];
+      if (entry is! Map) return const {};
+      final out = <String, String>{};
+      for (final e in entry.entries) {
+        final v = '${e.value}';
+        if (v.isNotEmpty) out['${e.key}'] = v;
+      }
+      return out;
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  Future<void> setSeriesResume(
+    String scope, {
+    required String seriesId,
+    required String episodeId,
+    required int season,
+    required int episodeNum,
+  }) async {
+    if (scope.isEmpty || seriesId.isEmpty || episodeId.isEmpty) return;
+    final raw = _prefs.getString(_kSeriesResume);
+    Map<String, dynamic> root = {};
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) root = Map<String, dynamic>.from(decoded);
+      } catch (_) {}
+    }
+    final byScope = Map<String, dynamic>.from(
+      root[scope] is Map ? root[scope] as Map : const {},
+    );
+    byScope[seriesId] = {
+      'episodeId': episodeId,
+      'season': '$season',
+      'episodeNum': '$episodeNum',
+    };
+    root[scope] = byScope;
+    await _prefs.setString(_kSeriesResume, jsonEncode(root));
   }
 }

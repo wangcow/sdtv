@@ -38,10 +38,12 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
   DateTime? _lastDirAt;
   DateTime? _lastConfirmAt;
   DateTime? _lastBackAt;
+  DateTime? _lastFavoriteAt;
   // Low enough for accelerated D-pad hold (40ms ticks + multi-step).
   static const _dirCooldown = Duration(milliseconds: 28);
   static const _confirmCooldown = Duration(milliseconds: 220);
   static const _backCooldown = Duration(milliseconds: 220);
+  static const _favoriteCooldown = Duration(milliseconds: 280);
 
   @override
   void initState() {
@@ -156,6 +158,13 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
       edge = GamepadEdge.left;
     } else if (k == LogicalKeyboardKey.arrowRight) {
       edge = GamepadEdge.right;
+    } else if (_acquired &&
+        (k == LogicalKeyboardKey.pageDown ||
+            k == LogicalKeyboardKey.pageUp)) {
+      // Steam often injects PageDown for Y (north) alongside the js Y press.
+      // That was starring AND jumping ~5 channels (guide page size).
+      // Real LB/RB still come from /dev/input/js*.
+      return true;
     } else if (k == LogicalKeyboardKey.pageUp ||
         k == LogicalKeyboardKey.gameButtonLeft1) {
       edge = GamepadEdge.pageUp;
@@ -224,6 +233,15 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
         return;
       }
       _lastBackAt = now;
+    }
+
+    if (edge == GamepadEdge.favorite) {
+      final now = DateTime.now();
+      if (_lastFavoriteAt != null &&
+          now.difference(_lastFavoriteAt!) < _favoriteCooldown) {
+        return;
+      }
+      _lastFavoriteAt = now;
     }
 
     if (SdtvPadRouter.instance.dispatch(edge)) {

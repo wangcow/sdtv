@@ -6,6 +6,8 @@ import 'package:sdtv_core/sdtv_core.dart';
 import 'package:sdtv_player/sdtv_player.dart';
 
 import '../services/mock_client_factory.dart';
+import '../services/artwork_cache.dart';
+import '../services/open_external_url.dart';
 import '../services/saved_source.dart';
 import '../services/settings_store.dart';
 
@@ -27,18 +29,21 @@ const kDemoPlaybackUri = String.fromEnvironment(
 /// Virtual category id for starred channels (not from provider).
 const kFavoritesCategoryId = '__sdtv_favorites__';
 
-enum GuideSection { live, movies }
+enum GuideSection { live, movies, series }
 
 /// App-wide session: Xtream client, live catalog, player.
 class SessionController extends ChangeNotifier {
   SessionController({
     required SettingsStore settings,
     SdtvPlayerController? player,
+    ArtworkCache? artwork,
   })  : _settings = settings,
-        player = player ?? StubSdtvPlayerController();
+        player = player ?? StubSdtvPlayerController(),
+        artwork = artwork ?? ArtworkCache();
 
   final SettingsStore _settings;
   final SdtvPlayerController player;
+  final ArtworkCache artwork;
 
   SessionPhase phase = SessionPhase.boot;
   String? errorMessage;
@@ -66,6 +71,22 @@ class SessionController extends ChangeNotifier {
   bool watchingVod = false;
   bool vodCatalogReady = false;
   String? vodError;
+
+  VodItem? vodDetailItem;
+  VodInfo? vodDetail;
+  bool vodDetailLoading = false;
+  final Map<int, VodInfo> _vodInfoCache = {};
+
+  List<MediaCategory> seriesCategories = const [];
+  List<SeriesItem> allSeries = const [];
+  String? selectedSeriesCategoryId;
+  bool seriesCatalogReady = false;
+  String? seriesError;
+  SeriesItem? seriesDetailItem;
+  SeriesCatalog? seriesCatalog;
+  SeriesEpisode? nowPlayingEpisode;
+  SeriesItem? nowPlayingSeries;
+  final Map<int, SeriesCatalog> _seriesInfoCache = {};
 
   /// Ordered favorite keys for the current [favoritesScope].
   List<String> _favoriteKeys = const [];
@@ -446,6 +467,8 @@ class SessionController extends ChangeNotifier {
   /// Short EPG cache (streamId → listing). Cleared on source switch / sign-out.
   final Map<int, ShortEpg> _shortEpgCache = {};
   static const _shortEpgTtl = Duration(minutes: 12);
+  final Map<int, ShortEpg> _fullEpgCache = {};
+  static const _fullEpgTtl = Duration(minutes: 45);
   int _miniGuideGen = 0;
 
   /// Order of rows in the watch menu OSD.
@@ -495,6 +518,9 @@ class SessionController extends ChangeNotifier {
   bool get moviesAvailable =>
       !useM3u || mockCatalog || useDemo || vodCategories.isNotEmpty;
 
+  bool get seriesAvailable =>
+      !useM3u || mockCatalog || useDemo || seriesCategories.isNotEmpty;
+
   List<MediaCategory> get browseVodCategories {
     final hidden = _hiddenCategoryIds;
     return vodCategories.where((c) => !hidden.contains(c.categoryId)).toList();
@@ -503,6 +529,19 @@ class SessionController extends ChangeNotifier {
   int vodResumeSeconds(VodItem item) =>
       _settings.vodProgressSeconds(prefsScope, item.favoriteKey);
 
+  List<MediaCategory> get browseSeriesCategories {
+    final hidden = _hiddenCategoryIds;
+    return seriesCategories
+        .where((c) => !hidden.contains(c.categoryId))
+        .toList();
+  }
+
+  List<SeriesItem> get seriesInCategory {
+    final id = selectedSeriesCategoryId;
+    if (id == null || id.isEmpty) return allSeries;
+    return allSeries.where((s) => s.categoryId == id).toList();
+  }
+
   List<VodItem> get vodInCategory {
     final id = selectedVodCategoryId;
     if (id == null || id.isEmpty) return allVod;
@@ -510,6 +549,11 @@ class SessionController extends ChangeNotifier {
   }
 
   String get _nowPlayingLabel {
+    final ep = nowPlayingEpisode;
+    final show = nowPlayingSeries;
+    if (ep != null && show != null) {
+      return '${show.name}  S${ep.season}E${ep.episodeNum}';
+    }
     final vod = nowPlayingVod;
     if (vod != null) return vod.name;
     final ch = nowPlaying;
@@ -776,10 +820,30 @@ class SessionController extends ChangeNotifier {
   }
 
   Future<void> _saveVodProgress() async {
-    final item = nowPlayingVod;
-    if (item == null || !watchingVod) return;
+    if (!watchingVod) return;
     try {
       final pos = await externalMpv.timePos();
+      final ep = nowPlayingEpisode;
+      final show = nowPlayingSeries;
+      if (ep != null) {
+        await _settings.setVodProgressSeconds(
+          prefsScope,
+          ep.progressKey,
+          pos.inSeconds,
+        );
+        if (show != null) {
+          await _settings.setSeriesResume(
+            prefsScope,
+            seriesId: '${show.seriesId}',
+            episodeId: ep.id,
+            season: ep.season,
+            episodeNum: ep.episodeNum,
+          );
+        }
+        return;
+      }
+      final item = nowPlayingVod;
+      if (item == null) return;
       await _settings.setVodProgressSeconds(
         prefsScope,
         item.favoriteKey,
@@ -1106,19 +1170,33 @@ class SessionController extends ChangeNotifier {
 
   void _clearShortEpgCache() {
     _shortEpgCache.clear();
+    _fullEpgCache.clear();
     _miniGuideGen++;
+  }
+
+  bool _epgFresh(ShortEpg hit, Duration ttl) {
+    final fetched = hit.fetchedAt;
+    if (fetched == null) return true;
+    return DateTime.now().difference(fetched) <= ttl;
   }
 
   /// Cached short EPG if still fresh (no network).
   ShortEpg? cachedShortEpg(LiveChannel channel) {
     if (channel.streamId == 0 && !mockCatalog && !useDemo) return null;
+    final full = _fullEpgCache[channel.streamId];
+    if (full != null && _epgFresh(full, _fullEpgTtl)) return full;
     final hit = _shortEpgCache[channel.streamId];
     if (hit == null) return null;
-    final fetched = hit.fetchedAt;
-    if (fetched != null &&
-        DateTime.now().difference(fetched) > _shortEpgTtl) {
-      return null;
-    }
+    if (!_epgFresh(hit, _shortEpgTtl)) return null;
+    return hit;
+  }
+
+  /// Cached full TV Guide listings (simple data table), if fresh.
+  ShortEpg? cachedFullEpg(LiveChannel channel) {
+    if (channel.streamId == 0 && !mockCatalog && !useDemo) return null;
+    final hit = _fullEpgCache[channel.streamId];
+    if (hit == null) return null;
+    if (!_epgFresh(hit, _fullEpgTtl)) return null;
     return hit;
   }
 
@@ -1179,6 +1257,76 @@ class SessionController extends ChangeNotifier {
       final ch = channels[i];
       if (cachedShortEpg(ch) != null) continue;
       unawaited(fetchShortEpg(ch));
+    }
+  }
+
+  /// Fetch a longer EPG table for the TV Guide grid.
+  ///
+  /// Tries Xtream `get_simple_data_table`, then `get_short_epg`. M3U is empty.
+  Future<ShortEpg?> fetchFullEpg(
+    LiveChannel channel, {
+    bool force = false,
+  }) async {
+    if (useM3u) return null;
+    final id = channel.streamId;
+    if (id == 0 && !mockCatalog && !useDemo) return null;
+
+    if (!force) {
+      final cached = cachedFullEpg(channel);
+      if (cached != null) return cached;
+    }
+
+    final client = _client;
+    if (client == null) return null;
+
+    final sid = id == 0 ? 1 : id;
+    ShortEpg? stored;
+    try {
+      var epg = await client.getSimpleEpg(sid);
+      if (epg.isEmpty) {
+        epg = await client.getShortEpg(sid, limit: 12);
+      }
+      stored = ShortEpg(
+        streamId: id == 0 ? epg.streamId : id,
+        listings: epg.listings,
+        fetchedAt: epg.fetchedAt ?? DateTime.now(),
+      );
+    } catch (e) {
+      debugPrint('sdtv: simple EPG failed for ${channel.name}: $e');
+      try {
+        final epg = await client.getShortEpg(sid, limit: 12);
+        stored = ShortEpg(
+          streamId: id == 0 ? epg.streamId : id,
+          listings: epg.listings,
+          fetchedAt: epg.fetchedAt ?? DateTime.now(),
+        );
+      } catch (e2) {
+        debugPrint('sdtv: short EPG fallback failed for ${channel.name}: $e2');
+        return null;
+      }
+    }
+
+    if (id != 0) {
+      _fullEpgCache[id] = stored;
+      _shortEpgCache[id] = stored;
+    } else if (mockCatalog || useDemo) {
+      _fullEpgCache[stored.streamId] = stored;
+      _shortEpgCache[stored.streamId] = stored;
+    }
+    notifyListeners();
+    return stored;
+  }
+
+  /// Prefetch full EPG for the TV Guide neighborhood (heavier than now/next).
+  void prefetchFullEpgAround(List<LiveChannel> channels, int focusIndex) {
+    if (useM3u || _client == null) return;
+    if (channels.isEmpty) return;
+    final start = (focusIndex - 3).clamp(0, channels.length - 1);
+    final end = (focusIndex + 8).clamp(0, channels.length - 1);
+    for (var i = start; i <= end; i++) {
+      final ch = channels[i];
+      if (cachedFullEpg(ch) != null) continue;
+      unawaited(fetchFullEpg(ch));
     }
   }
 
@@ -1417,9 +1565,7 @@ class SessionController extends ChangeNotifier {
         );
       }
       _reloadGuidePrefs();
-      if (!applyLastPlayedSelection()) {
-        selectedCategoryId = _defaultCategoryId(pl.categories);
-      }
+      applyGuideLanding();
       if (save) {
         await _rememberSavedSource(SavedSource.m3u(url: m3uPlaylistUrl!));
       }
@@ -1582,9 +1728,7 @@ class SessionController extends ChangeNotifier {
       );
     }
     _reloadGuidePrefs();
-    if (!applyLastPlayedSelection()) {
-      selectedCategoryId = _defaultCategoryId(cats);
-    }
+    applyGuideLanding();
 
     if (save && credentials != null && !useDemo && !mockCatalog) {
       await _rememberSavedSource(
@@ -1595,6 +1739,7 @@ class SessionController extends ChangeNotifier {
     phase = SessionPhase.browse;
     notifyListeners();
     unawaited(loadVodCatalog());
+    unawaited(loadSeriesCatalog());
   }
 
   /// Fallback when no last-played: ★ Favorites if starred, else first visible.
@@ -1608,6 +1753,77 @@ class SessionController extends ChangeNotifier {
     return kFavoritesCategoryId;
   }
 
+  /// Cold start: last LIVE/MOVIES tab, not last-played / last-search category.
+  /// Live always opens on ★ Favorites (or first visible). Movies restores
+  /// the last VOD category you were actually browsing.
+  void applyGuideLanding() {
+    final m = _settings.guideLanding(prefsScope);
+    final section = m['section'];
+    if (section == 'movies' && !useM3u) {
+      guideSection = GuideSection.movies;
+    } else if (section == 'series' && !useM3u) {
+      guideSection = GuideSection.series;
+    } else {
+      guideSection = GuideSection.live;
+    }
+    selectedCategoryId = _defaultCategoryId(categories);
+    _applySavedVodCategory(m['vodCategoryId']);
+    _applySavedSeriesCategory(m['seriesCategoryId']);
+    debugPrint(
+      'sdtv: guide landing section=${guideSection.name} '
+      'liveCat=$selectedCategoryId vodCat=$selectedVodCategoryId '
+      'seriesCat=$selectedSeriesCategoryId',
+    );
+  }
+
+  void _applySavedVodCategory(String? vodId) {
+    if (vodId == null || vodId.isEmpty || vodCategories.isEmpty) {
+      if (selectedVodCategoryId == null && vodCategories.isNotEmpty) {
+        selectedVodCategoryId = vodCategories.first.categoryId;
+      }
+      return;
+    }
+    final ok = vodCategories.any(
+      (c) =>
+          c.categoryId == vodId && !_hiddenCategoryIds.contains(vodId),
+    );
+    selectedVodCategoryId =
+        ok ? vodId : vodCategories.first.categoryId;
+  }
+
+  void _applySavedSeriesCategory(String? seriesId) {
+    if (seriesId == null || seriesId.isEmpty || seriesCategories.isEmpty) {
+      if (selectedSeriesCategoryId == null && seriesCategories.isNotEmpty) {
+        selectedSeriesCategoryId = seriesCategories.first.categoryId;
+      }
+      return;
+    }
+    final ok = seriesCategories.any(
+      (c) =>
+          c.categoryId == seriesId && !_hiddenCategoryIds.contains(seriesId),
+    );
+    selectedSeriesCategoryId =
+        ok ? seriesId : seriesCategories.first.categoryId;
+  }
+
+  Future<void> rememberGuideLanding() async {
+    try {
+      final section = switch (guideSection) {
+        GuideSection.movies => 'movies',
+        GuideSection.series => 'series',
+        GuideSection.live => 'live',
+      };
+      await _settings.setGuideLanding(
+        prefsScope,
+        section: section,
+        vodCategoryId: selectedVodCategoryId,
+        seriesCategoryId: selectedSeriesCategoryId,
+      );
+    } catch (e) {
+      debugPrint('sdtv: rememberGuideLanding failed: $e');
+    }
+  }
+
   void selectCategory(String categoryId) {
     selectedCategoryId = categoryId;
     notifyListeners();
@@ -1616,14 +1832,25 @@ class SessionController extends ChangeNotifier {
   void selectVodCategory(String categoryId) {
     selectedVodCategoryId = categoryId;
     notifyListeners();
+    unawaited(rememberGuideLanding());
+  }
+
+  void selectSeriesCategory(String categoryId) {
+    selectedSeriesCategoryId = categoryId;
+    notifyListeners();
+    unawaited(rememberGuideLanding());
   }
 
   Future<void> setGuideSection(GuideSection section) async {
     if (guideSection == section) return;
     guideSection = section;
     notifyListeners();
+    unawaited(rememberGuideLanding());
     if (section == GuideSection.movies && !vodCatalogReady) {
       await loadVodCatalog();
+    }
+    if (section == GuideSection.series && !seriesCatalogReady) {
+      await loadSeriesCatalog();
     }
   }
 
@@ -1650,9 +1877,8 @@ class SessionController extends ChangeNotifier {
       vodCategories = cats;
       allVod = items;
       vodCatalogReady = true;
-      if (selectedVodCategoryId == null && cats.isNotEmpty) {
-        selectedVodCategoryId = cats.first.categoryId;
-      }
+      final savedVod = _settings.guideLanding(prefsScope)['vodCategoryId'];
+      _applySavedVodCategory(savedVod);
       debugPrint('sdtv: VOD catalog cats=${cats.length} items=${items.length}');
     } catch (e) {
       vodError = e.toString();
@@ -1662,12 +1888,182 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> loadSeriesCatalog() async {
+    if (useM3u && !useDemo && !mockCatalog) {
+      seriesCategories = const [];
+      allSeries = const [];
+      seriesCatalogReady = true;
+      seriesError = 'TV Shows need an Xtream panel (not M3U).';
+      notifyListeners();
+      return;
+    }
+    final client = _client;
+    if (client == null) {
+      seriesError = 'No catalog client.';
+      notifyListeners();
+      return;
+    }
+    seriesError = null;
+    notifyListeners();
+    try {
+      final cats = await client.getSeriesCategories();
+      final items = await client.getSeries();
+      seriesCategories = cats;
+      allSeries = items;
+      seriesCatalogReady = true;
+      final saved = _settings.guideLanding(prefsScope)['seriesCategoryId'];
+      _applySavedSeriesCategory(saved);
+      debugPrint(
+        'sdtv: series catalog cats=${cats.length} items=${items.length}',
+      );
+    } catch (e) {
+      seriesError = e.toString();
+      seriesCatalogReady = true;
+      debugPrint('sdtv: series catalog failed: $e');
+    }
+    notifyListeners();
+  }
+
+  Future<void> openSeriesDetail(SeriesItem item) async {
+    seriesDetailItem = item;
+    vodDetailItem = item.asVodItem;
+    final cached = _seriesInfoCache[item.seriesId];
+    seriesCatalog = cached;
+    vodDetail = cached?.info ?? VodInfo.fromVodItem(item.asVodItem);
+    vodDetailLoading = cached == null;
+    notifyListeners();
+    final client = _client;
+    if (client == null) {
+      vodDetailLoading = false;
+      notifyListeners();
+      return;
+    }
+    try {
+      final cat = await client.getSeriesInfo(item.seriesId);
+      _seriesInfoCache[item.seriesId] = cat;
+      if (seriesDetailItem?.seriesId != item.seriesId) return;
+      seriesCatalog = cat;
+      vodDetail = cat.info;
+    } catch (e) {
+      debugPrint('sdtv: getSeriesInfo failed: $e');
+    }
+    if (seriesDetailItem?.seriesId != item.seriesId) return;
+    vodDetailLoading = false;
+    notifyListeners();
+  }
+
+  Map<String, String> seriesResume(SeriesItem item) =>
+      _settings.seriesResume(prefsScope, '${item.seriesId}');
+
+  int episodeProgressSeconds(SeriesEpisode ep) =>
+      _settings.vodProgressSeconds(prefsScope, ep.progressKey);
+
+  int episodeProgressById(String episodeId) {
+    if (episodeId.isEmpty) return 0;
+    return _settings.vodProgressSeconds(prefsScope, 'se:$episodeId');
+  }
+
+  Future<String?> watchSeriesEpisode(
+    SeriesItem show,
+    SeriesEpisode episode, {
+    bool fromBeginning = false,
+  }) async {
+    if (_watchInFlight || externalMpv.isRunning) {
+      debugPrint('sdtv: watchSeriesEpisode ignored (already watching)');
+      return null;
+    }
+    watchingVod = true;
+    nowPlayingVod = null;
+    nowPlaying = null;
+    nowPlayingSeries = show;
+    nowPlayingEpisode = episode;
+    _watchInFlight = true;
+    notifyListeners();
+
+    final uri = (useDemo || mockCatalog)
+        ? Uri.parse(kDemoPlaybackUri)
+        : _client?.seriesPlayUrl(episode);
+    if (uri == null) {
+      _watchInFlight = false;
+      watchingVod = false;
+      nowPlayingEpisode = null;
+      nowPlayingSeries = null;
+      return 'No playable URL for this episode.';
+    }
+
+    final saved = episodeProgressSeconds(episode);
+    final startAt =
+        (!fromBeginning && saved > 15) ? Duration(seconds: saved) : null;
+    _startStallWatch();
+    _startVodProgressWatch();
+    try {
+      final result = await externalMpv.playFullscreen(
+        uri,
+        fallbackTitle: '${show.name} S${episode.season}E${episode.episodeNum}',
+        vod: true,
+        startAt: startAt,
+      );
+      await _saveVodProgress();
+      if (result.busy) return null;
+      if (!result.started) return result.error ?? 'mpv failed to start';
+      return null;
+    } finally {
+      _stopVodProgressWatch();
+      _stopStallWatch();
+      _watchInFlight = false;
+      watchingVod = false;
+      nowPlayingEpisode = null;
+      nowPlayingSeries = null;
+      watchMenuOpen = false;
+      watchStallOpen = false;
+      notifyListeners();
+    }
+  }
+
   Uri? resolveVodPlayUri(VodItem item) {
     if (useDemo || mockCatalog) return Uri.parse(kDemoPlaybackUri);
     return _client?.vodPlayUrl(item);
   }
 
-  Future<String?> watchVod(VodItem item) async {
+  Future<void> openVodDetail(VodItem item) async {
+    seriesDetailItem = null;
+    seriesCatalog = null;
+    vodDetailItem = item;
+    vodDetail = _vodInfoCache[item.streamId] ?? VodInfo.fromVodItem(item);
+    vodDetailLoading = !_vodInfoCache.containsKey(item.streamId);
+    notifyListeners();
+    final client = _client;
+    if (client == null) {
+      vodDetailLoading = false;
+      notifyListeners();
+      return;
+    }
+    try {
+      final info = await client.getVodInfo(item.streamId);
+      _vodInfoCache[item.streamId] = info;
+      if (vodDetailItem?.streamId != item.streamId) return;
+      vodDetail = info;
+    } catch (e) {
+      debugPrint('sdtv: getVodInfo failed: $e');
+    }
+    if (vodDetailItem?.streamId != item.streamId) return;
+    vodDetailLoading = false;
+    notifyListeners();
+  }
+
+  void closeVodDetail() {
+    vodDetailItem = null;
+    vodDetail = null;
+    vodDetailLoading = false;
+    seriesDetailItem = null;
+    seriesCatalog = null;
+    notifyListeners();
+  }
+
+  Future<String?> watchVod(
+    VodItem item, {
+    bool fromBeginning = false,
+  }) async {
     if (_watchInFlight || externalMpv.isRunning) {
       debugPrint('sdtv: watchVod ignored (already watching)');
       return null;
@@ -1686,7 +2082,8 @@ class SessionController extends ChangeNotifier {
     }
 
     final saved = _settings.vodProgressSeconds(prefsScope, item.favoriteKey);
-    final startAt = saved > 15 ? Duration(seconds: saved) : null;
+    final startAt =
+        (!fromBeginning && saved > 15) ? Duration(seconds: saved) : null;
     _startStallWatch();
     _startVodProgressWatch();
     try {
@@ -1706,6 +2103,47 @@ class SessionController extends ChangeNotifier {
       _watchInFlight = false;
       watchingVod = false;
       nowPlayingVod = null;
+      watchMenuOpen = false;
+      watchStallOpen = false;
+      notifyListeners();
+    }
+  }
+
+  /// YouTube trailers open in the system/YouTube client (TiviMate does this).
+  /// Direct HLS/file URLs still go through mpv.
+  Future<String?> watchTrailer(VodInfo info) async {
+    final uri = info.trailerUri;
+    if (uri == null) return 'No trailer for this title.';
+    if (info.isYoutubeTrailer) {
+      final ok = await openExternalUrl(uri);
+      if (ok) return null;
+      return 'Could not open YouTube. Try Desktop Mode, or install a browser.';
+    }
+    if (_watchInFlight || externalMpv.isRunning) {
+      debugPrint('sdtv: watchTrailer ignored (already watching)');
+      return null;
+    }
+    watchingVod = true;
+    nowPlaying = null;
+    nowPlayingVod = null;
+    _watchInFlight = true;
+    notifyListeners();
+    _startStallWatch();
+    try {
+      final result = await externalMpv.playFullscreen(
+        uri,
+        fallbackTitle: '${info.title} trailer',
+        vod: true,
+      );
+      if (result.busy) return null;
+      if (!result.started) {
+        return result.error ?? 'Trailer failed to start';
+      }
+      return null;
+    } finally {
+      _stopStallWatch();
+      _watchInFlight = false;
+      watchingVod = false;
       watchMenuOpen = false;
       watchStallOpen = false;
       notifyListeners();
@@ -1979,6 +2417,20 @@ class SessionController extends ChangeNotifier {
     mockCatalog = true;
     useM3u = false;
     m3uPlaylistUrl = null;
+    vodDetailItem = null;
+    vodDetail = null;
+    vodDetailLoading = false;
+    _vodInfoCache.clear();
+    seriesCategories = const [];
+    allSeries = const [];
+    selectedSeriesCategoryId = null;
+    seriesCatalogReady = false;
+    seriesError = null;
+    seriesDetailItem = null;
+    seriesCatalog = null;
+    nowPlayingEpisode = null;
+    nowPlayingSeries = null;
+    _seriesInfoCache.clear();
     _clearShortEpgCache();
     try {
       await _settings.clearSession();

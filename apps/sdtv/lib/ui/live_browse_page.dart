@@ -10,7 +10,12 @@ import 'package:sdtv_input/sdtv_input.dart';
 import '../build_info.dart';
 import '../services/saved_source.dart';
 import '../state/session_controller.dart';
+import 'epg_grid.dart';
 import 'player_page.dart';
+import 'vod_grid.dart';
+import 'widgets/epg_guide_pane.dart';
+import 'widgets/vod_poster_tile.dart';
+import 'widgets/vod_title_pane.dart';
 
 /// Two-column live browser with explicit index navigation (TV / Deck).
 class LiveBrowsePage extends StatefulWidget {
@@ -23,7 +28,7 @@ class LiveBrowsePage extends StatefulWidget {
 }
 
 class _LiveBrowsePageState extends State<LiveBrowsePage> {
-  /// 0 = categories, 1 = channels / movies
+  /// 0 = categories, 1 = channels / posters
   int _column = 0;
   /// Header LIVE | MOVIES has pad focus.
   bool _sectionFocus = false;
@@ -50,6 +55,15 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   bool _searchBrowseResults = false;
   bool _switchSourceOpen = false;
   bool _unfavOpen = false;
+  bool _vodDetailOpen = false;
+  int _vodDetailAction = 0;
+  bool _seriesEpisodesOpen = false;
+  DateTime _epgWindowStart = DateTime.now();
+  DateTime _epgFocusTime = DateTime.now();
+  double _epgProgramWidth = 720;
+  Timer? _epgClock;
+  int _seasonIndex = 0;
+  int _episodeIndex = 0;
   int _menuIndex = 0;
   int _manageIndex = 0;
   int _searchIndex = 0;
@@ -62,17 +76,26 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   final _manageScroll = ScrollController();
   final _searchScroll = ScrollController();
   final _switchScroll = ScrollController();
+  final _episodeScroll = ScrollController();
+  final _epgScroll = ScrollController();
   final _searchCtrl = TextEditingController();
   final _searchFocus = FocusNode();
   List<GuideSearchHit> _searchHits = const [];
 
   DateTime? _lastNavAt;
+  DateTime? _lastFavoriteAt;
   // Allow accelerated hold-scroll from the joystick reader (~40ms + bursts).
   static const _navCooldown = Duration(milliseconds: 28);
+  /// Steam injects PageDown with Y; ignore the page jump that follows a star.
+  static const _ignorePageAfterFavorite = Duration(milliseconds: 450);
 
   /// Fixed row height so scroll offset matches the selected tile (highlight stays on-screen).
   static const _rowExtent = 78.0;
   static const _listHeaderExtent = 44.0;
+
+  /// Movies poster grid (LayoutBuilder keeps these in sync with width).
+  int _vodCols = 4;
+  double _vodRowExtent = 240;
 
   /// Sign out is red, between Cancel and Exit, so destructive actions sit at the bottom.
   static const _menuItems =
@@ -114,6 +137,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   ];
 
   SessionController get session => widget.session;
+
+  bool get _isLive => session.guideSection == GuideSection.live;
+  bool get _isMovies => session.guideSection == GuideSection.movies;
+  bool get _isSeries => session.guideSection == GuideSection.series;
+  bool get _isPosterGuide => _isMovies || _isSeries;
 
   bool get _overlayOpen =>
       _menuOpen ||
@@ -157,54 +185,82 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _restoreGuideLanding();
+      _syncEpgClock();
     });
   }
 
-  /// Land on last-played category/channel (or session default selection).
+  void _syncEpgClock() {
+    if (_isLive) {
+      _epgClock ??= Timer.periodic(const Duration(seconds: 30), (_) {
+        if (mounted && _isLive) setState(() {});
+      });
+    } else {
+      _epgClock?.cancel();
+      _epgClock = null;
+    }
+  }
+
+  /// Land on last LIVE/MOVIES tab. Live opens on ★ Favorites (or first
+  /// visible cat), not last-played / last-search. Stay on the category column.
   void _restoreGuideLanding() {
     if (_didRestoreLanding) return;
-    if (session.browseCategories.isEmpty) return;
+    final movies = _isMovies;
+    final series = _isSeries;
+    if (movies) {
+      if (!session.vodCatalogReady) return;
+    } else if (series) {
+      if (!session.seriesCatalogReady) return;
+    } else if (session.browseCategories.isEmpty) {
+      return;
+    }
     _didRestoreLanding = true;
 
-    // Re-apply guide position (★ Favorites or provider category + channel).
-    session.applyLastPlayedSelection();
-
-    if (session.selectedCategoryId == null &&
+    if (!movies &&
+        !series &&
+        session.selectedCategoryId == null &&
         session.browseCategories.isNotEmpty) {
       session.selectCategory(session.browseCategories.first.categoryId);
     }
 
-    final sel = session.selectedCategoryId;
+    final cats = movies
+        ? session.browseVodCategories
+        : series
+            ? session.browseSeriesCategories
+            : session.browseCategories;
+    final sel = movies
+        ? session.selectedVodCategoryId
+        : series
+            ? session.selectedSeriesCategoryId
+            : session.selectedCategoryId;
     var catIdx = 0;
     if (sel != null) {
-      final i =
-          session.browseCategories.indexWhere((c) => c.categoryId == sel);
+      final i = cats.indexWhere((c) => c.categoryId == sel);
       if (i >= 0) catIdx = i;
-    }
-
-    var chanIdx = 0;
-    final lastIdx = session.lastPlayedChannelIndex;
-    if (lastIdx >= 0) {
-      chanIdx = lastIdx;
-      if (sel != null) _chanIndexByCategory[sel] = chanIdx;
     }
     _indexCategoryId = sel;
 
     debugPrint(
-      'sdtv: restore landing catIdx=$catIdx chanIdx=$chanIdx '
-      'sel=$sel lastIdx=$lastIdx last=${session.lastPlayedName} '
-      'build=${SdtvBuildInfo.label}',
+      'sdtv: restore landing section=${session.guideSection.name} '
+      'catIdx=$catIdx sel=$sel build=${SdtvBuildInfo.label}',
     );
 
     setState(() {
       _catIndex = catIdx;
-      _chanIndex = chanIdx;
-      if (lastIdx >= 0) {
-        _column = 1;
+      _chanIndex = 0;
+      _column = 0;
+      _sectionFocus = false;
+      if (!movies && !series) {
+        final now = DateTime.now();
+        _epgWindowStart = epgSnapDown(now);
+        _epgFocusTime = now;
       }
     });
+    _syncEpgClock();
+    if (!movies && !series) {
+      session.prefetchFullEpgAround(session.channelsInCategory, 0);
+    }
 
-    if (lastIdx >= 0 || catIdx > 0) {
+    if (catIdx > 0) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         _scrollTo(
@@ -213,7 +269,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
           itemExtent: _rowExtent,
           headerExtent: _listHeaderExtent,
         );
-        if (lastIdx >= 0) _scrollToChannelIndex(chanIdx);
       });
     }
   }
@@ -231,6 +286,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     _manageScroll.dispose();
     _searchScroll.dispose();
     _switchScroll.dispose();
+    _episodeScroll.dispose();
+    _epgScroll.dispose();
+    _epgClock?.cancel();
     super.dispose();
   }
 
@@ -251,20 +309,39 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   void _onSession() {
     if (!mounted) return;
-    // Connect finished after first frame → still restore last-played once.
-    if (!_didRestoreLanding && session.browseCategories.isNotEmpty) {
-      _restoreGuideLanding();
-      return;
+    // Connect / VOD catalog finished after first frame.
+    if (!_didRestoreLanding) {
+      if (_isMovies && session.vodCatalogReady) {
+        _restoreGuideLanding();
+        return;
+      }
+      if (_isSeries && session.seriesCatalogReady) {
+        _restoreGuideLanding();
+        return;
+      }
+      if (!_isPosterGuide && session.browseCategories.isNotEmpty) {
+        _restoreGuideLanding();
+        return;
+      }
     }
-    final movies = session.guideSection == GuideSection.movies;
-    final catList =
-        movies ? session.browseVodCategories : session.browseCategories;
+    final movies = _isMovies;
+    final series = _isSeries;
+    final catList = movies
+        ? session.browseVodCategories
+        : series
+            ? session.browseSeriesCategories
+            : session.browseCategories;
     final catCount = catList.length;
     final chanCount = movies
         ? session.vodInCategory.length
-        : session.channelsInCategory.length;
-    final sel =
-        movies ? session.selectedVodCategoryId : session.selectedCategoryId;
+        : series
+            ? session.seriesInCategory.length
+            : session.channelsInCategory.length;
+    final sel = movies
+        ? session.selectedVodCategoryId
+        : series
+            ? session.selectedSeriesCategoryId
+            : session.selectedCategoryId;
 
     if (catCount > 0) {
       _catIndex = _catIndex.clamp(0, catCount - 1);
@@ -281,11 +358,34 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     // (that made every category share Favorites' row 0/1/2/…).
     if (sel != null && sel != _indexCategoryId) {
       _indexCategoryId = sel;
-      _chanIndex = chanCount > 0 ? _chanIndexFor(sel, chanCount) : 0;
+      _chanIndex = chanCount > 0
+          ? (movies
+              ? _vodIndexFor(sel, chanCount)
+              : series
+                  ? _seriesIndexFor(sel, chanCount)
+                  : _chanIndexFor(sel, chanCount))
+          : 0;
     } else if (chanCount > 0) {
       _chanIndex = _chanIndex.clamp(0, chanCount - 1);
     } else {
       _chanIndex = 0;
+    }
+
+    if (_isLive) {
+      session.prefetchFullEpgAround(session.channelsInCategory, _chanIndex);
+    }
+
+    if (_seriesEpisodesOpen) {
+      final seasons = session.seriesCatalog?.seasons ?? const [];
+      if (seasons.isEmpty) {
+        _seasonIndex = 0;
+        _episodeIndex = 0;
+      } else {
+        _seasonIndex = _seasonIndex.clamp(0, seasons.length - 1);
+        final eps = seasons[_seasonIndex].episodes;
+        _episodeIndex =
+            eps.isEmpty ? 0 : _episodeIndex.clamp(0, eps.length - 1);
+      }
     }
     setState(() {});
   }
@@ -378,6 +478,134 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     _chanIndexByCategory[id] = _chanIndex;
   }
 
+  void _rememberVodIndex() {
+    final id = session.selectedVodCategoryId;
+    if (id == null) return;
+    _chanIndexByCategory['vod:$id'] = _chanIndex;
+  }
+
+  int _vodIndexFor(String? categoryId, int listLength) {
+    if (categoryId == null || listLength <= 0) return 0;
+    final saved = _chanIndexByCategory['vod:$categoryId'];
+    if (saved == null) return 0;
+    return saved.clamp(0, listLength - 1);
+  }
+
+  void _rememberSeriesIndex() {
+    final id = session.selectedSeriesCategoryId;
+    if (id == null) return;
+    _chanIndexByCategory['series:$id'] = _chanIndex;
+  }
+
+  int _seriesIndexFor(String? categoryId, int listLength) {
+    if (categoryId == null || listLength <= 0) return 0;
+    final saved = _chanIndexByCategory['series:$categoryId'];
+    if (saved == null) return 0;
+    return saved.clamp(0, listLength - 1);
+  }
+
+  void _scrollToVodIndex(int index) {
+    final cols = _vodCols.clamp(1, kVodGridMaxCols);
+    _ensureIndexVisible(
+      _chanScroll,
+      index ~/ cols,
+      itemExtent: _vodRowExtent,
+      headerExtent: 0,
+    );
+  }
+
+  void _syncVodGridMetrics(BoxConstraints constraints) {
+    final cols = vodGridCrossAxisCount(constraints.maxWidth);
+    final stride = vodGridRowStride(
+      gridWidth: constraints.maxWidth,
+      cols: cols,
+    );
+    if (cols == _vodCols && (stride - _vodRowExtent).abs() < 0.5) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (cols == _vodCols && (stride - _vodRowExtent).abs() < 0.5) return;
+      setState(() {
+        _vodCols = cols;
+        _vodRowExtent = stride;
+      });
+    });
+  }
+
+  void _enterVodGrid() {
+    if (_isSeries) {
+      final cats = session.browseSeriesCategories;
+      if (cats.isEmpty) return;
+      final id = session.selectedSeriesCategoryId ??
+          cats[_catIndex.clamp(0, cats.length - 1)].categoryId;
+      session.selectSeriesCategory(id);
+      final n = session.seriesInCategory.length;
+      final idx = _seriesIndexFor(id, n);
+      setState(() {
+        _column = 1;
+        _chanIndex = idx;
+        _sectionFocus = false;
+        _indexCategoryId = id;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scrollToVodIndex(idx);
+      });
+      return;
+    }
+    final cats = session.browseVodCategories;
+    if (cats.isEmpty) return;
+    final id = session.selectedVodCategoryId ??
+        cats[_catIndex.clamp(0, cats.length - 1)].categoryId;
+    session.selectVodCategory(id);
+    final n = session.vodInCategory.length;
+    final idx = _vodIndexFor(id, n);
+    setState(() {
+      _column = 1;
+      _chanIndex = idx;
+      _sectionFocus = false;
+      _indexCategoryId = id;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _scrollToVodIndex(idx);
+    });
+  }
+
+  void _applyVodGridMove({int dx = 0, int dy = 0}) {
+    final n = _isSeries
+        ? session.seriesInCategory.length
+        : session.vodInCategory.length;
+    if (n == 0) return;
+    final step = moveVodGrid(
+      index: _chanIndex,
+      count: n,
+      cols: _vodCols,
+      dx: dx,
+      dy: dy,
+    );
+    if (step.leaveToCategories) {
+      if (_isSeries) {
+        _rememberSeriesIndex();
+      } else {
+        _rememberVodIndex();
+      }
+      setState(() => _column = 0);
+      _scrollTo(
+        _catScroll,
+        _catIndex,
+        itemExtent: _rowExtent,
+        headerExtent: _listHeaderExtent,
+      );
+      return;
+    }
+    if (step.index == _chanIndex) return;
+    setState(() => _chanIndex = step.index);
+    if (_isSeries) {
+      _rememberSeriesIndex();
+    } else {
+      _rememberVodIndex();
+    }
+    _scrollToVodIndex(step.index);
+  }
+
   /// Restore last channel row for [categoryId] (clamped to list length).
   /// Default is **0** only if this category was never opened — not "same as last cat".
   int _chanIndexFor(String categoryId, int listLength) {
@@ -403,6 +631,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       'sdtv: cat switch $prevId → $categoryId chanIdx=$idx '
       '(saved=${_chanIndexByCategory[categoryId]})',
     );
+    session.prefetchFullEpgAround(session.channelsInCategory, idx);
   }
 
   void _enterChannelColumn() {
@@ -414,11 +643,19 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _column = 1;
       _chanIndex = idx;
     });
-    session.prefetchShortEpgAround(session.channelsInCategory, idx);
+    session.prefetchFullEpgAround(session.channelsInCategory, idx);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      _scrollToChannelIndex(idx);
+      _scrollToEpgIndex(idx);
     });
+  }
+
+  void _scrollToEpgIndex(int index) {
+    _ensureIndexVisible(
+      _epgScroll,
+      index,
+      itemExtent: kEpgRowExtent,
+    );
   }
 
   void _moveVertical(int delta) {
@@ -480,6 +717,20 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       });
       return;
     }
+    if (_seriesEpisodesOpen) {
+      if (!_acceptNav()) return;
+      _moveSeriesEpisode(delta);
+      return;
+    }
+    if (_vodDetailOpen) {
+      if (!_acceptNav()) return;
+      final n = _vodDetailActions.length;
+      if (n == 0) return;
+      setState(() {
+        _vodDetailAction = (_vodDetailAction + delta).clamp(0, n - 1);
+      });
+      return;
+    }
 
     if (_sectionFocus) {
       if (delta > 0) {
@@ -495,9 +746,13 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
 
-    final movies = session.guideSection == GuideSection.movies;
-    final cats =
-        movies ? session.browseVodCategories : session.browseCategories;
+    final movies = _isMovies;
+    final series = _isSeries;
+    final cats = movies
+        ? session.browseVodCategories
+        : series
+            ? session.browseSeriesCategories
+            : session.browseCategories;
 
     if (_column == 0) {
       if (cats.isEmpty) return;
@@ -505,7 +760,19 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         _catIndex = (_catIndex + delta).clamp(0, cats.length - 1);
       });
       if (movies) {
-        session.selectVodCategory(cats[_catIndex].categoryId);
+        final prev = session.selectedVodCategoryId;
+        if (prev != null) _chanIndexByCategory['vod:$prev'] = _chanIndex;
+        final id = cats[_catIndex].categoryId;
+        session.selectVodCategory(id);
+        _chanIndex = _vodIndexFor(id, session.vodInCategory.length);
+        _indexCategoryId = id;
+      } else if (series) {
+        final prev = session.selectedSeriesCategoryId;
+        if (prev != null) _chanIndexByCategory['series:$prev'] = _chanIndex;
+        final id = cats[_catIndex].categoryId;
+        session.selectSeriesCategory(id);
+        _chanIndex = _seriesIndexFor(id, session.seriesInCategory.length);
+        _indexCategoryId = id;
       } else {
         _selectCategoryKeepingChanPos(cats[_catIndex].categoryId);
       }
@@ -515,29 +782,48 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         itemExtent: _rowExtent,
         headerExtent: _listHeaderExtent,
       );
+    } else if (_isPosterGuide) {
+      _applyVodGridMove(dy: delta);
     } else {
-      final n = movies
-          ? session.vodInCategory.length
-          : session.channelsInCategory.length;
+      final n = session.channelsInCategory.length;
       if (n == 0) return;
       setState(() {
         _chanIndex = (_chanIndex + delta).clamp(0, n - 1);
       });
       _rememberChanIndex();
-      _scrollToChannelIndex(_chanIndex);
-      if (!movies) {
-        session.prefetchShortEpgAround(session.channelsInCategory, _chanIndex);
-      }
+      _scrollToEpgIndex(_chanIndex);
+      session.prefetchFullEpgAround(session.channelsInCategory, _chanIndex);
     }
+  }
+
+  List<GuideSection> get _sectionOrder {
+    final out = <GuideSection>[GuideSection.live];
+    if (session.moviesAvailable) out.add(GuideSection.movies);
+    if (session.seriesAvailable) out.add(GuideSection.series);
+    return out;
+  }
+
+  Future<void> _cycleSection(int delta) async {
+    final order = _sectionOrder;
+    if (order.length < 2) return;
+    var i = order.indexOf(session.guideSection);
+    if (i < 0) i = 0;
+    i = (i + delta) % order.length;
+    if (i < 0) i += order.length;
+    await _switchSection(order[i]);
   }
 
   Future<void> _switchSection(GuideSection section) async {
     if (session.guideSection == section) return;
+    if (_vodDetailOpen || _seriesEpisodesOpen) session.closeVodDetail();
     await session.setGuideSection(section);
     if (!mounted) return;
     if (section == GuideSection.movies) {
       final cats = session.browseVodCategories;
       if (cats.isNotEmpty) session.selectVodCategory(cats.first.categoryId);
+    } else if (section == GuideSection.series) {
+      final cats = session.browseSeriesCategories;
+      if (cats.isNotEmpty) session.selectSeriesCategory(cats.first.categoryId);
     }
     if (!mounted) return;
     setState(() {
@@ -545,10 +831,18 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _chanIndex = 0;
       _column = 0;
       _sectionFocus = true;
+      _vodDetailOpen = false;
+      _seriesEpisodesOpen = false;
       _indexCategoryId = section == GuideSection.movies
           ? session.selectedVodCategoryId
-          : session.selectedCategoryId;
+          : section == GuideSection.series
+              ? session.selectedSeriesCategoryId
+              : session.selectedCategoryId;
     });
+    _syncEpgClock();
+    if (section == GuideSection.live) {
+      session.prefetchFullEpgAround(session.channelsInCategory, _chanIndex);
+    }
   }
 
   void _moveHorizontal(int delta) {
@@ -558,7 +852,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
     if (_sectionFocus && !session.isWatchingExternal && !_overlayOpen) {
-      unawaited(_switchSection(delta > 0 ? GuideSection.movies : GuideSection.live));
+      unawaited(_cycleSection(delta > 0 ? 1 : -1));
       return;
     }
 
@@ -571,9 +865,35 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (_overlayOpen) {
       return;
     }
+    if (_seriesEpisodesOpen) {
+      if (delta < 0) {
+        if (!_acceptNav()) return;
+        _closeSeriesEpisodes();
+      }
+      return;
+    }
+    if (_vodDetailOpen) {
+      if (delta < 0) {
+        if (!_acceptNav()) return;
+        _closeVodDetail();
+      }
+      return;
+    }
     if (!_acceptNav()) return;
+    if (_isLive && _column == 1) {
+      _moveEpgProgram(delta);
+      return;
+    }
+    if (_isPosterGuide && _column == 1) {
+      _applyVodGridMove(dx: delta);
+      return;
+    }
     if (delta > 0 && _column == 0) {
-      _enterChannelColumn();
+      if (_isPosterGuide) {
+        _enterVodGrid();
+      } else {
+        _enterChannelColumn();
+      }
     } else if (delta < 0 && _column == 1) {
       _rememberChanIndex();
       setState(() => _column = 0);
@@ -587,6 +907,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   void _onPage(int delta) {
+    if (_lastFavoriteAt != null &&
+        DateTime.now().difference(_lastFavoriteAt!) <
+            _ignorePageAfterFavorite) {
+      return;
+    }
     if (session.isWatchMenuActive) {
       unawaited(session.watchMenuMove(delta));
       return;
@@ -595,9 +920,28 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       unawaited(session.watchChannelAdjacent(delta));
       return;
     }
-    // Guide: shoulders move category or channel list like page jumps.
+    // Guide: shoulders page the category list, or jump EPG time in Live.
     if (_searchOpen && !_searchBrowseResults) {
       _enterSearchResults();
+      return;
+    }
+    if (_isLive && _column == 1 && !_overlayOpen) {
+      if (!_acceptNav()) return;
+      _shiftEpgWindow(delta < 0 ? -kEpgJump : kEpgJump);
+      return;
+    }
+    if (_seriesEpisodesOpen) {
+      if (!_acceptNav()) return;
+      _changeSeriesSeason(delta);
+      return;
+    }
+    if (_vodDetailOpen) {
+      if (!_acceptNav()) return;
+      final n = _vodDetailActions.length;
+      if (n == 0) return;
+      setState(() {
+        _vodDetailAction = (_vodDetailAction + delta).clamp(0, n - 1);
+      });
       return;
     }
     if (_overlayOpen) {
@@ -606,6 +950,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     if (_column == 0) {
       _moveVertical(delta);
+    } else if (_isPosterGuide) {
+      if (!_acceptNav()) return;
+      _applyVodGridMove(dy: delta * 2);
     } else {
       _moveVertical(delta * 5);
     }
@@ -664,20 +1011,25 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
 
+    if (_seriesEpisodesOpen) {
+      await _playSelectedEpisode();
+      return;
+    }
+
+    if (_vodDetailOpen) {
+      await _runVodDetailAction();
+      return;
+    }
+
     if (_sectionFocus) {
       setState(() => _sectionFocus = false);
       return;
     }
 
-    final movies = session.guideSection == GuideSection.movies;
-
-    // Categories: enter channel column only (restore last row for this cat).
+    // Categories: enter channel / poster column only (restore last row).
     if (_column == 0) {
-      if (movies) {
-        final cats = session.browseVodCategories;
-        if (cats.isEmpty) return;
-        session.selectVodCategory(cats[_catIndex.clamp(0, cats.length - 1)].categoryId);
-        setState(() => _column = 1);
+      if (_isPosterGuide) {
+        _enterVodGrid();
         return;
       }
       final cats = session.browseCategories;
@@ -687,22 +1039,27 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
 
-    if (movies) {
+    if (_isMovies) {
       final list = session.vodInCategory;
       if (list.isEmpty) return;
       final item = list[_chanIndex.clamp(0, list.length - 1)];
-      final err = await session.watchVod(item);
-      if (!mounted) return;
-      if (err != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(err), duration: const Duration(seconds: 6)),
-        );
-      }
+      _openVodDetail(item);
+      return;
+    }
+
+    if (_isSeries) {
+      final list = session.seriesInCategory;
+      if (list.isEmpty) return;
+      final item = list[_chanIndex.clamp(0, list.length - 1)];
+      _openSeriesDetail(item);
       return;
     }
 
     // Channels: hand off to external fullscreen mpv (Phase A).
-    // Re-entry while watching is handled above + session.watchChannel guard.
+    await _playFocusedLive();
+  }
+
+  Future<void> _playFocusedLive() async {
     final chans = session.channelsInCategory;
     if (chans.isEmpty) return;
     final ch = chans[_chanIndex.clamp(0, chans.length - 1)];
@@ -725,7 +1082,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         ),
       );
     } else if (session.needsAppRestartForFullDisplay) {
-      // Docked while nest stayed handheld — mpv cannot fill TV until relaunch.
       session.clearDisplayRestartHint();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -740,7 +1096,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
     if (mounted) {
       setState(() => _column = 1);
-      _scrollToChannelIndex(_chanIndex);
+      if (_isLive) {
+        _scrollToEpgIndex(_chanIndex);
+      } else {
+        _scrollToChannelIndex(_chanIndex);
+      }
     }
   }
 
@@ -808,10 +1168,30 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       setState(() => _menuOpen = false);
       return;
     }
-    // In channel list: step back to categories (don't open system menu).
+    if (_seriesEpisodesOpen) {
+      _closeSeriesEpisodes();
+      return;
+    }
+    if (_vodDetailOpen) {
+      _closeVodDetail();
+      return;
+    }
+    // In channel / poster grid: step back to categories (don't open system menu).
+    // Live guide: first B snaps to now if the timeline is ahead; B again
+    // (already at now) returns to categories.
     if (_column == 1) {
       if (!_acceptNav()) return;
-      _rememberChanIndex();
+      if (_isSeries) {
+        _rememberSeriesIndex();
+      } else if (_isMovies) {
+        _rememberVodIndex();
+      } else {
+        _rememberChanIndex();
+        if (_epgAwayFromNow) {
+          unawaited(_jumpEpgToNow());
+          return;
+        }
+      }
       setState(() => _column = 0);
       _scrollTo(
         _catScroll,
@@ -821,11 +1201,57 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       );
       return;
     }
-    // Category list: open menu.
+    // Category column (Live / Movies / future TV): first B jumps to the
+    // top of the list; B at the top opens the in-page menu.
+    if (_sectionFocus || _catIndex > 0) {
+      if (!_acceptNav()) return;
+      _jumpToCategoryListTop();
+      return;
+    }
     setState(() {
       _menuOpen = true;
       _menuIndex = 0;
     });
+  }
+
+  void _jumpToCategoryListTop() {
+    final movies = _isMovies;
+    final series = _isSeries;
+    final cats = movies
+        ? session.browseVodCategories
+        : series
+            ? session.browseSeriesCategories
+            : session.browseCategories;
+    setState(() {
+      _sectionFocus = false;
+      _column = 0;
+      _catIndex = 0;
+    });
+    if (cats.isNotEmpty) {
+      if (movies) {
+        final prev = session.selectedVodCategoryId;
+        if (prev != null) _chanIndexByCategory['vod:$prev'] = _chanIndex;
+        final id = cats.first.categoryId;
+        session.selectVodCategory(id);
+        _chanIndex = _vodIndexFor(id, session.vodInCategory.length);
+        _indexCategoryId = id;
+      } else if (series) {
+        final prev = session.selectedSeriesCategoryId;
+        if (prev != null) _chanIndexByCategory['series:$prev'] = _chanIndex;
+        final id = cats.first.categoryId;
+        session.selectSeriesCategory(id);
+        _chanIndex = _seriesIndexFor(id, session.seriesInCategory.length);
+        _indexCategoryId = id;
+      } else {
+        _selectCategoryKeepingChanPos(cats.first.categoryId);
+      }
+    }
+    _scrollTo(
+      _catScroll,
+      0,
+      itemExtent: _rowExtent,
+      headerExtent: _listHeaderExtent,
+    );
   }
 
   void _openMenu() {
@@ -909,6 +1335,121 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     });
   }
 
+  bool get _epgAwayFromNow {
+    final now = DateTime.now();
+    final chans = session.channelsInCategory;
+    int? focusedIndex;
+    int? liveIndex;
+    if (chans.isNotEmpty) {
+      final ch = chans[_chanIndex.clamp(0, chans.length - 1)];
+      final epg = session.cachedFullEpg(ch);
+      final listings = epg?.listings ?? const <EpgProgram>[];
+      if (listings.isNotEmpty) {
+        focusedIndex = epg!.indexForTime(_epgFocusTime);
+        liveIndex = epg.indexForTime(now);
+      }
+    }
+    return epgNeedsReturnToNow(
+      windowStart: _epgWindowStart,
+      focusTime: _epgFocusTime,
+      now: now,
+      focusedIndex: focusedIndex,
+      liveIndex: liveIndex,
+    );
+  }
+
+  Future<void> _jumpEpgToNow() async {
+    if (session.isWatchingExternal) return;
+    if (!_isLive) {
+      await _switchSection(GuideSection.live);
+      if (!mounted) return;
+    }
+    final now = DateTime.now();
+    setState(() {
+      _menuOpen = false;
+      _column = 1;
+      _sectionFocus = false;
+      _epgWindowStart = epgSnapDown(now);
+      _epgFocusTime = now;
+    });
+    _syncEpgClock();
+    session.prefetchFullEpgAround(session.channelsInCategory, _chanIndex);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _isLive) _scrollToEpgIndex(_chanIndex);
+    });
+  }
+
+  Duration get _epgWindowLength => epgWindowLength(_epgProgramWidth);
+
+  void _leaveEpgToCategories() {
+    _rememberChanIndex();
+    setState(() => _column = 0);
+    _scrollTo(
+      _catScroll,
+      _catIndex,
+      itemExtent: _rowExtent,
+      headerExtent: _listHeaderExtent,
+    );
+  }
+
+  void _moveEpgProgram(int delta) {
+    final chans = session.channelsInCategory;
+    if (chans.isEmpty) {
+      if (delta < 0) _leaveEpgToCategories();
+      return;
+    }
+    final ch = chans[_chanIndex.clamp(0, chans.length - 1)];
+    final epg = session.cachedFullEpg(ch);
+    final listings = epg?.listings ?? const <EpgProgram>[];
+    if (listings.isEmpty) {
+      if (delta < 0) {
+        _leaveEpgToCategories();
+        return;
+      }
+      _shiftEpgWindow(kEpgSlot);
+      return;
+    }
+    final i = epg!.indexForTime(_epgFocusTime);
+    if (delta < 0 && i <= 0) {
+      _leaveEpgToCategories();
+      return;
+    }
+    final next = (i + delta).clamp(0, listings.length - 1);
+    if (next == i) {
+      _shiftEpgWindow(delta > 0 ? kEpgSlot : -kEpgSlot);
+      return;
+    }
+    final p = listings[next];
+    final t = p.isLiveAt(DateTime.now())
+        ? DateTime.now()
+        : p.start.add(const Duration(minutes: 1));
+    setState(() {
+      _epgFocusTime = t;
+      _epgWindowStart = epgEnsureVisible(
+        windowStart: _epgWindowStart,
+        windowLength: _epgWindowLength,
+        start: p.start,
+        end: p.end,
+      );
+    });
+  }
+
+  void _shiftEpgWindow(Duration delta) {
+    final next = epgShiftWindow(_epgWindowStart, delta);
+    final len = _epgWindowLength;
+    var t = _epgFocusTime.add(delta);
+    if (t.isBefore(next)) {
+      t = next.add(const Duration(minutes: 1));
+    } else if (!t.isBefore(next.add(len))) {
+      t = next.add(len).subtract(const Duration(minutes: 1));
+    }
+    setState(() {
+      _epgWindowStart = next;
+      _epgFocusTime = t;
+    });
+    session.prefetchFullEpgAround(session.channelsInCategory, _chanIndex);
+  }
+
   void _enterSearchResults() {
     if (!_searchOpen) return;
     _searchFocus.unfocus();
@@ -982,9 +1523,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         _column = 1;
         _chanIndex = chIdx;
       });
-      session.prefetchShortEpgAround(session.channelsInCategory, chIdx);
+      session.prefetchFullEpgAround(session.channelsInCategory, chIdx);
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _scrollToChannelIndex(chIdx);
+        if (mounted) _scrollToEpgIndex(chIdx);
       });
       return;
     }
@@ -1079,8 +1620,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   /// Hide the category under the guide cursor (not ★ Favorites).
+  /// Movies / TV Shows share the hidden-id set, but Manage categories is
+  /// still live-only — don't hide poster-guide cats until that UI exists.
   Future<void> _hideFocusedCategory() async {
     if (session.isWatchingExternal) return;
+    if (_isPosterGuide) return;
     final cats = session.browseCategories;
     if (cats.isEmpty) return;
     // Prefer category column selection; if on channels, hide that category.
@@ -1124,6 +1668,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   /// Y / F: star or unstar channel (guide focus, or now-playing while watching).
   Future<void> _toggleFavorite() async {
     if (_overlayOpen) return;
+    _lastFavoriteAt = DateTime.now();
 
     LiveChannel? ch;
     if (session.isWatchingExternal) {
@@ -1189,6 +1734,748 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     setState(() {});
   }
 
+  List<({String id, String label, IconData icon})> get _vodDetailActions {
+    final series = session.seriesDetailItem;
+    if (series != null) return _seriesDetailActions(series);
+
+    final item = session.vodDetailItem;
+    final info = session.vodDetail ??
+        (item != null ? VodInfo.fromVodItem(item) : null);
+    final saved = item == null ? 0 : session.vodResumeSeconds(item);
+    final out = <({String id, String label, IconData icon})>[];
+    if (saved > 15) {
+      final m = Duration(seconds: saved).inMinutes;
+      out.add((
+        id: 'resume',
+        label: 'Resume · ${m}m',
+        icon: Icons.play_arrow_rounded,
+      ));
+    }
+    out.add((
+      id: 'start',
+      label: 'Play from beginning',
+      icon: Icons.replay_rounded,
+    ));
+    if (info != null && info.hasTrailer) {
+      out.add((
+        id: 'trailer',
+        label: 'Watch trailer',
+        icon: Icons.theaters_outlined,
+      ));
+    }
+    return out;
+  }
+
+  List<({String id, String label, IconData icon})> _seriesDetailActions(
+    SeriesItem series,
+  ) {
+    final info = session.vodDetail ?? VodInfo.fromVodItem(series.asVodItem);
+    final cat = session.seriesCatalog;
+    final resume = session.seriesResume(series);
+    final epId = resume['episodeId'] ?? '';
+    final resumeEp = epId.isEmpty ? null : cat?.episodeById(epId);
+    final out = <({String id, String label, IconData icon})>[];
+    if (resumeEp != null) {
+      final saved = session.episodeProgressSeconds(resumeEp);
+      final loc = 'S${resumeEp.season}E${resumeEp.episodeNum}';
+      final label = saved > 15
+          ? 'Resume · $loc · ${saved ~/ 60}m'
+          : 'Resume · $loc';
+      out.add((
+        id: 'resume',
+        label: label,
+        icon: Icons.play_arrow_rounded,
+      ));
+    }
+    out.add((
+      id: 'start',
+      label: 'Play from beginning',
+      icon: Icons.replay_rounded,
+    ));
+    out.add((
+      id: 'seasons',
+      label: 'Seasons & episodes',
+      icon: Icons.view_list_rounded,
+    ));
+    if (info.hasTrailer) {
+      out.add((
+        id: 'trailer',
+        label: 'Watch trailer',
+        icon: Icons.theaters_outlined,
+      ));
+    }
+    return out;
+  }
+
+  void _openVodDetail(VodItem item) {
+    setState(() {
+      _vodDetailOpen = true;
+      _seriesEpisodesOpen = false;
+      _vodDetailAction = 0;
+      _column = 1;
+      _sectionFocus = false;
+    });
+    unawaited(session.openVodDetail(item));
+  }
+
+  void _openSeriesDetail(SeriesItem item) {
+    setState(() {
+      _vodDetailOpen = true;
+      _seriesEpisodesOpen = false;
+      _vodDetailAction = 0;
+      _column = 1;
+      _sectionFocus = false;
+    });
+    unawaited(session.openSeriesDetail(item));
+  }
+
+  void _closeVodDetail() {
+    session.closeVodDetail();
+    setState(() {
+      _vodDetailOpen = false;
+      _seriesEpisodesOpen = false;
+      _vodDetailAction = 0;
+      _column = 1;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _scrollToVodIndex(_chanIndex);
+    });
+  }
+
+  void _restoreSeriesEpisodeCursor() {
+    final cat = session.seriesCatalog;
+    final show = session.seriesDetailItem;
+    if (cat == null || cat.seasons.isEmpty) {
+      _seasonIndex = 0;
+      _episodeIndex = 0;
+      return;
+    }
+    if (show != null) {
+      final epId = session.seriesResume(show)['episodeId'] ?? '';
+      if (epId.isNotEmpty) {
+        for (var si = 0; si < cat.seasons.length; si++) {
+          final ei = cat.seasons[si].episodes.indexWhere((e) => e.id == epId);
+          if (ei >= 0) {
+            _seasonIndex = si;
+            _episodeIndex = ei;
+            return;
+          }
+        }
+      }
+    }
+    _seasonIndex = _seasonIndex.clamp(0, cat.seasons.length - 1);
+    final eps = cat.seasons[_seasonIndex].episodes;
+    _episodeIndex = eps.isEmpty ? 0 : _episodeIndex.clamp(0, eps.length - 1);
+  }
+
+  void _openSeriesEpisodes() {
+    _restoreSeriesEpisodeCursor();
+    setState(() {
+      _seriesEpisodesOpen = true;
+      _vodDetailOpen = true;
+      _column = 1;
+      _sectionFocus = false;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_seriesEpisodesOpen) return;
+      _scrollToEpisodeIndex(_episodeIndex);
+    });
+  }
+
+  void _closeSeriesEpisodes() {
+    final actions = _vodDetailActions;
+    var action = 0;
+    final i = actions.indexWhere((a) => a.id == 'seasons');
+    if (i >= 0) action = i;
+    setState(() {
+      _seriesEpisodesOpen = false;
+      _vodDetailOpen = true;
+      _vodDetailAction = action;
+    });
+  }
+
+  List<SeriesEpisode> get _currentEpisodes {
+    final seasons = session.seriesCatalog?.seasons ?? const [];
+    if (seasons.isEmpty) return const [];
+    return seasons[_seasonIndex.clamp(0, seasons.length - 1)].episodes;
+  }
+
+  void _scrollToEpisodeIndex(int index) {
+    _ensureIndexVisible(
+      _episodeScroll,
+      index,
+      itemExtent: _rowExtent,
+      headerExtent: 0,
+    );
+  }
+
+  void _moveSeriesEpisode(int delta) {
+    final eps = _currentEpisodes;
+    if (eps.isEmpty) return;
+    setState(() {
+      _episodeIndex = (_episodeIndex + delta).clamp(0, eps.length - 1);
+    });
+    _scrollToEpisodeIndex(_episodeIndex);
+  }
+
+  void _changeSeriesSeason(int delta) {
+    final seasons = session.seriesCatalog?.seasons ?? const [];
+    if (seasons.length < 2) {
+      _moveSeriesEpisode(delta * 5);
+      return;
+    }
+    final next = (_seasonIndex + delta).clamp(0, seasons.length - 1);
+    if (next == _seasonIndex) return;
+    setState(() {
+      _seasonIndex = next;
+      _episodeIndex = 0;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _seriesEpisodesOpen) _scrollToEpisodeIndex(0);
+    });
+  }
+
+  Future<void> _playSelectedEpisode({bool fromBeginning = false}) async {
+    final show = session.seriesDetailItem;
+    final eps = _currentEpisodes;
+    if (show == null || eps.isEmpty) return;
+    final ep = eps[_episodeIndex.clamp(0, eps.length - 1)];
+    final err = await session.watchSeriesEpisode(
+      show,
+      ep,
+      fromBeginning: fromBeginning,
+    );
+    if (!mounted) return;
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(err), duration: const Duration(seconds: 6)),
+      );
+    }
+  }
+
+  Future<void> _runVodDetailAction() async {
+    final actions = _vodDetailActions;
+    if (actions.isEmpty) return;
+    final id = actions[_vodDetailAction.clamp(0, actions.length - 1)].id;
+    await _runVodDetailActionId(id);
+  }
+
+  Future<void> _runVodDetailActionId(String id) async {
+    if (session.seriesDetailItem != null) {
+      await _runSeriesDetailActionId(id);
+      return;
+    }
+    final item = session.vodDetailItem;
+    if (item == null) return;
+    String? err;
+    if (id == 'resume') {
+      err = await session.watchVod(item);
+    } else if (id == 'start') {
+      err = await session.watchVod(item, fromBeginning: true);
+    } else if (id == 'trailer') {
+      final info = session.vodDetail ?? VodInfo.fromVodItem(item);
+      err = await session.watchTrailer(info);
+    }
+    if (!mounted) return;
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(err), duration: const Duration(seconds: 6)),
+      );
+    }
+  }
+
+  Future<void> _runSeriesDetailActionId(String id) async {
+    final show = session.seriesDetailItem;
+    if (show == null) return;
+    if (id == 'seasons') {
+      _openSeriesEpisodes();
+      return;
+    }
+    String? err;
+    if (id == 'trailer') {
+      final info = session.vodDetail ?? VodInfo.fromVodItem(show.asVodItem);
+      err = await session.watchTrailer(info);
+    } else if (id == 'resume') {
+      final cat = session.seriesCatalog;
+      final epId = session.seriesResume(show)['episodeId'] ?? '';
+      final ep = cat?.episodeById(epId) ?? cat?.firstEpisode;
+      if (ep == null) {
+        err = session.vodDetailLoading
+            ? 'Loading episodes…'
+            : 'No episodes for this show.';
+      } else {
+        err = await session.watchSeriesEpisode(show, ep);
+      }
+    } else if (id == 'start') {
+      final ep = session.seriesCatalog?.firstEpisode;
+      if (ep == null) {
+        err = session.vodDetailLoading
+            ? 'Loading episodes…'
+            : 'No episodes for this show.';
+      } else {
+        err = await session.watchSeriesEpisode(
+          show,
+          ep,
+          fromBeginning: true,
+        );
+      }
+    }
+    if (!mounted) return;
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(err), duration: const Duration(seconds: 6)),
+      );
+    }
+  }
+
+  Widget _moviesPane(
+    ThemeData theme,
+    String catTitle,
+    List<VodItem> vods,
+  ) {
+    if (_vodDetailOpen) {
+      final item = session.vodDetailItem ??
+          (vods.isEmpty
+              ? null
+              : vods[_chanIndex.clamp(0, vods.length - 1)]);
+      if (item == null) {
+        return const SizedBox.shrink();
+      }
+      final info = session.vodDetail ?? VodInfo.fromVodItem(item);
+      final actions = _vodDetailActions;
+      final ai = actions.isEmpty
+          ? 0
+          : _vodDetailAction.clamp(0, actions.length - 1);
+      return VodTitlePane(
+        item: item,
+        info: info,
+        actions: actions,
+        actionIndex: ai,
+        loading: session.vodDetailLoading,
+        artCache: session.artwork,
+        artScope: session.prefsScope,
+        onAction: (id) => unawaited(_runVodDetailActionId(id)),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          height: _listHeaderExtent,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 24, 0),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'TITLES · $catTitle',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                  letterSpacing: 1.1,
+                ),
+              ),
+            ),
+          ),
+        ),
+        Expanded(
+          child: vods.isEmpty
+              ? Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 24, 24),
+                  child: Text(
+                    session.vodError ??
+                        (session.vodCatalogReady
+                            ? 'No movies in this category.'
+                            : 'Loading movies…'),
+                    style: theme.textTheme.bodyLarge,
+                  ),
+                )
+              : LayoutBuilder(
+                  builder: (context, constraints) {
+                    _syncVodGridMetrics(constraints);
+                    final cols = _vodCols.clamp(1, kVodGridMaxCols);
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (!mounted) return;
+                      session.artwork.prefetchVod(
+                        scope: session.prefsScope,
+                        items: [
+                          for (final v in vods)
+                            (id: '${v.streamId}', url: v.streamIcon),
+                        ],
+                        focusIndex: _chanIndex,
+                        cols: cols,
+                      );
+                    });
+                    return GridView.builder(
+                      controller: _chanScroll,
+                      padding: const EdgeInsets.fromLTRB(
+                        kVodGridPadding,
+                        8,
+                        kVodGridPadding,
+                        16,
+                      ),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: cols,
+                        mainAxisSpacing: kVodGridSpacing,
+                        crossAxisSpacing: kVodGridSpacing,
+                        childAspectRatio: kVodGridChildAspect,
+                      ),
+                      itemCount: vods.length,
+                      itemBuilder: (context, i) {
+                        final v = vods[i];
+                        final selected = _chanIndex == i;
+                        final focused = _column == 1 && selected;
+                        final saved = session.vodResumeSeconds(v);
+                        final dur = v.durationSecs;
+                        final progress = (dur > 0 && saved > 15)
+                            ? (saved / dur).clamp(0.0, 1.0)
+                            : (saved > 15 ? 0.15 : 0.0);
+                        return VodPosterTile(
+                          title: v.name,
+                          subtitle: saved > 15
+                              ? 'Resume ${Duration(seconds: saved).inMinutes}m'
+                              : null,
+                          selected: selected,
+                          focused: focused,
+                          progress: progress,
+                          posterUrl: v.streamIcon,
+                          artId: '${v.streamId}',
+                          artScope: session.prefsScope,
+                          artCache: session.artwork,
+                          onTap: () async {
+                            setState(() {
+                              _column = 1;
+                              _chanIndex = i;
+                            });
+                            _rememberVodIndex();
+                            await _activate();
+                          },
+                        );
+                      },
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+
+  String? _seriesTileSubtitle(SeriesItem show) {
+    final resume = session.seriesResume(show);
+    final epId = resume['episodeId'] ?? '';
+    if (epId.isEmpty) return null;
+    final season = int.tryParse(resume['season'] ?? '') ?? 0;
+    final epNum = int.tryParse(resume['episodeNum'] ?? '') ?? 0;
+    final loc = season > 0 ? 'S${season}E$epNum' : 'E$epNum';
+    final saved = session.episodeProgressById(epId);
+    if (saved > 15) {
+      return 'Resume $loc · ${saved ~/ 60}m';
+    }
+    return 'Resume $loc';
+  }
+
+  Widget _seriesPane(
+    ThemeData theme,
+    String catTitle,
+    List<SeriesItem> shows,
+  ) {
+    if (_seriesEpisodesOpen) {
+      return _seriesEpisodesPane(theme);
+    }
+    if (_vodDetailOpen) {
+      final item = session.seriesDetailItem?.asVodItem ??
+          session.vodDetailItem ??
+          (shows.isEmpty
+              ? null
+              : shows[_chanIndex.clamp(0, shows.length - 1)].asVodItem);
+      if (item == null) {
+        return const SizedBox.shrink();
+      }
+      final info = session.vodDetail ?? VodInfo.fromVodItem(item);
+      final actions = _vodDetailActions;
+      final ai = actions.isEmpty
+          ? 0
+          : _vodDetailAction.clamp(0, actions.length - 1);
+      return VodTitlePane(
+        item: item,
+        info: info,
+        actions: actions,
+        actionIndex: ai,
+        loading: session.vodDetailLoading,
+        artCache: session.artwork,
+        artScope: session.prefsScope,
+        onAction: (id) => unawaited(_runVodDetailActionId(id)),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          height: _listHeaderExtent,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 24, 0),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'TITLES · $catTitle',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                  letterSpacing: 1.1,
+                ),
+              ),
+            ),
+          ),
+        ),
+        Expanded(
+          child: shows.isEmpty
+              ? Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 24, 24),
+                  child: Text(
+                    session.seriesError ??
+                        (session.seriesCatalogReady
+                            ? 'No shows in this category.'
+                            : 'Loading TV shows…'),
+                    style: theme.textTheme.bodyLarge,
+                  ),
+                )
+              : LayoutBuilder(
+                  builder: (context, constraints) {
+                    _syncVodGridMetrics(constraints);
+                    final cols = _vodCols.clamp(1, kVodGridMaxCols);
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (!mounted) return;
+                      session.artwork.prefetchVod(
+                        scope: session.prefsScope,
+                        items: [
+                          for (final s in shows)
+                            (id: 's:${s.seriesId}', url: s.cover),
+                        ],
+                        focusIndex: _chanIndex,
+                        cols: cols,
+                      );
+                    });
+                    return GridView.builder(
+                      controller: _chanScroll,
+                      padding: const EdgeInsets.fromLTRB(
+                        kVodGridPadding,
+                        8,
+                        kVodGridPadding,
+                        16,
+                      ),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: cols,
+                        mainAxisSpacing: kVodGridSpacing,
+                        crossAxisSpacing: kVodGridSpacing,
+                        childAspectRatio: kVodGridChildAspect,
+                      ),
+                      itemCount: shows.length,
+                      itemBuilder: (context, i) {
+                        final s = shows[i];
+                        final selected = _chanIndex == i;
+                        final focused = _column == 1 && selected;
+                        final resume = session.seriesResume(s);
+                        final epId = resume['episodeId'] ?? '';
+                        final saved = session.episodeProgressById(epId);
+                        final progress = saved > 15 ? 0.15 : 0.0;
+                        return VodPosterTile(
+                          title: s.name,
+                          subtitle: _seriesTileSubtitle(s),
+                          selected: selected,
+                          focused: focused,
+                          progress: progress,
+                          posterUrl: s.cover,
+                          artId: 's:${s.seriesId}',
+                          artScope: session.prefsScope,
+                          artCache: session.artwork,
+                          onTap: () async {
+                            setState(() {
+                              _column = 1;
+                              _chanIndex = i;
+                            });
+                            _rememberSeriesIndex();
+                            await _activate();
+                          },
+                        );
+                      },
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _seriesEpisodesPane(ThemeData theme) {
+    final show = session.seriesDetailItem;
+    final seasons = session.seriesCatalog?.seasons ?? const [];
+    final loading = session.vodDetailLoading && seasons.isEmpty;
+    final season = seasons.isEmpty
+        ? null
+        : seasons[_seasonIndex.clamp(0, seasons.length - 1)];
+    final eps = season?.episodes ?? const [];
+    final title = show?.name ?? session.vodDetail?.title ?? 'TV Show';
+    final seasonLine = season == null
+        ? (loading ? 'Loading seasons…' : 'No episodes from this panel.')
+        : seasons.length > 1
+            ? '${season.name}  ·  ${_seasonIndex + 1}/${seasons.length}'
+            : season.name;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 20, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.w800,
+              height: 1.15,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            seasonLine,
+            style: theme.textTheme.labelLarge?.copyWith(
+              color: theme.colorScheme.primary,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.4,
+            ),
+          ),
+          if (seasons.length > 1) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 36,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: seasons.length,
+                separatorBuilder: (context, index) =>
+                    const SizedBox(width: 8),
+                itemBuilder: (context, i) {
+                  final selected = i == _seasonIndex;
+                  return GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        _seasonIndex = i;
+                        _episodeIndex = 0;
+                      });
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (mounted) _scrollToEpisodeIndex(0);
+                      });
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: selected
+                            ? theme.colorScheme.primary
+                            : theme.colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: selected
+                              ? theme.colorScheme.primary
+                              : theme.colorScheme.outline
+                                  .withValues(alpha: 0.4),
+                        ),
+                      ),
+                      child: Text(
+                        seasons[i].name,
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          color: selected
+                              ? theme.colorScheme.onPrimary
+                              : theme.colorScheme.onSurface,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+          const SizedBox(height: 10),
+          Expanded(
+            child: loading
+                ? Align(
+                    alignment: Alignment.topLeft,
+                    child: Text(
+                      'Loading episodes…',
+                      style: theme.textTheme.bodyLarge,
+                    ),
+                  )
+                : eps.isEmpty
+                    ? Align(
+                        alignment: Alignment.topLeft,
+                        child: Text(
+                          'No episodes in this season.',
+                          style: theme.textTheme.bodyLarge,
+                        ),
+                      )
+                    : ListView.builder(
+                        controller: _episodeScroll,
+                        itemExtent: _rowExtent,
+                        itemCount: eps.length,
+                        itemBuilder: (context, i) {
+                          final ep = eps[i];
+                          final selected = _episodeIndex == i;
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: _BrowseTile(
+                              label: ep.label,
+                              subtitle: _episodeSubtitle(ep),
+                              icon: Icons.play_circle_outline,
+                              selected: selected,
+                              onTap: () async {
+                                setState(() => _episodeIndex = i);
+                                await _playSelectedEpisode();
+                              },
+                            ),
+                          );
+                        },
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String? _episodeSubtitle(SeriesEpisode ep) {
+    final bits = <String>[];
+    if (ep.durationSecs > 0) {
+      bits.add('${ep.durationSecs ~/ 60}m');
+    }
+    final saved = session.episodeProgressSeconds(ep);
+    if (saved > 15) {
+      bits.add('Resume ${saved ~/ 60}m');
+    }
+    if (ep.plot.isNotEmpty) bits.add(ep.plot);
+    if (bits.isEmpty) return null;
+    return bits.join(' · ');
+  }
+
+  String get _footerHint {
+    if (_isPosterGuide) {
+      if (_seriesEpisodesOpen) {
+        return '↑↓ episodes · LB/RB season · A play · B title';
+      }
+      if (_vodDetailOpen) {
+        return '↑↓ actions · A select · B posters';
+      }
+      if (_column == 1) {
+        return '↑↓←→ posters · A title · B cats · ☰ Search';
+      }
+      return '↑↓ cats · B top · A open · ☰ Search';
+    }
+    if (_column == 1) {
+      if (_epgAwayFromNow) {
+        return '↑↓ channels · ←→ programs · LB/RB time · A play · B now';
+      }
+      return '↑↓ channels · ←→ programs · LB/RB time · A play · B cats';
+    }
+    return '↑↓ cats · B top · → guide · X hide · ☰ Search';
+  }
+
   /// Quit the process so Game Mode returns to Steam (no STEAM → Exit game).
   Future<void> _exitApp() async {
     try {
@@ -1210,10 +2497,16 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final movies = session.guideSection == GuideSection.movies;
-    final cats = movies ? session.browseVodCategories : session.browseCategories;
+    final movies = _isMovies;
+    final series = _isSeries;
+    final cats = movies
+        ? session.browseVodCategories
+        : series
+            ? session.browseSeriesCategories
+            : session.browseCategories;
     final channels = session.channelsInCategory;
     final vods = session.vodInCategory;
+    final shows = session.seriesInCategory;
     final user = session.userInfo?.username ?? 'user';
     final catTitle = cats.isEmpty
         ? 'All'
@@ -1271,6 +2564,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
             return null;
           },
         ),
+        _JumpEpgNowIntent: CallbackAction<_JumpEpgNowIntent>(
+          onInvoke: (_) {
+            unawaited(_jumpEpgToNow());
+            return null;
+          },
+        ),
       },
       extraShortcuts: {
         const SingleActivator(LogicalKeyboardKey.arrowUp):
@@ -1281,6 +2580,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
             const DirectionalFocusIntent(TraversalDirection.left),
         const SingleActivator(LogicalKeyboardKey.arrowRight):
             const DirectionalFocusIntent(TraversalDirection.right),
+        const SdtvTypingSafeActivator(LogicalKeyboardKey.keyG):
+            const _JumpEpgNowIntent(),
       },
       child: Scaffold(
         body: SafeArea(
@@ -1295,8 +2596,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                       children: [
                         _SectionChip(
                           label: 'LIVE',
-                          selected: !movies,
-                          focused: _sectionFocus && !movies,
+                          selected: _isLive,
+                          focused: _sectionFocus && _isLive,
                         ),
                         const SizedBox(width: 8),
                         _SectionChip(
@@ -1304,6 +2605,14 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                           selected: movies,
                           focused: _sectionFocus && movies,
                         ),
+                        if (session.seriesAvailable) ...[
+                          const SizedBox(width: 8),
+                          _SectionChip(
+                            label: 'TV SHOWS',
+                            selected: series,
+                            focused: _sectionFocus && series,
+                          ),
+                        ],
                         const SizedBox(width: 16),
                         Text(
                           'sdtv',
@@ -1378,9 +2687,14 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                               (hiddenN > 0
                                                   ? 'MOVIES · $hiddenN hidden'
                                                   : 'MOVIES'))
-                                          : (hiddenN > 0
-                                              ? 'CATEGORIES · $hiddenN hidden'
-                                              : 'CATEGORIES'),
+                                          : series
+                                              ? (session.seriesError ??
+                                                  (hiddenN > 0
+                                                      ? 'TV SHOWS · $hiddenN hidden'
+                                                      : 'TV SHOWS'))
+                                              : (hiddenN > 0
+                                                  ? 'CATEGORIES · $hiddenN hidden'
+                                                  : 'CATEGORIES'),
                                       style:
                                           theme.textTheme.labelSmall?.copyWith(
                                         color: theme.colorScheme.outline,
@@ -1421,6 +2735,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                         session.selectVodCategory(
                                           cats[i].categoryId,
                                         );
+                                      } else if (series) {
+                                        session.selectSeriesCategory(
+                                          cats[i].categoryId,
+                                        );
                                       } else {
                                         _selectCategoryKeepingChanPos(
                                           cats[i].categoryId,
@@ -1439,124 +2757,71 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                               .withValues(alpha: 0.3),
                         ),
                         Expanded(
-                          child: ListView.builder(
-                            controller: _chanScroll,
-                            padding: const EdgeInsets.fromLTRB(16, 8, 24, 24),
-                            itemCount: movies
-                                ? (vods.isEmpty ? 2 : vods.length + 1)
-                                : (channels.isEmpty ? 2 : channels.length + 1),
-                            itemBuilder: (context, index) {
-                              if (index == 0) {
-                                return SizedBox(
-                                  height: _listHeaderExtent,
-                                  child: Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: Text(
-                                      movies
-                                          ? 'TITLES · $catTitle'
-                                          : 'CHANNELS · $catTitle',
-                                      style:
-                                          theme.textTheme.labelSmall?.copyWith(
-                                        color: theme.colorScheme.outline,
-                                        letterSpacing: 1.1,
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              }
-                              if (!movies && channels.isEmpty) {
-                                final emptyMsg = session.isFavoritesCategory
-                                    ? 'No favorites yet.\n'
-                                        'Open any category · highlight a channel · Y to star'
-                                    : 'No channels.\n→ not needed · A opens list · ← back';
-                                return Text(
-                                  emptyMsg,
-                                  style: theme.textTheme.bodyLarge,
-                                );
-                              }
-                              if (movies && vods.isEmpty) {
-                                return Text(
-                                  session.vodError ??
-                                      (session.vodCatalogReady
-                                          ? 'No movies in this category.'
-                                          : 'Loading movies…'),
-                                  style: theme.textTheme.bodyLarge,
-                                );
-                              }
-                              if (movies) {
-                                final i = index - 1;
-                                final v = vods[i];
-                                final selected = _chanIndex == i;
-                                final focused = _column == 1 && selected;
-                                final saved = session.vodResumeSeconds(v);
-                                return SizedBox(
-                                  height: _rowExtent,
-                                  child: Padding(
-                                    padding: const EdgeInsets.only(bottom: 6),
-                                    child: _BrowseTile(
-                                      label: v.name,
-                                      subtitle: saved > 15
-                                          ? 'Resume ${Duration(seconds: saved).inMinutes}m'
-                                          : (v.plot.isEmpty ? v.rating : v.plot),
-                                      icon: Icons.movie_outlined,
-                                      selected: focused,
-                                      dimSelected: selected && !focused,
-                                      onTap: () async {
+                          child: movies
+                              ? _moviesPane(theme, catTitle, vods)
+                              : series
+                                  ? _seriesPane(theme, catTitle, shows)
+                                  : EpgGuidePane(
+                                      channels: channels,
+                                      channelIndex: _chanIndex,
+                                      categoryTitle: catTitle,
+                                      windowStart: _epgWindowStart,
+                                      focusTime: _epgFocusTime,
+                                      now: DateTime.now(),
+                                      epgFor: session.cachedFullEpg,
+                                      scrollController: _epgScroll,
+                                      gridFocused:
+                                          !_sectionFocus && _column == 1,
+                                      m3u: session.useM3u &&
+                                          !session.mockCatalog &&
+                                          !session.useDemo,
+                                      emptyMessage: session.isFavoritesCategory
+                                          ? 'No favorites yet.\n'
+                                              'Open any category · highlight a channel · Y to star'
+                                          : 'No channels in this category.',
+                                      onProgramWidth: (w) {
+                                        if ((w - _epgProgramWidth).abs() < 1) {
+                                          return;
+                                        }
+                                        _epgProgramWidth = w;
+                                      },
+                                      onTapChannel: (i) {
                                         setState(() {
-                                          _column = 1;
                                           _chanIndex = i;
+                                          _column = 1;
+                                          _sectionFocus = false;
                                         });
-                                        await _activate();
+                                        _rememberChanIndex();
+                                        session.prefetchFullEpgAround(
+                                          channels,
+                                          i,
+                                        );
+                                      },
+                                      onLongPressChannel: (i) {
+                                        setState(() {
+                                          _chanIndex = i;
+                                          _column = 1;
+                                          _sectionFocus = false;
+                                        });
+                                        _rememberChanIndex();
+                                        unawaited(_toggleFavorite());
+                                      },
+                                      onTapProgram: (i, p) {
+                                        setState(() {
+                                          _chanIndex = i;
+                                          _column = 1;
+                                          _sectionFocus = false;
+                                          _epgFocusTime = p.isLiveAt(
+                                            DateTime.now(),
+                                          )
+                                              ? DateTime.now()
+                                              : p.start.add(
+                                                  const Duration(minutes: 1),
+                                                );
+                                        });
+                                        unawaited(_playFocusedLive());
                                       },
                                     ),
-                                  ),
-                                );
-                              }
-                              final i = index - 1;
-                              final ch = channels[i];
-                              // Always mark current row so highlight is visible after search jump.
-                              final selected = _chanIndex == i;
-                              final focused = _column == 1 && selected;
-                              final fav = session.isFavorite(ch);
-                              final epgLine = session.shortEpgSubtitle(ch);
-                              return SizedBox(
-                                height: _rowExtent,
-                                child: Padding(
-                                  padding: const EdgeInsets.only(bottom: 6),
-                                  child: _BrowseTile(
-                                    label:
-                                        '${ch.num > 0 ? '${ch.num}. ' : ''}${ch.name}',
-                                    subtitle: epgLine,
-                                    icon: fav
-                                        ? Icons.star_rounded
-                                        : Icons.live_tv_outlined,
-                                    selected: focused,
-                                    dimSelected: selected && !focused,
-                                    onTap: () async {
-                                      setState(() {
-                                        _column = 1;
-                                        _chanIndex = i;
-                                      });
-                                      _rememberChanIndex();
-                                      session.prefetchShortEpgAround(
-                                        channels,
-                                        i,
-                                      );
-                                      await _activate();
-                                    },
-                                    onLongPress: () async {
-                                      setState(() {
-                                        _column = 1;
-                                        _chanIndex = i;
-                                      });
-                                      _rememberChanIndex();
-                                      await _toggleFavorite();
-                                    },
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
                         ),
                       ],
                     ),
@@ -1572,9 +2837,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                       ),
                     ),
                     child: Text(
-                      _column == 1
-                          ? '↑↓ channels · A play · Y favorite · ☰ Search'
-                          : '↑↓ cats · A open · X hide · ☰ Search',
+                      _footerHint,
                       style: theme.textTheme.bodySmall,
                     ),
                   ),
@@ -2132,7 +3395,6 @@ class _BrowseTile extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onTap,
-    this.onLongPress,
     this.icon,
     this.subtitle,
     this.dimSelected = false,
@@ -2143,7 +3405,6 @@ class _BrowseTile extends StatelessWidget {
   final String? subtitle;
   final bool selected;
   final VoidCallback onTap;
-  final VoidCallback? onLongPress;
   final IconData? icon;
 
   /// Soft highlight when this row is the cursor but the other column is focused.
@@ -2188,7 +3449,6 @@ class _BrowseTile extends StatelessWidget {
 
     return GestureDetector(
       onTap: onTap,
-      onLongPress: onLongPress,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 100),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -2253,4 +3513,8 @@ class _BrowseTile extends StatelessWidget {
       ),
     );
   }
+}
+
+class _JumpEpgNowIntent extends Intent {
+  const _JumpEpgNowIntent();
 }

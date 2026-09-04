@@ -2,7 +2,7 @@
 
 **Steam Deck–first IPTV player** with a TiviMate-like couch experience.
 
-Import your Xtream Codes URL, username, and password → browse Live TV (Movies / Series / EPG later) → navigate entirely with a gamepad. No mouse or trackpad-as-pointer required.
+Import your Xtream Codes URL, username, and password → browse Live TV, Movies, and TV Shows (EPG later) → navigate entirely with a gamepad. No mouse or trackpad-as-pointer required.
 
 > **sdtv is a media player only.** It does not provide, host, or distribute any channels, playlists, or streams. You bring your own provider credentials.
 
@@ -25,10 +25,10 @@ Import your Xtream Codes URL, username, and password → browse Live TV (Movies 
 
 ## Status
 
-**Phase 3+.** Deck MVP + live Xtream + **M3U playlists** + **Movies (VOD)**.  
+**Phase 3+.** Deck MVP + live Xtream + **M3U playlists** + **Movies (VOD)** + **TV Shows**.  
 - **Demo** — offline fixtures + public test HLS  
 - **M3U** — paste a public/legal playlist URL (`#EXTINF` catalog)  
-- **Connect** — real Xtream Codes panel (Live + Movies)  
+- **Connect** — real Xtream Codes panel (Live + Movies + TV Shows)  
 
 ### Run
 
@@ -161,9 +161,16 @@ See [docs/STEAM_DECK.md](docs/STEAM_DECK.md). Short version: install Flatpak →
 2. Xtream login (mock then optional live) + live categories/channels  
 3. libmpv playback + channel zap  
 4. ~~Favorites / short EPG (now·next mini guide)~~  
-5. Movies + Series + full EPG grid  
+5. ~~Movies + Series + full EPG grid~~  
 6. Flathub  
 7. *Future:* Flutter HUD over live mpv (transparent overlay / `--wid`) — not Flutter texture video. See [docs/STEAM_DECK.md](docs/STEAM_DECK.md).
+
+### Movies / TV art
+
+1. ~~Poster grid chrome (placeholders, pad 2D nav). Live stays a list.~~  
+2. ~~**Title landing page** (right pane). **A** on a poster opens it — does not start playback. Resume / Play from beginning / Watch trailer. **B** / **←** back to the grid.~~  
+3. ~~Provider `stream_icon` / `cover` + on-disk cache (visible tiles + lookahead; landing poster uses the same cache)~~  
+4. ~~TV Shows tab (same grid → landing → season/episode list)~~
 
 ## License
 

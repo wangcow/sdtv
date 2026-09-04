@@ -1,0 +1,60 @@
+{
+  "9001": {
+    "info": {
+      "name": "Demo Feature",
+      "plot": "A stand-in movie for the title landing page. Public test HLS.",
+      "description": "A stand-in movie for the title landing page.",
+      "director": "Ada Mock",
+      "actors": "Jordan Example, Riley Fixture, Casey Sample",
+      "genre": "Action",
+      "releasedate": "2024",
+      "rating": "7.2",
+      "duration_secs": 5400,
+      "youtube_trailer": "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8",
+      "movie_image": ""
+    },
+    "movie_data": {
+      "stream_id": 9001,
+      "name": "Demo Feature",
+      "category_id": "10"
+    }
+  },
+  "9002": {
+    "info": {
+      "name": "Another Title",
+      "plot": "Second mock action title for the poster grid.",
+      "director": "Sam Placeholder",
+      "actors": "Alex Demo, Morgan Test",
+      "genre": "Thriller",
+      "releasedate": "2023",
+      "rating": "6.4",
+      "duration_secs": 6300,
+      "youtube_trailer": "",
+      "movie_image": ""
+    },
+    "movie_data": {
+      "stream_id": 9002,
+      "name": "Another Title",
+      "category_id": "10"
+    }
+  },
+  "9003": {
+    "info": {
+      "name": "Laugh Track",
+      "plot": "Mock comedy with no trailer on purpose.",
+      "director": "Pat Sitcom",
+      "actors": "Chris Gag, Taylor Punchline, Jordan Callback",
+      "genre": "Comedy",
+      "releasedate": "2022",
+      "rating": "5.8",
+      "duration_secs": 5400,
+      "youtube_trailer": "",
+      "movie_image": ""
+    },
+    "movie_data": {
+      "stream_id": 9003,
+      "name": "Laugh Track",
+      "category_id": "11"
+    }
+  }
+}

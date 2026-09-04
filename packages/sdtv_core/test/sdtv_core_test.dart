@@ -97,6 +97,26 @@ void main() {
       expect(action.first.name, 'Demo Feature');
     });
 
+    test('getVodInfo reads fixture metadata', () async {
+      final fixtureDir = Directory(
+        '${Directory.current.path}/../../tool/mock_xtream/fixtures',
+      );
+      final client = MockXtreamClient(
+        authJson: authJson,
+        liveCategoriesJson: categoriesJson,
+        liveStreamsJson: streamsJson,
+        vodStreamsJson:
+            File('${fixtureDir.path}/vod_streams.json').readAsStringSync(),
+        vodInfoJson:
+            File('${fixtureDir.path}/vod_info.json').readAsStringSync(),
+      );
+      final info = await client.getVodInfo(9001);
+      expect(info.title, 'Demo Feature');
+      expect(info.director, 'Ada Mock');
+      expect(info.cast, contains('Jordan Example'));
+      expect(info.hasTrailer, isTrue);
+    });
+
     test('builds live play URL without exposing secrets in toString of creds',
         () {
       final creds = XtreamCredentials(
@@ -113,6 +133,36 @@ void main() {
         creds.movieStreamUri(9, extension: 'mkv').toString(),
         'http://example.com:8080/movie/u/secret/9.mkv',
       );
+      expect(
+        creds.seriesStreamUri('8101', extension: 'mp4').toString(),
+        'http://example.com:8080/series/u/secret/8101.mp4',
+      );
+    });
+
+    test('lists series categories, shows, and getSeriesInfo', () async {
+      final fixtureDir = Directory(
+        '${Directory.current.path}/../../tool/mock_xtream/fixtures',
+      );
+      final client = MockXtreamClient(
+        authJson: authJson,
+        liveCategoriesJson: categoriesJson,
+        liveStreamsJson: streamsJson,
+        seriesCategoriesJson:
+            File('${fixtureDir.path}/series_categories.json').readAsStringSync(),
+        seriesJson: File('${fixtureDir.path}/series.json').readAsStringSync(),
+        seriesInfoJson:
+            File('${fixtureDir.path}/series_info.json').readAsStringSync(),
+      );
+      final cats = await client.getSeriesCategories();
+      expect(cats.map((c) => c.categoryName), contains('Drama'));
+      final drama = await client.getSeries(categoryId: '20');
+      expect(drama, hasLength(1));
+      expect(drama.single.name, 'Harbor Nights');
+      final info = await client.getSeriesInfo(8001);
+      expect(info.info.title, 'Harbor Nights');
+      expect(info.seasons, hasLength(2));
+      expect(info.firstEpisode?.title, 'Pilot');
+      expect(info.episodeById('8201')?.title, 'Low Tide');
     });
   });
 

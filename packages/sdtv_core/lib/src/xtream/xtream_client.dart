@@ -8,6 +8,8 @@ import '../models/epg_program.dart';
 import '../models/live_channel.dart';
 import '../models/user_info.dart';
 import '../models/vod_item.dart';
+import '../models/vod_info.dart';
+import '../models/series.dart';
 import 'xtream_exception.dart';
 
 /// Abstraction over Xtream player_api so UI can use live or mock clients.
@@ -20,9 +22,20 @@ abstract class XtreamClient {
   /// Short EPG for a live stream (now + next). Empty list if unsupported.
   Future<ShortEpg> getShortEpg(int streamId, {int limit = 4});
 
+  /// Full channel EPG (`get_simple_data_table`). Empty if the panel has none.
+  Future<ShortEpg> getSimpleEpg(int streamId);
+
   Future<List<MediaCategory>> getVodCategories();
   Future<List<VodItem>> getVodStreams({String? categoryId});
   Uri vodPlayUrl(VodItem item);
+
+  /// Title metadata (cast, director, trailer, plot). Falls back to list row.
+  Future<VodInfo> getVodInfo(int vodId);
+
+  Future<List<MediaCategory>> getSeriesCategories();
+  Future<List<SeriesItem>> getSeries({String? categoryId});
+  Future<SeriesCatalog> getSeriesInfo(int seriesId);
+  Uri seriesPlayUrl(SeriesEpisode episode);
 }
 
 /// HTTP implementation of [XtreamClient] against a real provider.
@@ -121,6 +134,28 @@ class HttpXtreamClient implements XtreamClient {
   }
 
   @override
+  Future<ShortEpg> getSimpleEpg(int streamId) async {
+    if (streamId == 0) {
+      return ShortEpg(
+        streamId: streamId,
+        listings: const [],
+        fetchedAt: DateTime.now(),
+      );
+    }
+    final json = await _getJson({
+      ...credentials.authQuery,
+      'action': 'get_simple_data_table',
+      'stream_id': '$streamId',
+    });
+    final listings = _parseEpgListings(json);
+    return ShortEpg(
+      streamId: streamId,
+      listings: listings,
+      fetchedAt: DateTime.now(),
+    );
+  }
+
+  @override
   Future<List<MediaCategory>> getVodCategories() async {
     final json = await _getJson({
       ...credentials.authQuery,
@@ -145,6 +180,65 @@ class HttpXtreamClient implements XtreamClient {
       credentials.movieStreamUri(
         item.streamId,
         extension: item.containerExtension,
+      );
+
+  @override
+  Future<VodInfo> getVodInfo(int vodId) async {
+    final json = await _getJson({
+      ...credentials.authQuery,
+      'action': 'get_vod_info',
+      'vod_id': '$vodId',
+    });
+    if (json is! Map) {
+      throw XtreamException('get_vod_info did not return a JSON object');
+    }
+    final map = json is Map<String, dynamic>
+        ? json
+        : Map<String, dynamic>.from(json);
+    return VodInfo.fromXtreamJson(map);
+  }
+
+  @override
+  Future<List<MediaCategory>> getSeriesCategories() async {
+    final json = await _getJson({
+      ...credentials.authQuery,
+      'action': 'get_series_categories',
+    });
+    return _parseList(json, MediaCategory.fromJson);
+  }
+
+  @override
+  Future<List<SeriesItem>> getSeries({String? categoryId}) async {
+    final query = {
+      ...credentials.authQuery,
+      'action': 'get_series',
+      if (categoryId != null) 'category_id': categoryId,
+    };
+    final json = await _getJson(query);
+    return _parseList(json, SeriesItem.fromJson);
+  }
+
+  @override
+  Future<SeriesCatalog> getSeriesInfo(int seriesId) async {
+    final json = await _getJson({
+      ...credentials.authQuery,
+      'action': 'get_series_info',
+      'series_id': '$seriesId',
+    });
+    if (json is! Map) {
+      throw XtreamException('get_series_info did not return a JSON object');
+    }
+    final map = json is Map<String, dynamic>
+        ? json
+        : Map<String, dynamic>.from(json);
+    return SeriesCatalog.fromXtreamJson(map);
+  }
+
+  @override
+  Uri seriesPlayUrl(SeriesEpisode episode) =>
+      credentials.seriesStreamUri(
+        episode.id,
+        extension: episode.containerExtension,
       );
 
   List<EpgProgram> _parseEpgListings(dynamic json) {

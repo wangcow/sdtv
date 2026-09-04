@@ -215,6 +215,28 @@ class ShortEpg {
     return buf.toString();
   }
 
+  /// Listings that overlap `[start, end)`.
+  List<EpgProgram> inWindow(DateTime start, DateTime end) {
+    if (listings.isEmpty) return const [];
+    final out = <EpgProgram>[];
+    for (final p in listings) {
+      if (p.start.isBefore(end) && p.end.isAfter(start)) out.add(p);
+    }
+    return out;
+  }
+
+  /// Index of the listing covering [t], else the last program that has started.
+  int indexForTime(DateTime t) {
+    if (listings.isEmpty) return 0;
+    var fallback = 0;
+    for (var i = 0; i < listings.length; i++) {
+      final p = listings[i];
+      if (p.isLiveAt(t)) return i;
+      if (!p.start.isAfter(t)) fallback = i;
+    }
+    return fallback;
+  }
+
   /// One-line guide subtitle under a channel name.
   String? guideSubtitle({DateTime? at, bool use24h = false}) {
     final when = at ?? DateTime.now();
