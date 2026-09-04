@@ -120,10 +120,18 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
     final k = event.logicalKey;
     final typing = SdtvTextFocusRegistry.primaryIsTextField;
 
-    // Never steal Space / letters used as pad shortcuts from text fields (search).
-    if (typing && k == LogicalKeyboardKey.space) return false;
+    // OSK / IME: A and Enter type or commit a glyph — do not play the
+    // first search hit. Swallow confirm aliases; let letters reach the field.
     if (typing &&
-        (k == LogicalKeyboardKey.keyM ||
+        (k == LogicalKeyboardKey.enter ||
+            k == LogicalKeyboardKey.numpadEnter ||
+            k == LogicalKeyboardKey.select ||
+            k == LogicalKeyboardKey.gameButtonA)) {
+      return true;
+    }
+    if (typing &&
+        (k == LogicalKeyboardKey.space ||
+            k == LogicalKeyboardKey.keyM ||
             k == LogicalKeyboardKey.keyF ||
             k == LogicalKeyboardKey.slash)) {
       return false;
@@ -171,6 +179,24 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
   }
 
   void _onEdge(GamepadEdge edge) {
+    // Joystick A/Y/X while the OSK is typing into search.
+    if (SdtvTextFocusRegistry.primaryIsTextField) {
+      switch (edge) {
+        case GamepadEdge.confirm:
+        case GamepadEdge.favorite:
+        case GamepadEdge.mute:
+        case GamepadEdge.pageUp:
+        case GamepadEdge.pageDown:
+        case GamepadEdge.menu:
+        case GamepadEdge.up:
+        case GamepadEdge.down:
+        case GamepadEdge.left:
+        case GamepadEdge.right:
+          return;
+        case GamepadEdge.back:
+          break;
+      }
+    }
     final isDir = edge == GamepadEdge.up ||
         edge == GamepadEdge.down ||
         edge == GamepadEdge.left ||
