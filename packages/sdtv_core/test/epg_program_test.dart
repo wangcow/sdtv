@@ -93,5 +93,21 @@ void main() {
       expect(epg.nowAt(), isNotNull);
       expect(epg.nextAt(), isNotNull);
     });
+
+    test('getSimpleEpg returns a full-day table', () async {
+      final client = MockXtreamClient(
+        authJson: '{}',
+        liveCategoriesJson: '[]',
+        liveStreamsJson: '[]',
+      );
+      final epg = await client.getSimpleEpg(101);
+      expect(epg.listings.length, greaterThan(20));
+      expect(epg.nowAt(), isNotNull);
+      final win = epg.inWindow(
+        DateTime.now().subtract(const Duration(hours: 1)),
+        DateTime.now().add(const Duration(hours: 2)),
+      );
+      expect(win, isNotEmpty);
+    });
   });
 }

@@ -58,6 +58,15 @@ class XtreamCredentials {
     );
   }
 
+  /// Series episode play URL (`/series/user/pass/id.ext`).
+  Uri seriesStreamUri(String episodeId, {String extension = 'mp4'}) {
+    final ext = extension.trim().replaceAll('.', '');
+    final id = episodeId.trim();
+    return Uri.parse(
+      '$baseUrl/series/$username/$password/$id.${ext.isEmpty ? 'mp4' : ext}',
+    );
+  }
+
   Map<String, String> get authQuery => {
         'username': username,
         'password': password,

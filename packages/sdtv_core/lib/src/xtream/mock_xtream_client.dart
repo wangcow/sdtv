@@ -6,6 +6,8 @@ import '../models/epg_program.dart';
 import '../models/live_channel.dart';
 import '../models/user_info.dart';
 import '../models/vod_item.dart';
+import '../models/vod_info.dart';
+import '../models/series.dart';
 import 'xtream_client.dart';
 import 'xtream_exception.dart';
 
@@ -17,6 +19,10 @@ class MockXtreamClient implements XtreamClient {
     required this.liveStreamsJson,
     this.vodCategoriesJson = '[]',
     this.vodStreamsJson = '[]',
+    this.vodInfoJson = '{}',
+    this.seriesCategoriesJson = '[]',
+    this.seriesJson = '[]',
+    this.seriesInfoJson = '{}',
     XtreamCredentials? credentials,
   }) : credentials = credentials ??
             XtreamCredentials(
@@ -50,6 +56,10 @@ class MockXtreamClient implements XtreamClient {
   final String liveStreamsJson;
   final String vodCategoriesJson;
   final String vodStreamsJson;
+  final String vodInfoJson;
+  final String seriesCategoriesJson;
+  final String seriesJson;
+  final String seriesInfoJson;
   final XtreamCredentials credentials;
 
   @override
@@ -115,6 +125,93 @@ class MockXtreamClient implements XtreamClient {
   @override
   Uri vodPlayUrl(VodItem item) => mockPlaybackUri;
 
+  @override
+  Future<VodInfo> getVodInfo(int vodId) async {
+    VodItem? fallback;
+    try {
+      final all = await getVodStreams();
+      for (final v in all) {
+        if (v.streamId == vodId) {
+          fallback = v;
+          break;
+        }
+      }
+    } catch (_) {}
+
+    try {
+      final root = jsonDecode(vodInfoJson);
+      if (root is Map) {
+        final raw = root['$vodId'] ?? root[vodId];
+        if (raw is Map) {
+          final map = raw is Map<String, dynamic>
+              ? raw
+              : Map<String, dynamic>.from(raw);
+          return VodInfo.fromXtreamJson(map, fallback: fallback);
+        }
+      }
+    } catch (_) {}
+
+    if (fallback != null) return VodInfo.fromVodItem(fallback);
+    return VodInfo(title: 'Title $vodId');
+  }
+
+  @override
+  Future<List<MediaCategory>> getSeriesCategories() async {
+    return _parseCategories(seriesCategoriesJson);
+  }
+
+  @override
+  Future<List<SeriesItem>> getSeries({String? categoryId}) async {
+    final json = jsonDecode(seriesJson);
+    if (json is! List) {
+      throw XtreamException('Series fixture must be an array');
+    }
+    final all = json.map((item) {
+      if (item is Map<String, dynamic>) return SeriesItem.fromJson(item);
+      if (item is Map) {
+        return SeriesItem.fromJson(Map<String, dynamic>.from(item));
+      }
+      throw XtreamException('Series row must be an object');
+    }).toList();
+    if (categoryId == null) return all;
+    return all.where((s) => s.categoryId == categoryId).toList();
+  }
+
+  @override
+  Future<SeriesCatalog> getSeriesInfo(int seriesId) async {
+    SeriesItem? fallback;
+    try {
+      final all = await getSeries();
+      for (final s in all) {
+        if (s.seriesId == seriesId) {
+          fallback = s;
+          break;
+        }
+      }
+    } catch (_) {}
+    try {
+      final root = jsonDecode(seriesInfoJson);
+      if (root is Map) {
+        final raw = root['$seriesId'] ?? root[seriesId];
+        if (raw is Map) {
+          final map = raw is Map<String, dynamic>
+              ? raw
+              : Map<String, dynamic>.from(raw);
+          return SeriesCatalog.fromXtreamJson(map, fallback: fallback);
+        }
+      }
+    } catch (_) {}
+    return SeriesCatalog(
+      info: fallback != null
+          ? VodInfo.fromVodItem(fallback.asVodItem)
+          : VodInfo(title: 'Series $seriesId'),
+      seasons: const [],
+    );
+  }
+
+  @override
+  Uri seriesPlayUrl(SeriesEpisode episode) => mockPlaybackUri;
+
   /// Synthetic now/next so demo mode exercises the mini guide.
   @override
   Future<ShortEpg> getShortEpg(int streamId, {int limit = 4}) async {
@@ -138,6 +235,39 @@ class MockXtreamClient implements XtreamClient {
           channelId: 'mock.$streamId',
         ),
       );
+    }
+    return ShortEpg(
+      streamId: streamId,
+      listings: listings,
+      fetchedAt: now,
+    );
+  }
+
+  /// ~24h of 30/60-minute slots so the TV Guide grid has something to show.
+  @override
+  Future<ShortEpg> getSimpleEpg(int streamId) async {
+    final now = DateTime.now();
+    final slotMin = now.minute < 30 ? 0 : 30;
+    final slotStart = DateTime(now.year, now.month, now.day, now.hour, slotMin);
+    final origin = slotStart.subtract(const Duration(hours: 4));
+    final names = _mockProgramNames(streamId);
+    final listings = <EpgProgram>[];
+    var t = origin;
+    for (var i = 0; i < 48; i++) {
+      final durMin = (i + streamId) % 3 == 0 ? 60 : 30;
+      final end = t.add(Duration(minutes: durMin));
+      listings.add(
+        EpgProgram(
+          id: 'mock-$streamId-$i',
+          title: names[i % names.length],
+          description:
+              'Mock TV Guide listing for stream $streamId · ${names[i % names.length]}.',
+          start: t,
+          end: end,
+          channelId: 'mock.$streamId',
+        ),
+      );
+      t = end;
     }
     return ShortEpg(
       streamId: streamId,

@@ -4,11 +4,24 @@
 
 Couch navigation is the core product requirement. Every screen must work with a **gamepad** and a **keyboard** (desktop / future Flatpak users).
 
-## Live / Movies
+## Live / Movies / TV Shows
 
-Top chips: **LIVE** · **MOVIES**. From the first category, **↑** focuses the chips · **←/→** switch · **↓** or **A** back to the list. Movies use Xtream `get_vod_*` (M3U has no movie catalog). Demo uses a mock list + public HLS.
+Top chips: **LIVE** · **MOVIES** · **TV SHOWS**. From the first category, **↑** focuses the chips · **←/→** switch · **↓** or **A** back to the list. Movies use Xtream `get_vod_*`; TV Shows use `get_series_*` (M3U has neither catalog). Demo uses a mock list + public HLS.
 
-While a movie is playing: **A** menu (Resume, ±10s, subs, audio, mute, back) · **←/→** or **LB/RB** seek 10s · **B** back to Movies. Position is saved every 10s (continue watching). No live-edge reload.
+**LIVE** right pane is the **TV Guide** (channel names + program timeline). It replaces the old channel list / now·next miniguide. **←** on the first program of a row returns to categories · **↑↓** channels · **→** next program · **A** plays the live channel. **B** jumps to now when the timeline is ahead of now; **B** again (already at now) returns to categories. **LB/RB** jump 2 hours · **G** also jumps the window to now.
+
+Movies and TV Shows right panes are a **poster grid**. **←** on the first column of a row returns to categories · **↑↓** move by row · **→** stays in the row · **A** opens the **title landing page** (does not play) · **B** back to categories.
+
+**Title landing:** poster, title, description, director, cast, provider rating. **↑↓** actions · **A** select · **B** / **←** back to the same poster.
+
+- **Movies:** **Resume** (if progress) · **Play from beginning** · **Watch trailer** (hidden when the panel has none).
+- **TV Shows:** **Resume** last episode (if any) · **Play from beginning** (S1E1) · **Seasons & episodes** · **Watch trailer** (hidden when none).
+
+YouTube trailers open in the system/YouTube client (TiviMate-style), not mpv.
+
+**Seasons & episodes (TV Shows):** **↑↓** pick an episode · **LB/RB** change season · **A** plays that episode · **B** / **←** back to the title. Resume progress is per episode.
+
+While a movie or episode is playing: **A** menu (Resume, ±10s, subs, audio, mute, back) · **←/→** or **LB/RB** seek 10s · **B** back to the title. Position is saved every 10s (continue watching). No live-edge reload.
 
 ## Guide (browse)
 
@@ -21,7 +34,10 @@ While a movie is playing: **A** menu (Resume, ±10s, subs, audio, mute, back) ·
 | Favorite channel | Y | F |
 | Hide category | X (guide) | M (guide) |
 | Search | ☰ Start → Search | `/` or Ctrl+F |
-| Page jump | LB / RB | PageUp / PageDown |
+| Jump guide to now | — | `G` |
+| Page jump / EPG time | LB / RB | PageUp / PageDown |
+
+On the **category column** (Live, Movies, and TV Shows): **B** jumps to the top of the list. **B** again (already at the top) opens the in-page menu (Search, Switch playlist, …). **☰ Start** still opens that menu immediately. From the Live guide, **B** snaps to now if you have moved forward in time, then **B** returns to categories. From the poster column, **B** returns to categories.
 
 ### Favorites
 
@@ -37,10 +53,9 @@ While a movie is playing: **A** menu (Resume, ±10s, subs, audio, mute, back) ·
 
 ### Last played
 
-- Starting playback (or zapping to a channel) saves **guide category + channel** for that playlist/panel.
-- That includes **★ Favorites** — if you were in Favorites, reopen lands there (not the provider category where the channel also lives).
-- On next connect / app launch, the guide opens on that category with the channel focused (channel column selected when resume works).
-- If the channel was unstarred since last play, resume falls back to its provider category.
+- Starting playback (or zapping) still saves last-played for About / continue-watching.
+- **Launch does not reopen that live category.** Search-jumping into e.g. 24/7 T-Z and quitting must not pin the guide there forever.
+- Cold start restores the last **LIVE / MOVIES / TV SHOWS tab**. Live opens on **★ Favorites** (or the first visible category) on the category column. Movies and TV Shows restore the last category you were browsing in that tab.
 
 ### Saved playlists
 
@@ -78,15 +93,19 @@ Flutter keeps reading the pad (Deck); mpv also has keyboard maps when it has foc
 
 Zap walks the **current list** (★ Favorites or the category you played from).
 
-### Mini guide (short EPG — now / next)
+### TV Guide (Live right pane)
 
-TiviMate-style banner on the mpv OSD:
+The Live tab **is** the EPG grid — not a separate overlay and not a channel list with now/next subtitles.
 
-- **On channel open** and **after each successful zap**: channel name, **NOW** (time range + title + progress), **NEXT** (start + title).
-- Data from Xtream `get_short_epg` (demo/mock synthesizes programs). **M3U** has no panel EPG — channel name only.
-- In the **guide**, focused channels prefetch now/next; the current program appears as a **subtitle** under the channel name when cached.
+- Left: categories (including ★ Favorites). **→** / **A** enters the grid.
+- Right: channel column + program timeline. Bottom strip is the focused program (title, time, description).
+- **↑↓** channels · **←→** programs · **←** on the first program returns to categories · **LB/RB** jump 2 hours · **G** jump to now · **A** plays **live** · **B** now (if the timeline is ahead) then categories
+- A vertical line marks **now**. Demo/mock synthesizes a day’s listings. Real Xtream uses `get_simple_data_table` (falls back to `get_short_epg`). **M3U** has no panel EPG — channel names only.
+- Selecting a past or future program still plays **live** (no catch-up in this phase)
 
-Full EPG grid / program search is later.
+While **watching**, mpv still gets a compact NOW/NEXT OSD banner on zap (Flutter is covered). That is not the browse miniguide.
+
+Program search in the Search overlay is later.
 
 ### Watch menu (navigable pause UI)
 

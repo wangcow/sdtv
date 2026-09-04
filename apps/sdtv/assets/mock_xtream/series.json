@@ -1,0 +1,26 @@
+[
+  {
+    "series_id": 8001,
+    "name": "Harbor Nights",
+    "category_id": "20",
+    "cover": "",
+    "plot": "A mock prestige drama for the TV Shows tab.",
+    "cast": "Avery Dock, Quinn Harbor",
+    "director": "Riley Showrunner",
+    "genre": "Drama",
+    "releaseDate": "2024",
+    "rating": "8.1"
+  },
+  {
+    "series_id": 8002,
+    "name": "Signal Loss",
+    "category_id": "21",
+    "cover": "",
+    "plot": "Mock sci-fi series.",
+    "cast": "Morgan Static, Casey Drift",
+    "director": "Pat Frequency",
+    "genre": "Sci-Fi",
+    "releaseDate": "2023",
+    "rating": "7.4"
+  }
+]

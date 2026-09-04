@@ -69,7 +69,7 @@ flutter run -d linux
 
 ### Watching channels (Phase A: external mpv)
 
-Selecting a channel **starts fullscreen `mpv`**, then returns to the channel list when mpv quits.
+Selecting a channel **starts fullscreen `mpv`**, then returns to the TV Guide when mpv quits.
 
 - Install **mpv** on the Deck (Desktop Mode → **Discover** → search **mpv** → install Flathub app `io.mpv.Mpv`).  
   Discover installs a **Flatpak**, not `/usr/bin/mpv` — that is normal; sdtv looks for Flatpak too.

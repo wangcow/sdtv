@@ -1,0 +1,66 @@
+{
+  "8001": {
+    "info": {
+      "name": "Harbor Nights",
+      "plot": "A mock prestige drama for the TV Shows tab.",
+      "director": "Riley Showrunner",
+      "actors": "Avery Dock, Quinn Harbor, Sam Pier",
+      "genre": "Drama",
+      "releasedate": "2024",
+      "rating": "8.1",
+      "youtube_trailer": "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8",
+      "cover": ""
+    },
+    "episodes": {
+      "1": [
+        {
+          "id": "8101",
+          "episode_num": 1,
+          "title": "Pilot",
+          "container_extension": "mp4",
+          "info": { "plot": "The harbor goes quiet.", "duration_secs": 2400 }
+        },
+        {
+          "id": "8102",
+          "episode_num": 2,
+          "title": "Fog Line",
+          "container_extension": "mp4",
+          "info": { "plot": "A second night.", "duration_secs": 2460 }
+        }
+      ],
+      "2": [
+        {
+          "id": "8201",
+          "episode_num": 1,
+          "title": "Low Tide",
+          "container_extension": "mp4",
+          "info": { "plot": "Season two opens.", "duration_secs": 2520 }
+        }
+      ]
+    }
+  },
+  "8002": {
+    "info": {
+      "name": "Signal Loss",
+      "plot": "Mock sci-fi series.",
+      "director": "Pat Frequency",
+      "actors": "Morgan Static, Casey Drift",
+      "genre": "Sci-Fi",
+      "releasedate": "2023",
+      "rating": "7.4",
+      "youtube_trailer": "",
+      "cover": ""
+    },
+    "episodes": {
+      "1": [
+        {
+          "id": "8301",
+          "episode_num": 1,
+          "title": "Static",
+          "container_extension": "mp4",
+          "info": { "plot": "The signal dies.", "duration_secs": 2700 }
+        }
+      ]
+    }
+  }
+}
