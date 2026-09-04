@@ -61,6 +61,7 @@ class _SdtvAppState extends State<SdtvApp> {
     // One joystick owner for the whole app. Pages only push/pop pad layers
     // (SdtvInputScope) so the player never fights browse for /dev/input/js*.
     return SdtvGamepadBinding(
+      enabled: sdtvGamepadBindingEnabledByDefault(),
       onMetricsChanged: _onMetricsChanged,
       child: MaterialApp(
         title: 'sdtv',

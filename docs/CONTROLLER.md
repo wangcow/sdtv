@@ -20,12 +20,12 @@ While a movie is playing: **A** menu (Resume, ±10s, subs, audio, mute, back) ·
 | Menu | Start (☰) | Context menu / F1 |
 | Favorite channel | Y | F |
 | Hide category | X (guide) | M (guide) |
-| Search | ☰ → Search | `/` or Ctrl+F |
+| Search | ☰ Start → Search | `/` or Ctrl+F |
 | Page jump | LB / RB | PageUp / PageDown |
 
 ### Favorites
 
-- **Y** (or **F**, long-press on touch) toggles a star on the focused channel.
+- **Y** (or **F**, long-press on touch) stars the focused channel. Y again on a starred channel asks **Keep / Remove** (A confirms, B keeps).
 - **★ Favorites** is pinned at the top of the category list.
 - Stars are stored locally, scoped per playlist/panel.
 
@@ -51,9 +51,9 @@ While a movie is playing: **A** menu (Resume, ±10s, subs, audio, mute, back) ·
 
 ### Search
 
-- **☰ → Search** or **`/`** / **Ctrl+F** opens guide search.
+- **☰ Start → Search** (Search is the first menu row) or keyboard **`/`** / **Ctrl+F** opens guide search. The guide footer shows **☰ Search**, not `/`.
 - Filters **visible** categories + channels (hidden cats excluded). Type with keyboard or Deck OSK (Steam+X).
-- **↑↓** move results · **A** on a channel **plays** it · **A** on a category opens that list · **B** closes.
+- Deck OSK (Steam+X): **A** types a letter and does **not** leave the box. When finished, **B** (or **RB**) moves to the result list, then **A** jumps to that category/channel in the guide (does not play yet). **B** again closes search.
 - Result model includes `GuideSearchKind.epg` for future program search — same UI.
 
 ## Player chrome (external mpv — daily)

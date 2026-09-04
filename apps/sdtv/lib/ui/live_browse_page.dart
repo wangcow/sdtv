@@ -45,11 +45,17 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   bool _aboutOpen = false;
   bool _manageCatsOpen = false;
   bool _searchOpen = false;
+  /// False while the query field should own the pad (Deck OSK). A/D-pad
+  /// must not play or unfocus until the user leaves the field (B / RB).
+  bool _searchBrowseResults = false;
   bool _switchSourceOpen = false;
+  bool _unfavOpen = false;
   int _menuIndex = 0;
   int _manageIndex = 0;
   int _searchIndex = 0;
   int _switchSourceIndex = 0;
+  int _unfavIndex = 0;
+  LiveChannel? _unfavChannel;
 
   final _catScroll = ScrollController();
   final _chanScroll = ScrollController();
@@ -109,6 +115,14 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   SessionController get session => widget.session;
 
+  bool get _overlayOpen =>
+      _menuOpen ||
+      _aboutOpen ||
+      _manageCatsOpen ||
+      _searchOpen ||
+      _switchSourceOpen ||
+      _unfavOpen;
+
   bool _acceptNav() {
     final now = DateTime.now();
     if (_lastNavAt != null && now.difference(_lastNavAt!) < _navCooldown) {
@@ -124,6 +138,22 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     session.addListener(_onSession);
     _searchCtrl.addListener(_onSearchQueryChanged);
     SdtvTextFocusRegistry.register(_searchFocus);
+    _searchFocus.onKeyEvent = (node, event) {
+      if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+        return KeyEventResult.ignored;
+      }
+      final k = event.logicalKey;
+      // OSK / IME send Tab, Enter, and gamepad A together with the glyph.
+      // Never traverse away from the query field on those.
+      if (k == LogicalKeyboardKey.tab ||
+          k == LogicalKeyboardKey.enter ||
+          k == LogicalKeyboardKey.numpadEnter ||
+          k == LogicalKeyboardKey.gameButtonA ||
+          k == LogicalKeyboardKey.select) {
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    };
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _restoreGuideLanding();
@@ -194,6 +224,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     _searchCtrl.removeListener(_onSearchQueryChanged);
     SdtvTextFocusRegistry.unregister(_searchFocus);
     _searchCtrl.dispose();
+    _searchFocus.onKeyEvent = null;
     _searchFocus.dispose();
     _catScroll.dispose();
     _chanScroll.dispose();
@@ -207,8 +238,14 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (!_searchOpen) return;
     final hits = session.searchGuide(_searchCtrl.text);
     setState(() {
+      // New glyphs = still typing. Re-lock so OSK A cannot play a hit.
+      _searchBrowseResults = false;
       _searchHits = hits;
       _searchIndex = hits.isEmpty ? 0 : _searchIndex.clamp(0, hits.length - 1);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_searchOpen || _searchBrowseResults) return;
+      if (!_searchFocus.hasFocus) _searchFocus.requestFocus();
     });
   }
 
@@ -386,24 +423,61 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   void _moveVertical(int delta) {
     // Watching + menu open: D-pad navigates the pause menu (not volume).
-    if (session.isWatchMenuActive &&
-        !_menuOpen &&
-        !_aboutOpen &&
-        !_manageCatsOpen &&
-        !_searchOpen &&
-        !_switchSourceOpen) {
+    if (session.isWatchMenuActive && !_overlayOpen) {
       unawaited(session.watchMenuMove(delta));
       return;
     }
     // Watching, menu closed: ↑↓ = volume.
     // delta < 0 = up → louder; delta > 0 = down → quieter.
-    if (session.isWatchingExternal &&
-        !_menuOpen &&
-        !_aboutOpen &&
-        !_manageCatsOpen &&
-        !_searchOpen &&
-        !_switchSourceOpen) {
+    if (session.isWatchingExternal && !_overlayOpen) {
       unawaited(session.watchVolumeDelta(delta < 0 ? 5 : -5));
+      return;
+    }
+
+    // Overlays own ↑↓. Must run before LIVE/MOVIES header focus, or ↑ from
+    // Manage categories (with the first guide category selected) leaks out.
+    if (_aboutOpen) return;
+    if (_switchSourceOpen) {
+      if (!_acceptNav()) return;
+      final n = session.savedSources.length;
+      if (n == 0) return;
+      setState(() {
+        _switchSourceIndex = (_switchSourceIndex + delta).clamp(0, n - 1);
+      });
+      _scrollTo(_switchScroll, _switchSourceIndex, itemExtent: _rowExtent);
+      return;
+    }
+    if (_searchOpen) {
+      // OSK uses D-pad to pick keys. Do not steal the field until B / RB.
+      if (!_searchBrowseResults) return;
+      if (!_acceptNav()) return;
+      if (_searchHits.isEmpty) return;
+      setState(() {
+        _searchIndex =
+            (_searchIndex + delta).clamp(0, _searchHits.length - 1);
+      });
+      _scrollToSearchIndex(_searchIndex);
+      return;
+    }
+    if (_manageCatsOpen) {
+      if (!_acceptNav()) return;
+      final n = session.categories.length;
+      if (n == 0) return;
+      final next = (_manageIndex + delta).clamp(0, n - 1);
+      setState(() => _manageIndex = next);
+      _scrollToManageIndex(next);
+      return;
+    }
+    if (_unfavOpen) {
+      if (!_acceptNav()) return;
+      setState(() => _unfavIndex = (_unfavIndex + delta).clamp(0, 1));
+      return;
+    }
+    if (_menuOpen) {
+      if (!_acceptNav()) return;
+      setState(() {
+        _menuIndex = (_menuIndex + delta).clamp(0, _menuItems.length - 1);
+      });
       return;
     }
 
@@ -418,49 +492,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
     if (delta < 0 && _column == 0 && _catIndex == 0) {
       setState(() => _sectionFocus = true);
-      return;
-    }
-
-    // Menu / about / manage / search / switch overlays own the D-pad.
-    if (_aboutOpen) return;
-    if (_switchSourceOpen) {
-      final n = session.savedSources.length;
-      if (n == 0) return;
-      setState(() {
-        _switchSourceIndex = (_switchSourceIndex + delta).clamp(0, n - 1);
-      });
-      _scrollTo(_switchScroll, _switchSourceIndex, itemExtent: _rowExtent);
-      return;
-    }
-    if (_searchOpen) {
-      if (_searchHits.isEmpty) return;
-      // Leave the text field so arrows move results, not caret.
-      final wasTyping = _searchFocus.hasFocus;
-      _searchFocus.unfocus();
-      setState(() {
-        // First D-pad from the field keeps index 0 so the highlight is obvious.
-        if (wasTyping && _searchIndex == 0 && delta > 0) {
-          _searchIndex = 0;
-        } else {
-          _searchIndex =
-              (_searchIndex + delta).clamp(0, _searchHits.length - 1);
-        }
-      });
-      _scrollToSearchIndex(_searchIndex);
-      return;
-    }
-    if (_manageCatsOpen) {
-      final n = session.categories.length;
-      if (n == 0) return;
-      final next = (_manageIndex + delta).clamp(0, n - 1);
-      setState(() => _manageIndex = next);
-      _scrollToManageIndex(next);
-      return;
-    }
-    if (_menuOpen) {
-      setState(() {
-        _menuIndex = (_menuIndex + delta).clamp(0, _menuItems.length - 1);
-      });
       return;
     }
 
@@ -522,42 +553,22 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   void _moveHorizontal(int delta) {
     // Watching + menu: ←/→ adjust current row (subs / audio / mute).
-    if (session.isWatchMenuActive &&
-        !_menuOpen &&
-        !_aboutOpen &&
-        !_manageCatsOpen &&
-        !_searchOpen &&
-        !_switchSourceOpen) {
+    if (session.isWatchMenuActive && !_overlayOpen) {
       unawaited(session.watchMenuAdjust(delta));
       return;
     }
-    if (_sectionFocus &&
-        !session.isWatchingExternal &&
-        !_menuOpen &&
-        !_aboutOpen &&
-        !_manageCatsOpen &&
-        !_searchOpen &&
-        !_switchSourceOpen) {
+    if (_sectionFocus && !session.isWatchingExternal && !_overlayOpen) {
       unawaited(_switchSection(delta > 0 ? GuideSection.movies : GuideSection.live));
       return;
     }
 
     // Watching, menu closed: ←/→ = previous / next channel (or VOD seek).
-    if (session.isWatchingExternal &&
-        !_menuOpen &&
-        !_aboutOpen &&
-        !_manageCatsOpen &&
-        !_searchOpen &&
-        !_switchSourceOpen) {
+    if (session.isWatchingExternal && !_overlayOpen) {
       unawaited(session.watchChannelAdjacent(delta));
       return;
     }
 
-    if (_menuOpen ||
-        _aboutOpen ||
-        _manageCatsOpen ||
-        _searchOpen ||
-        _switchSourceOpen) {
+    if (_overlayOpen) {
       return;
     }
     if (!_acceptNav()) return;
@@ -585,7 +596,14 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
     // Guide: shoulders move category or channel list like page jumps.
-    if (_menuOpen || _aboutOpen) return;
+    if (_searchOpen && !_searchBrowseResults) {
+      _enterSearchResults();
+      return;
+    }
+    if (_overlayOpen) {
+      _moveVertical(delta < 0 ? -1 : 1);
+      return;
+    }
     if (_column == 0) {
       _moveVertical(delta);
     } else {
@@ -606,15 +624,16 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
     // While mpv is up: A opens/activates the watch menu (not the guide menu).
     if (session.isWatchingExternal) {
-      if (_menuOpen ||
-          _aboutOpen ||
-          _manageCatsOpen ||
-          _searchOpen ||
-          _switchSourceOpen) {
+      if (_overlayOpen) {
         await session.watchQuit();
       } else {
         await session.watchActivate();
       }
+      return;
+    }
+
+    if (_unfavOpen) {
+      await _resolveUnfav();
       return;
     }
 
@@ -629,6 +648,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
 
     if (_searchOpen) {
+      // OSK A selects a letter. Ignore until the user has left the field.
+      if (!_searchBrowseResults) return;
       await _activateSearchHit();
       return;
     }
@@ -759,11 +780,19 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       unawaited(session.watchBack());
       return;
     }
+    if (_unfavOpen) {
+      _closeUnfav();
+      return;
+    }
     if (_aboutOpen) {
       setState(() => _aboutOpen = false);
       return;
     }
     if (_searchOpen) {
+      if (!_searchBrowseResults && _searchCtrl.text.trim().isNotEmpty) {
+        _enterSearchResults();
+        return;
+      }
       _closeSearch();
       return;
     }
@@ -801,6 +830,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   void _openMenu() {
     // ☰ / Start always opens menu (or closes overlay if one is up).
+    if (_unfavOpen) {
+      _closeUnfav();
+      return;
+    }
     if (_aboutOpen) {
       setState(() => _aboutOpen = false);
       return;
@@ -846,7 +879,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _menuOpen = false;
       _aboutOpen = false;
       _manageCatsOpen = false;
+      _unfavOpen = false;
+      _unfavChannel = null;
       _searchOpen = true;
+      _searchBrowseResults = false;
       _searchIndex = 0;
       _searchHits = session.searchGuide(_searchCtrl.text);
     });
@@ -868,8 +904,20 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     _searchFocus.unfocus();
     setState(() {
       _searchOpen = false;
+      _searchBrowseResults = false;
       _searchIndex = 0;
     });
+  }
+
+  void _enterSearchResults() {
+    if (!_searchOpen) return;
+    _searchFocus.unfocus();
+    setState(() => _searchBrowseResults = true);
+    if (_searchHits.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _searchOpen) _scrollToSearchIndex(_searchIndex);
+      });
+    }
   }
 
   Future<void> _activateSearchHit() async {
@@ -934,17 +982,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         _column = 1;
         _chanIndex = chIdx;
       });
+      session.prefetchShortEpgAround(session.channelsInCategory, chIdx);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _scrollToChannelIndex(chIdx);
       });
-      // Play immediately — search is for getting to content fast.
-      final err = await session.watchChannel(hit.channel!);
-      if (!mounted) return;
-      if (err != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(err), duration: const Duration(seconds: 5)),
-        );
-      }
       return;
     }
 
@@ -1082,7 +1123,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   /// Y / F: star or unstar channel (guide focus, or now-playing while watching).
   Future<void> _toggleFavorite() async {
-    if (_menuOpen || _aboutOpen || _manageCatsOpen || _searchOpen) return;
+    if (_overlayOpen) return;
 
     LiveChannel? ch;
     if (session.isWatchingExternal) {
@@ -1106,6 +1147,37 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
 
+    // Guide: confirm before removing a star. Add is still one-shot.
+    // While mpv is up the overlay would be hidden, so unstar stays immediate.
+    if (session.isFavorite(ch) && !session.isWatchingExternal) {
+      setState(() {
+        _unfavOpen = true;
+        _unfavIndex = 0;
+        _unfavChannel = ch;
+      });
+      return;
+    }
+
+    await _applyFavoriteToggle(ch);
+  }
+
+  void _closeUnfav() {
+    setState(() {
+      _unfavOpen = false;
+      _unfavIndex = 0;
+      _unfavChannel = null;
+    });
+  }
+
+  Future<void> _resolveUnfav() async {
+    final ch = _unfavChannel;
+    final remove = _unfavIndex == 1;
+    _closeUnfav();
+    if (!remove || ch == null) return;
+    await _applyFavoriteToggle(ch);
+  }
+
+  Future<void> _applyFavoriteToggle(LiveChannel ch) async {
     final nowFav = await session.toggleFavorite(ch);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1157,8 +1229,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       onMute: () {
         if (session.isWatchingExternal) {
           unawaited(session.watchCycleMute());
-        } else if (_searchOpen || _switchSourceOpen) {
-          // Don't hide cats while searching / switching playlists.
+        } else if (_searchOpen || _switchSourceOpen || _unfavOpen) {
+          // Don't hide cats while searching / switching / confirming unfav.
         } else if (_manageCatsOpen) {
           unawaited(_toggleManageRow());
         } else if (!_menuOpen && !_aboutOpen) {
@@ -1501,8 +1573,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                     ),
                     child: Text(
                       _column == 1
-                          ? '↑↓ channels · A play · Y favorite · / search · ☰ menu'
-                          : '↑↓ cats · A open · / search · X hide · ☰ menu',
+                          ? '↑↓ channels · A play · Y favorite · ☰ Search'
+                          : '↑↓ cats · A open · X hide · ☰ Search',
                       style: theme.textTheme.bodySmall,
                     ),
                   ),
@@ -1706,16 +1778,17 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                 ),
                                 filled: true,
                               ),
-                              textInputAction: TextInputAction.search,
-                              onSubmitted: (_) {
-                                unawaited(_activateSearchHit());
-                              },
+                              // Done/Search on the OSK used to submit and play
+                              // the first hit. Play only after ↓ to a result.
+                              textInputAction: TextInputAction.none,
+                              onEditingComplete: () {},
+                              onSubmitted: (_) {},
                             ),
                             const SizedBox(height: 12),
                             Expanded(
                               child: _searchCtrl.text.trim().isEmpty
                                   ? Text(
-                                      'Type to filter. ↑↓ results · A open/play · B close',
+                                      'Type with OSK · B to list · A to guide · B close',
                                       style: theme.textTheme.bodyLarge,
                                     )
                                   : _searchHits.isEmpty
@@ -1759,7 +1832,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              '↑↓ results · A select · B close · Steam+X OSK on Deck',
+                              'Steam+X OSK · B to list · A to guide · B close',
                               style: theme.textTheme.bodySmall?.copyWith(
                                 color: theme.colorScheme.outline,
                               ),
@@ -1922,6 +1995,76 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             const SizedBox(height: 8),
                             Text(
                               'A or B to close',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.outline,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+
+              // —— Confirm remove from favorites ——
+              if (_unfavOpen) ...[
+                Positioned.fill(
+                  child: GestureDetector(
+                    onTap: _closeUnfav,
+                    child: ColoredBox(
+                      color: Colors.black.withValues(alpha: 0.55),
+                    ),
+                  ),
+                ),
+                Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 420),
+                    child: Material(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(16),
+                      elevation: 12,
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text(
+                              'Remove from favorites?',
+                              style: theme.textTheme.headlineSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              _unfavChannel?.name ?? '',
+                              style: theme.textTheme.bodyLarge,
+                            ),
+                            const SizedBox(height: 20),
+                            _BrowseTile(
+                              label: 'Keep',
+                              icon: Icons.star_rounded,
+                              selected: _unfavIndex == 0,
+                              onTap: () {
+                                setState(() => _unfavIndex = 0);
+                                unawaited(_resolveUnfav());
+                              },
+                            ),
+                            const SizedBox(height: 8),
+                            _BrowseTile(
+                              label: 'Remove',
+                              icon: Icons.star_border_rounded,
+                              selected: _unfavIndex == 1,
+                              danger: true,
+                              onTap: () {
+                                setState(() => _unfavIndex = 1);
+                                unawaited(_resolveUnfav());
+                              },
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              '↑↓ choose · A confirm · B keep',
                               style: theme.textTheme.bodySmall?.copyWith(
                                 color: theme.colorScheme.outline,
                               ),

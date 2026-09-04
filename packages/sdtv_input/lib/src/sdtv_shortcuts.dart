@@ -23,6 +23,49 @@ bool sdtvGamepadBindingEnabledByDefault() {
   }
 }
 
+/// Like [SingleActivator], but inert while a registered text field has focus.
+///
+/// Unmodified letter/Enter/Space shortcuts otherwise steal OSK / keyboard
+/// input (search "am" would hit mute on `m` and play the first hit on A).
+class SdtvTypingSafeActivator extends ShortcutActivator {
+  const SdtvTypingSafeActivator(
+    this.trigger, {
+    this.control = false,
+    this.shift = false,
+    this.alt = false,
+    this.meta = false,
+  });
+
+  final LogicalKeyboardKey trigger;
+  final bool control;
+  final bool shift;
+  final bool alt;
+  final bool meta;
+
+  @override
+  bool accepts(KeyEvent event, HardwareKeyboard hardwareKeys) {
+    if (SdtvTextFocusRegistry.primaryIsTextField) return false;
+    return SingleActivator(
+      trigger,
+      control: control,
+      shift: shift,
+      alt: alt,
+      meta: meta,
+    ).accepts(event, hardwareKeys);
+  }
+
+  @override
+  String debugDescribeKeys() {
+    return SingleActivator(
+      trigger,
+      control: control,
+      shift: shift,
+      alt: alt,
+      meta: meta,
+    ).debugDescribeKeys();
+  }
+}
+
 /// Keyboard / OSK shortcuts. Prefer [NextFocusIntent] for Tab (forms).
 Map<ShortcutActivator, Intent> sdtvNavigationShortcuts() {
   return <ShortcutActivator, Intent>{
@@ -39,12 +82,15 @@ Map<ShortcutActivator, Intent> sdtvNavigationShortcuts() {
     const SingleActivator(LogicalKeyboardKey.tab, shift: true):
         const PreviousFocusIntent(),
 
-    const SingleActivator(LogicalKeyboardKey.enter): const SdtvConfirmIntent(),
-    const SingleActivator(LogicalKeyboardKey.numpadEnter):
+    const SdtvTypingSafeActivator(LogicalKeyboardKey.enter):
         const SdtvConfirmIntent(),
-    const SingleActivator(LogicalKeyboardKey.select): const SdtvConfirmIntent(),
-    const SingleActivator(LogicalKeyboardKey.space): const SdtvConfirmIntent(),
-    const SingleActivator(LogicalKeyboardKey.gameButtonA):
+    const SdtvTypingSafeActivator(LogicalKeyboardKey.numpadEnter):
+        const SdtvConfirmIntent(),
+    const SdtvTypingSafeActivator(LogicalKeyboardKey.select):
+        const SdtvConfirmIntent(),
+    const SdtvTypingSafeActivator(LogicalKeyboardKey.space):
+        const SdtvConfirmIntent(),
+    const SdtvTypingSafeActivator(LogicalKeyboardKey.gameButtonA):
         const SdtvConfirmIntent(),
 
     const SingleActivator(LogicalKeyboardKey.escape): const SdtvBackIntent(),
@@ -65,17 +111,18 @@ Map<ShortcutActivator, Intent> sdtvNavigationShortcuts() {
     // Y / F — favorite (not menu)
     const SingleActivator(LogicalKeyboardKey.gameButtonY):
         const SdtvFavoriteIntent(),
-    const SingleActivator(LogicalKeyboardKey.keyF):
+    const SdtvTypingSafeActivator(LogicalKeyboardKey.keyF):
         const SdtvFavoriteIntent(),
 
     // X / M — mute (player; harmless no-op if unbound)
     const SingleActivator(LogicalKeyboardKey.gameButtonX):
         const SdtvMuteIntent(),
-    const SingleActivator(LogicalKeyboardKey.keyM):
+    const SdtvTypingSafeActivator(LogicalKeyboardKey.keyM):
         const SdtvMuteIntent(),
 
     // Search guide
-    const SingleActivator(LogicalKeyboardKey.slash): const SdtvSearchIntent(),
+    const SdtvTypingSafeActivator(LogicalKeyboardKey.slash):
+        const SdtvSearchIntent(),
     const SingleActivator(LogicalKeyboardKey.keyF, control: true):
         const SdtvSearchIntent(),
     const SingleActivator(LogicalKeyboardKey.keyF, meta: true):

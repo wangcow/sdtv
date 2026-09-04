@@ -51,4 +51,55 @@ void main() {
     expect(SdtvButtonMap.summary, contains('pause'));
     expect(SdtvButtonMap.summary, contains('volume'));
   });
+
+  testWidgets('letter and Enter shortcuts do not fire while typing',
+      (tester) async {
+    var confirmed = 0;
+    var muted = 0;
+    var favored = 0;
+    final field = FocusNode();
+    final host = FocusNode();
+    addTearDown(field.dispose);
+    addTearDown(host.dispose);
+    SdtvTextFocusRegistry.register(field);
+    addTearDown(() => SdtvTextFocusRegistry.unregister(field));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SdtvInputScope(
+          onConfirm: () => confirmed++,
+          onMute: () => muted++,
+          onFavorite: () => favored++,
+          child: Focus(
+            focusNode: host,
+            child: Scaffold(
+              body: TextField(focusNode: field),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    field.requestFocus();
+    await tester.pump();
+    expect(SdtvTextFocusRegistry.primaryIsTextField, isTrue);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyM);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+    await tester.pump();
+
+    expect(confirmed, 0);
+    expect(muted, 0);
+    expect(favored, 0);
+
+    host.requestFocus();
+    await tester.pump();
+    expect(SdtvTextFocusRegistry.primaryIsTextField, isFalse);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyM);
+    await tester.pump();
+    expect(confirmed, 1);
+    expect(muted, 1);
+  });
 }
