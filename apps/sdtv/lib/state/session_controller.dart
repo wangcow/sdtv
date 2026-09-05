@@ -10,6 +10,7 @@ import '../services/artwork_cache.dart';
 import '../services/open_external_url.dart';
 import '../services/saved_source.dart';
 import '../services/settings_store.dart';
+import '../services/vod_progress.dart';
 
 enum SessionPhase {
   boot,
@@ -93,6 +94,9 @@ class SessionController extends ChangeNotifier {
 
   /// Hidden provider category ids for the current scope.
   Set<String> _hiddenCategoryIds = {};
+
+  /// Watched movie / episode / completed-series keys for [prefsScope].
+  final Set<String> _watchedKeys = {};
 
   /// Real HTTP Xtream provider (not demo, not forced mock, not M3U).
   bool get isLiveProvider => !useDemo && !mockCatalog && !useM3u;
@@ -229,7 +233,22 @@ class SessionController extends ChangeNotifier {
     _reloadFavorites();
     _reloadHiddenCategories();
     _reloadLastPlayed();
+    _reloadWatched();
   }
+
+  void _reloadWatched() {
+    _watchedKeys
+      ..clear()
+      ..addAll(_settings.watchedKeys(prefsScope));
+  }
+
+  bool isVodWatched(VodItem item) => _watchedKeys.contains(item.favoriteKey);
+
+  bool isSeriesWatched(SeriesItem item) =>
+      _watchedKeys.contains(item.favoriteKey);
+
+  bool isEpisodeWatched(SeriesEpisode ep) =>
+      _watchedKeys.contains(ep.progressKey);
 
   int? lastPlayedStreamId;
 
@@ -496,6 +515,9 @@ class SessionController extends ChangeNotifier {
   ];
 
   Timer? _vodProgressWatch;
+  bool _seriesAdvanceInFlight = false;
+  bool _seriesEndHintShown = false;
+  DateTime? _lastSeriesAdvanceAt;
 
   /// External watch session active (mpv running or handoff in progress).
   ///
@@ -823,14 +845,22 @@ class SessionController extends ChangeNotifier {
     if (!watchingVod) return;
     try {
       final pos = await externalMpv.timePos();
+      final mpvDur = await externalMpv.duration();
       final ep = nowPlayingEpisode;
       final show = nowPlayingSeries;
       if (ep != null) {
+        final dur =
+            mpvDur.inSeconds > 0 ? mpvDur.inSeconds : ep.durationSecs;
+        final finished = vodReachedEnd(pos.inSeconds, dur);
         await _settings.setVodProgressSeconds(
           prefsScope,
           ep.progressKey,
-          pos.inSeconds,
+          finished ? 0 : pos.inSeconds,
         );
+        if (finished) {
+          await _addWatchedKey(ep.progressKey);
+          await _maybeMarkSeriesWatched();
+        }
         if (show != null) {
           await _settings.setSeriesResume(
             prefsScope,
@@ -844,14 +874,40 @@ class SessionController extends ChangeNotifier {
       }
       final item = nowPlayingVod;
       if (item == null) return;
+      final catalogDur = vodDetail?.durationSecs ?? item.durationSecs;
+      final dur = mpvDur.inSeconds > 0 ? mpvDur.inSeconds : catalogDur;
+      final finished = vodReachedEnd(pos.inSeconds, dur);
       await _settings.setVodProgressSeconds(
         prefsScope,
         item.favoriteKey,
-        pos.inSeconds,
+        finished ? 0 : pos.inSeconds,
       );
+      if (finished) await _addWatchedKey(item.favoriteKey);
     } catch (e) {
       debugPrint('sdtv: vod progress save: $e');
     }
+  }
+
+  Future<void> _addWatchedKey(String key) async {
+    if (key.isEmpty || _watchedKeys.contains(key)) return;
+    _watchedKeys.add(key);
+    await _settings.addWatchedKey(prefsScope, key);
+  }
+
+  /// Series poster check = every episode in the loaded catalog is watched.
+  Future<void> _maybeMarkSeriesWatched() async {
+    final show = nowPlayingSeries;
+    final cat = seriesCatalog;
+    if (show == null || cat == null) return;
+    var any = false;
+    for (final season in cat.seasons) {
+      for (final ep in season.episodes) {
+        any = true;
+        if (!_watchedKeys.contains(ep.progressKey)) return;
+      }
+    }
+    if (!any) return;
+    await _addWatchedKey(show.favoriteKey);
   }
 
   Future<void> seekVodBy(Duration delta) async {
@@ -880,6 +936,8 @@ class SessionController extends ChangeNotifier {
 
   Future<void> _pollStall() async {
     if (!isWatchingExternal || !externalMpv.isRunning) return;
+    if (_seriesAdvanceInFlight) return;
+    if (await _tryAdvanceSeriesEpisode()) return;
     if (watchStallOpen) {
       // Keep the error OSD from timing out.
       if (_stallSince != null &&
@@ -890,7 +948,7 @@ class SessionController extends ChangeNotifier {
       }
       return;
     }
-    if (watchMenuOpen || _zapInFlight) {
+    if (watchMenuOpen || _zapInFlight || _seriesAdvanceInFlight) {
       _stallSince = null;
       return;
     }
@@ -1152,7 +1210,7 @@ class SessionController extends ChangeNotifier {
     await externalMpv.cycleMute();
   }
 
-  /// Guide search (categories + channels). EPG can append later via same hits.
+  /// Guide search (live + movies + TV shows). EPG can append later via same hits.
   List<GuideSearchHit> searchGuide(String query, {int maxResults = 120}) {
     return GuideSearch.search(
       query: query,
@@ -1160,6 +1218,15 @@ class SessionController extends ChangeNotifier {
         for (final c in categories) (id: c.categoryId, name: c.categoryName),
       ],
       channels: allChannels,
+      vodCategories: [
+        for (final c in vodCategories) (id: c.categoryId, name: c.categoryName),
+      ],
+      vodItems: allVod,
+      seriesCategories: [
+        for (final c in seriesCategories)
+          (id: c.categoryId, name: c.categoryName),
+      ],
+      seriesItems: allSeries,
       hiddenCategoryIds: _hiddenCategoryIds,
       favoriteKeys: _favoriteKeys.toSet(),
       maxResults: maxResults,
@@ -1978,11 +2045,12 @@ class SessionController extends ChangeNotifier {
     nowPlayingSeries = show;
     nowPlayingEpisode = episode;
     _watchInFlight = true;
+    _seriesAdvanceInFlight = false;
+    _seriesEndHintShown = false;
+    _lastSeriesAdvanceAt = null;
     notifyListeners();
 
-    final uri = (useDemo || mockCatalog)
-        ? Uri.parse(kDemoPlaybackUri)
-        : _client?.seriesPlayUrl(episode);
+    final uri = resolveSeriesPlayUri(episode);
     if (uri == null) {
       _watchInFlight = false;
       watchingVod = false;
@@ -2014,9 +2082,130 @@ class SessionController extends ChangeNotifier {
       watchingVod = false;
       nowPlayingEpisode = null;
       nowPlayingSeries = null;
+      _seriesAdvanceInFlight = false;
+      _seriesEndHintShown = false;
+      _lastSeriesAdvanceAt = null;
       watchMenuOpen = false;
       watchStallOpen = false;
       notifyListeners();
+    }
+  }
+
+  Uri? resolveSeriesPlayUri(SeriesEpisode episode) {
+    if (useDemo || mockCatalog) return Uri.parse(kDemoPlaybackUri);
+    return _client?.seriesPlayUrl(episode);
+  }
+
+  /// True when this poll handled series EOF (next episode, or last-episode hold).
+  Future<bool> _tryAdvanceSeriesEpisode() async {
+    if (!watchingVod || nowPlayingEpisode == null) return false;
+    if (watchMenuOpen || watchStallOpen || _seriesAdvanceInFlight) {
+      return false;
+    }
+    final lastAt = _lastSeriesAdvanceAt;
+    if (lastAt != null &&
+        DateTime.now().difference(lastAt) < const Duration(seconds: 4)) {
+      return true;
+    }
+
+    final eof = await externalMpv.getProperty('eof-reached');
+    var atEnd = eof == true || eof == 'yes';
+    if (!atEnd) {
+      try {
+        final pos = await externalMpv.timePos();
+        final dur = await externalMpv.duration();
+        atEnd = dur.inSeconds > 15 &&
+            pos.inSeconds >= dur.inSeconds - 2 &&
+            pos.inSeconds > kVodResumeMinSeconds;
+      } catch (_) {
+        atEnd = false;
+      }
+    }
+    if (!atEnd) return false;
+    if (_seriesAdvanceInFlight || watchMenuOpen || !watchingVod) return true;
+
+    final show = nowPlayingSeries;
+    final current = nowPlayingEpisode;
+    if (show == null || current == null) return true;
+    final next = seriesCatalog?.nextEpisode(current);
+    if (next == null) {
+      if (!_seriesEndHintShown) {
+        await _saveVodProgress();
+        _seriesEndHintShown = true;
+        await externalMpv.showText(
+          '${show.name}\nLast episode · B back',
+          durationMs: 2800,
+        );
+      }
+      return true;
+    }
+
+    _seriesAdvanceInFlight = true;
+    try {
+      await _saveVodProgress();
+      await _advanceToSeriesEpisode(show, next);
+    } finally {
+      _seriesAdvanceInFlight = false;
+    }
+    return true;
+  }
+
+  Future<void> _advanceToSeriesEpisode(
+    SeriesItem show,
+    SeriesEpisode next,
+  ) async {
+    _lastSeriesAdvanceAt = DateTime.now();
+    try {
+      final uri = resolveSeriesPlayUri(next);
+      if (uri == null) {
+        await externalMpv.showText(
+          'No URL for S${next.season}E${next.episodeNum}',
+          durationMs: 2800,
+        );
+        return;
+      }
+
+      nowPlayingEpisode = next;
+      final title =
+          '${show.name}  S${next.season}E${next.episodeNum}';
+      final ok = await externalMpv.loadFile(uri, title: title);
+      if (!ok) {
+        await externalMpv.showText(
+          'Could not start S${next.season}E${next.episodeNum}',
+          durationMs: 2800,
+        );
+        return;
+      }
+      await externalMpv.setPaused(false);
+
+      final saved = episodeProgressSeconds(next);
+      if (saved > kVodResumeMinSeconds && !isEpisodeWatched(next)) {
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+        await externalMpv.seekTo(Duration(seconds: saved));
+      }
+
+      await _settings.setSeriesResume(
+        prefsScope,
+        seriesId: '${show.seriesId}',
+        episodeId: next.id,
+        season: next.season,
+        episodeNum: next.episodeNum,
+      );
+      _stallSince = null;
+      _lastStallPos = null;
+      _sawPlaybackClock = false;
+      _seriesEndHintShown = false;
+
+      final epTitle = next.title.trim();
+      final line = epTitle.isEmpty
+          ? 'S${next.season}E${next.episodeNum}'
+          : 'S${next.season}E${next.episodeNum}  $epTitle';
+      await externalMpv.showText(
+        '${show.name}\n$line',
+        durationMs: 2800,
+      );
+    } finally {
+      _lastSeriesAdvanceAt = DateTime.now();
     }
   }
 
@@ -2410,6 +2599,7 @@ class SessionController extends ChangeNotifier {
     selectedCategoryId = null;
     _favoriteKeys = const [];
     _hiddenCategoryIds = {};
+    _watchedKeys.clear();
     lastPlayedCategoryId = null;
     lastPlayedFavoriteKey = null;
     lastPlayedName = null;

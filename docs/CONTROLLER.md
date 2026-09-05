@@ -10,18 +10,18 @@ Top chips: **LIVE** · **MOVIES** · **TV SHOWS**. From the first category, **�
 
 **LIVE** right pane is the **TV Guide** (channel names + program timeline). It replaces the old channel list / now·next miniguide. **←** on the first program of a row returns to categories · **↑↓** channels · **→** next program · **A** plays the live channel. **B** jumps to now when the timeline is ahead of now; **B** again (already at now) returns to categories. **LB/RB** jump 2 hours · **G** also jumps the window to now.
 
-Movies and TV Shows right panes are a **poster grid**. **←** on the first column of a row returns to categories · **↑↓** move by row · **→** stays in the row · **A** opens the **title landing page** (does not play) · **B** back to categories.
+Movies and TV Shows right panes are a **poster grid**. **←** on the first column of a row returns to categories · **↑↓** move by row · **→** stays in the row · **A** opens the **title landing page** (does not play) · **B** back to categories. A green check on the poster means the movie (or every episode of the show) has been watched to the end.
 
-**Title landing:** poster, title, description, director, cast, provider rating. **↑↓** actions · **A** select · **B** / **←** back to the same poster.
+**Title landing:** poster, title, description, director, cast, provider rating. **↑↓** actions · **A** select · **B** / **←** back to the same poster. **LB/RB** do not change actions (those bumpers are for seasons / EPG time).
 
-- **Movies:** **Resume** (if progress) · **Play from beginning** · **Watch trailer** (hidden when the panel has none).
-- **TV Shows:** **Resume** last episode (if any) · **Play from beginning** (S1E1) · **Seasons & episodes** · **Watch trailer** (hidden when none).
+- **Movies:** in-progress titles get **Resume Playing** · **Start from Beginning**; otherwise **Play Now**. **Watch trailer** is hidden when the panel has none.
+- **TV Shows:** in-progress shows get **Resume Playing** (last episode) · **Start from Beginning** (S1E1); otherwise **Play Now**. **Seasons & episodes** is always present. **Watch trailer** is hidden when none.
 
 YouTube trailers open in the system/YouTube client (TiviMate-style), not mpv.
 
-**Seasons & episodes (TV Shows):** **↑↓** pick an episode · **LB/RB** change season · **A** plays that episode · **B** / **←** back to the title. Resume progress is per episode.
+**Seasons & episodes (TV Shows):** **↑↓** pick an episode · **LB/RB** change season · **A** plays that episode · **B** / **←** back to the title. **☰** still opens Search (do not use RB for Search here). Resume progress is per episode. Finished episodes show a check.
 
-While a movie or episode is playing: **A** menu (Resume, ±10s, subs, audio, mute, back) · **←/→** or **LB/RB** seek 10s · **B** back to the title. Position is saved every 10s (continue watching). No live-edge reload.
+While a movie or episode is playing: **A** menu (Resume, ±10s, subs, audio, mute, back) · **←/→** or **LB/RB** seek 10s · **B** back to the title. Position is saved every 10s (continue watching). No live-edge reload. When an episode ends, the **next episode starts automatically** (OSD shows SxEy). The last episode holds on the final frame — **B** back to the title.
 
 ## Guide (browse)
 
@@ -66,9 +66,9 @@ On the **category column** (Live, Movies, and TV Shows): **B** jumps to the top 
 
 ### Search
 
-- **☰ Start → Search** (Search is the first menu row) or keyboard **`/`** / **Ctrl+F** opens guide search. The guide footer shows **☰ Search**, not `/`.
-- Filters **visible** categories + channels (hidden cats excluded). Type with keyboard or Deck OSK (Steam+X).
-- Deck OSK (Steam+X): **A** types a letter and does **not** leave the box. When finished, **B** (or **RB**) moves to the result list, then **A** jumps to that category/channel in the guide (does not play yet). **B** again closes search.
+- **☰ Start → Search** (Search is the first menu row) or keyboard **`/`** / **Ctrl+F** opens search. The footer shows **☰ Search**, not `/`.
+- Matches **Live** channels (not channel categories), **Movies**, and **TV Shows** (titles + their categories). Hidden cats still appear, marked. Type with keyboard or Deck OSK (Steam+X).
+- Deck OSK (Steam+X): **A** types a letter and does **not** leave the box. When finished, **B** moves to the result list, then **A** jumps there (Live guide, Movies grid, or TV Shows grid) — does not play and does not open the title landing. **↑** on the first result returns to the search box to edit the query. **B** from the list closes search. **LB/RB** are not Search — they change season (TV episodes) or jump EPG time (Live).
 - Result model includes `GuideSearchKind.epg` for future program search — same UI.
 
 ## Player chrome (external mpv — daily)

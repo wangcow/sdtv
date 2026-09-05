@@ -101,9 +101,7 @@ Daily **A play** is the product path.
 
 ### Future: Flutter HUD over mpv
 
-A later product, not the live path: keep **mpv painting the picture** and put a **transparent Flutter chrome** on top (or embed mpv with `--wid` under `FlView`). Same image as today; real Flutter widgets for the bar.
-
-That is **not** the media_kit `Video` texture. Gamescope Game Mode may refuse two stacked windows — prototype on desktop, then Deck. Until then, chrome stays on mpv’s OSD/ASS overlay.
+Keep **mpv painting the picture**. Chrome as real Flutter widgets is a later product, and **Gamescope Game Mode** is the constraint (one nest, not a desktop overlay). Until a Deck-native path exists, chrome stays on mpv’s OSD/ASS overlay.
 
 ### Smooth video (VAAPI)
 

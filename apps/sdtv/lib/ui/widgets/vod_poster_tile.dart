@@ -15,6 +15,7 @@ class VodPosterTile extends StatelessWidget {
     required this.onTap,
     this.subtitle,
     this.progress = 0,
+    this.watched = false,
     this.posterUrl = '',
     this.artId = '',
     this.artScope = '',
@@ -33,6 +34,9 @@ class VodPosterTile extends StatelessWidget {
 
   /// 0–1 continue-watching bar on the poster. 0 hides it.
   final double progress;
+
+  /// Finished this title (movie, or every episode of a show).
+  final bool watched;
 
   @override
   Widget build(BuildContext context) {
@@ -126,6 +130,12 @@ class VodPosterTile extends StatelessWidget {
                           backgroundColor: Colors.black38,
                         ),
                       ),
+                    if (watched)
+                      const Positioned(
+                        top: 6,
+                        right: 6,
+                        child: WatchedCheckMark(),
+                      ),
                   ],
                 ),
               ),
@@ -153,6 +163,42 @@ class VodPosterTile extends StatelessWidget {
                 ),
               ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Green check on a dark disc — readable on any poster.
+class WatchedCheckMark extends StatelessWidget {
+  const WatchedCheckMark({super.key, this.size = 22});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final iconSize = (size * 0.72).clamp(12.0, 22.0);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.78),
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white24, width: 1),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x66000000),
+            blurRadius: 6,
+          ),
+        ],
+      ),
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: Center(
+          child: Icon(
+            Icons.check_rounded,
+            size: iconSize,
+            color: const Color(0xFF4ADE80),
+          ),
         ),
       ),
     );

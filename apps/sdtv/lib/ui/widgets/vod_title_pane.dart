@@ -3,6 +3,7 @@ import 'package:sdtv_core/sdtv_core.dart';
 
 import '../../services/artwork_cache.dart';
 import 'cached_artwork.dart';
+import 'vod_poster_tile.dart';
 
 /// Right-pane title landing (Movies / TV Shows). Pad-driven actions.
 ///
@@ -18,6 +19,7 @@ class VodTitlePane extends StatelessWidget {
     required this.actionIndex,
     required this.onAction,
     this.loading = false,
+    this.watched = false,
     this.artCache,
     this.artScope = '',
   });
@@ -28,6 +30,7 @@ class VodTitlePane extends StatelessWidget {
   final int actionIndex;
   final ValueChanged<String> onAction;
   final bool loading;
+  final bool watched;
   final ArtworkCache? artCache;
   final String artScope;
 
@@ -148,6 +151,7 @@ class VodTitlePane extends StatelessWidget {
                         cache: artCache,
                         scope: artScope,
                         id: '${item.streamId}',
+                        watched: watched,
                       ),
                     ),
                     const SizedBox(height: 10),
@@ -203,12 +207,14 @@ class _Poster extends StatelessWidget {
     this.cache,
     this.scope = '',
     this.id = '',
+    this.watched = false,
   });
 
   final String url;
   final ArtworkCache? cache;
   final String scope;
   final String id;
+  final bool watched;
 
   @override
   Widget build(BuildContext context) {
@@ -241,7 +247,18 @@ class _Poster extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(12),
-        child: art,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Positioned.fill(child: art),
+            if (watched)
+              const Positioned(
+                top: 8,
+                right: 8,
+                child: WatchedCheckMark(size: 28),
+              ),
+          ],
+        ),
       ),
     );
   }

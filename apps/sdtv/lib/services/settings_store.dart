@@ -29,6 +29,8 @@ class SettingsStore {
   static const _kActiveSourceId = 'saved_sources.activeId';
   /// JSON map: scope → { vodKey → seconds }.
   static const _kVodProgress = 'vod_progress.v1';
+  /// JSON map: scope → list of watched movie / episode / series keys.
+  static const _kVodWatched = 'vod_watched.v1';
   /// JSON map: scope → { section: live|movies, vodCategoryId }.
   static const _kGuideLanding = 'guide_landing.v1';
 
@@ -423,6 +425,25 @@ class SettingsStore {
       root[scope] = inner;
     }
     await _prefs.setString(_kVodProgress, jsonEncode(root));
+  }
+
+  // —— Watched movies / episodes / completed series (scoped) ——
+
+  List<String> watchedKeys(String scope) {
+    if (scope.isEmpty) return const [];
+    return List<String>.from(_stringListMap(_kVodWatched)[scope] ?? const []);
+  }
+
+  Future<void> setWatchedKeys(String scope, List<String> keys) async {
+    await _setStringListMap(_kVodWatched, scope, keys);
+  }
+
+  Future<void> addWatchedKey(String scope, String key) async {
+    if (scope.isEmpty || key.isEmpty) return;
+    final list = watchedKeys(scope);
+    if (list.contains(key)) return;
+    list.add(key);
+    await setWatchedKeys(scope, list);
   }
 
   static const _kSeriesResume = 'series_resume.v1';
