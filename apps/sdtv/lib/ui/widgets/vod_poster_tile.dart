@@ -16,6 +16,7 @@ class VodPosterTile extends StatelessWidget {
     this.subtitle,
     this.progress = 0,
     this.watched = false,
+    this.favorited = false,
     this.posterUrl = '',
     this.artId = '',
     this.artScope = '',
@@ -37,6 +38,9 @@ class VodPosterTile extends StatelessWidget {
 
   /// Finished this title (movie, or every episode of a show).
   final bool watched;
+
+  /// Starred in ★ Favorites.
+  final bool favorited;
 
   @override
   Widget build(BuildContext context) {
@@ -130,6 +134,12 @@ class VodPosterTile extends StatelessWidget {
                           backgroundColor: Colors.black38,
                         ),
                       ),
+                    if (favorited)
+                      const Positioned(
+                        top: 6,
+                        left: 6,
+                        child: FavoriteStarMark(),
+                      ),
                     if (watched)
                       const Positioned(
                         top: 6,
@@ -163,6 +173,42 @@ class VodPosterTile extends StatelessWidget {
                 ),
               ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Amber star on a dark disc — readable on any poster.
+class FavoriteStarMark extends StatelessWidget {
+  const FavoriteStarMark({super.key, this.size = 22});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final iconSize = (size * 0.72).clamp(12.0, 22.0);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.78),
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white24, width: 1),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x66000000),
+            blurRadius: 6,
+          ),
+        ],
+      ),
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: Center(
+          child: Icon(
+            Icons.star_rounded,
+            size: iconSize,
+            color: const Color(0xFFFBBF24),
+          ),
         ),
       ),
     );

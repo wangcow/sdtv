@@ -89,11 +89,11 @@ Selecting a channel **starts fullscreen `mpv`**, then returns to the TV Guide wh
 
 ### Watch chrome (daily path)
 
-**A** on a channel starts **external mpv** (hardware decode, 60fps). Couch chrome is drawn **on the video plane** (mpv ASS overlay / styled OSD) — not through Flutter.
+**A** on a channel starts **external mpv** (hardware decode, 60fps). Couch chrome is drawn **on the video plane** (styled mpv OSD: LIVE badge, now/next, VOD progress bar, pause menu) — not through Flutter.
 
-Stock mpv OSC (the seek bar) stays **off**. On live IPTV it rewinds the cache. Pause (**A**) opens sdtv’s text menu instead.
+Stock mpv OSC (the seek bar) stays **off**. On live IPTV it rewinds the cache. Pause (**A**) opens sdtv’s HUD menu instead. Seeking a movie/episode flashes a progress HUD.
 
-ASS `osd-overlay` is **off** (`SDTV_MPV_OVERLAY=1` to try). Some mpv builds exit on that IPC, which dumps you back to the guide. Live sessions use `--keep-open=yes` so a stream hiccup does not quit mpv.
+ASS `osd-overlay` IPC is **opt-in** (`SDTV_MPV_OVERLAY=1`). Some mpv builds exit on that call. Default HUD uses styled `show-text` (safer on Deck). Live sessions use `--keep-open=yes` so a stream hiccup does not quit mpv.
 
 ☰ → **Embedded player (slow)** is a leftover Flutter-texture experiment. It will never match TiviMate smoothness on Deck (Flutter has no SurfaceView). Don’t use it for daily watching; it also used to probe two stream URLs per channel.
 

@@ -169,10 +169,14 @@ class GuideSearch {
       final sCat = catName.isEmpty ? 0 : (scoreText(q, catName) ~/ 2);
       var s = sName >= sCat ? sName : sCat;
       if (s <= 0) continue;
+      if (favoriteKeys.contains(v.favoriteKey)) {
+        s += 15;
+      }
       final bits = <String>[
         'Movie',
         if (catName.isNotEmpty) catName,
         if (hidden) 'hidden',
+        if (favoriteKeys.contains(v.favoriteKey)) '★',
       ];
       hits.add(
         GuideSearchHit(
@@ -214,10 +218,14 @@ class GuideSearch {
       final sCat = catName.isEmpty ? 0 : (scoreText(q, catName) ~/ 2);
       var s = sName >= sCat ? sName : sCat;
       if (s <= 0) continue;
+      if (favoriteKeys.contains(show.favoriteKey)) {
+        s += 15;
+      }
       final bits = <String>[
         'TV Show',
         if (catName.isNotEmpty) catName,
         if (hidden) 'hidden',
+        if (favoriteKeys.contains(show.favoriteKey)) '★',
       ];
       hits.add(
         GuideSearchHit(

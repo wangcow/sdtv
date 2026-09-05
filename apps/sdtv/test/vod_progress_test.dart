@@ -28,4 +28,39 @@ void main() {
       expect(vodReachedEnd(3000, 3600), isFalse);
     });
   });
+
+  group('vodEffectiveDuration', () {
+    test('prefers mpv duration', () {
+      expect(
+        vodEffectiveDuration(
+          positionSecs: 600,
+          mpvDurationSecs: 8880,
+          catalogDurationSecs: 148,
+        ),
+        8880,
+      );
+    });
+
+    test('treats short catalog values as minutes when playback is past them', () {
+      expect(
+        vodEffectiveDuration(
+          positionSecs: 600,
+          mpvDurationSecs: 0,
+          catalogDurationSecs: 148,
+        ),
+        148 * 60,
+      );
+    });
+
+    test('keeps catalog seconds when they already look like a runtime', () {
+      expect(
+        vodEffectiveDuration(
+          positionSecs: 600,
+          mpvDurationSecs: 0,
+          catalogDurationSecs: 8880,
+        ),
+        8880,
+      );
+    });
+  });
 }

@@ -12,6 +12,7 @@ export 'src/models/user_info.dart';
 export 'src/models/vod_item.dart';
 export 'src/models/vod_info.dart';
 export 'src/models/series.dart';
+export 'src/models/user_library.dart';
 export 'src/xtream/xtream_client.dart';
 export 'src/xtream/xtream_exception.dart';
 export 'src/xtream/mock_xtream_client.dart';

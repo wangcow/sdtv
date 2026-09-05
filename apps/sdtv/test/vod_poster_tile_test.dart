@@ -48,4 +48,27 @@ void main() {
 
     expect(find.byIcon(Icons.check_rounded), findsNothing);
   });
+
+  testWidgets('favorited poster shows a star overlay', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: sdtvDarkTheme,
+        home: Scaffold(
+          body: SizedBox(
+            width: 160,
+            height: 280,
+            child: VodPosterTile(
+              title: 'Harbor Nights',
+              selected: false,
+              focused: false,
+              favorited: true,
+              onTap: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byIcon(Icons.star_rounded), findsOneWidget);
+  });
 }

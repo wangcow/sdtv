@@ -19,7 +19,10 @@ class SettingsStore {
   static const _kUseM3u = 'playlist.useM3u';
   static const _kM3uUrl = 'playlist.m3uUrl';
   /// JSON map: scope → list of [LiveChannel.favoriteKey] strings.
+  /// Legacy; new writes go to [_kUserLibrary].
   static const _kFavorites = 'favorites.v1';
+  /// JSON map: scope → [UserLibrary] document (favorites, progress, watched).
+  static const _kUserLibrary = 'user_library.v1';
   /// JSON map: scope → list of hidden category_id strings.
   static const _kHiddenCategories = 'hidden_categories.v1';
   /// JSON map: scope → { categoryId, favoriteKey, name }.
@@ -226,27 +229,102 @@ class SettingsStore {
     await _prefs.setString(prefKey, jsonEncode(map));
   }
 
+  // —— User library (favorites + resume + watched; future sync document) ——
+
+  final Map<String, UserLibrary> _libraryCache = {};
+
+  UserLibrary library(String scope) {
+    if (scope.isEmpty) return UserLibrary.empty;
+    final cached = _libraryCache[scope];
+    if (cached != null) return cached;
+    final loaded = _readLibrary(scope) ?? _legacyLibrary(scope);
+    _libraryCache[scope] = loaded;
+    return loaded;
+  }
+
+  UserLibrary? _readLibrary(String scope) {
+    final raw = _prefs.getString(_kUserLibrary);
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return null;
+      final entry = decoded[scope];
+      if (entry is! Map) return null;
+      return UserLibrary.fromJson(entry);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  UserLibrary _legacyLibrary(String scope) {
+    return UserLibrary(
+      favorites: List<String>.from(_stringListMap(_kFavorites)[scope] ?? const []),
+      progressSeconds: Map<String, int>.from(_vodProgressRoot()[scope] ?? const {}),
+      watchedKeys: List<String>.from(_stringListMap(_kVodWatched)[scope] ?? const []),
+      seriesResume: _legacySeriesResume(scope),
+    );
+  }
+
+  Map<String, Map<String, String>> _legacySeriesResume(String scope) {
+    final raw = _prefs.getString(_kSeriesResume);
+    if (raw == null || raw.isEmpty) return const {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return const {};
+      final byScope = decoded[scope];
+      if (byScope is! Map) return const {};
+      final out = <String, Map<String, String>>{};
+      for (final e in byScope.entries) {
+        final id = '${e.key}';
+        final val = e.value;
+        if (id.isEmpty || val is! Map) continue;
+        final inner = <String, String>{};
+        for (final p in val.entries) {
+          final v = '${p.value}';
+          if (v.isNotEmpty) inner['${p.key}'] = v;
+        }
+        if (inner.isNotEmpty) out[id] = inner;
+      }
+      return out;
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  Future<void> _setLibrary(String scope, UserLibrary lib) async {
+    if (scope.isEmpty) return;
+    _libraryCache[scope] = lib;
+    final raw = _prefs.getString(_kUserLibrary);
+    Map<String, dynamic> root = {};
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) root = Map<String, dynamic>.from(decoded);
+      } catch (_) {}
+    }
+    // Always persist, including empty — otherwise a cleared library would
+    // fall back to stale legacy favorites.v1 / vod_progress.v1 keys.
+    root[scope] = lib.toJson();
+    await _prefs.setString(_kUserLibrary, jsonEncode(root));
+  }
+
   // —— Favorites (scoped by playlist / panel) ——
 
-  /// Favorite channel keys for a provider scope (see [SessionController.favoritesScope]).
+  /// Favorite keys for a provider scope (live `i:`, movies `v:`, shows `s:`).
   List<String> favoriteKeys(String scope) {
     if (scope.isEmpty) return const [];
-    return List<String>.from(_stringListMap(_kFavorites)[scope] ?? const []);
+    return List<String>.from(library(scope).favorites);
   }
 
   Future<void> setFavoriteKeys(String scope, List<String> keys) async {
-    await _setStringListMap(_kFavorites, scope, keys);
+    await _setLibrary(scope, library(scope).copyWith(favorites: keys));
   }
 
   Future<bool> toggleFavoriteKey(String scope, String key) async {
-    final list = favoriteKeys(scope);
-    final had = list.contains(key);
-    if (had) {
-      list.remove(key);
-    } else {
-      list.add(key);
-    }
-    await setFavoriteKeys(scope, list);
+    if (scope.isEmpty || key.isEmpty) return false;
+    final lib = library(scope);
+    final had = lib.favorites.contains(key);
+    await _setLibrary(scope, lib.withFavoriteToggled(key));
     return !had;
   }
 
@@ -403,7 +481,7 @@ class SettingsStore {
 
   int vodProgressSeconds(String scope, String vodKey) {
     if (scope.isEmpty || vodKey.isEmpty) return 0;
-    return _vodProgressRoot()[scope]?[vodKey] ?? 0;
+    return library(scope).progressSeconds[vodKey] ?? 0;
   }
 
   Future<void> setVodProgressSeconds(
@@ -412,38 +490,23 @@ class SettingsStore {
     int seconds,
   ) async {
     if (scope.isEmpty || vodKey.isEmpty) return;
-    final root = _vodProgressRoot();
-    final inner = Map<String, int>.from(root[scope] ?? {});
-    if (seconds <= 5) {
-      inner.remove(vodKey);
-    } else {
-      inner[vodKey] = seconds;
-    }
-    if (inner.isEmpty) {
-      root.remove(scope);
-    } else {
-      root[scope] = inner;
-    }
-    await _prefs.setString(_kVodProgress, jsonEncode(root));
+    await _setLibrary(scope, library(scope).withProgress(vodKey, seconds));
   }
 
   // —— Watched movies / episodes / completed series (scoped) ——
 
   List<String> watchedKeys(String scope) {
     if (scope.isEmpty) return const [];
-    return List<String>.from(_stringListMap(_kVodWatched)[scope] ?? const []);
+    return List<String>.from(library(scope).watchedKeys);
   }
 
   Future<void> setWatchedKeys(String scope, List<String> keys) async {
-    await _setStringListMap(_kVodWatched, scope, keys);
+    await _setLibrary(scope, library(scope).copyWith(watchedKeys: keys));
   }
 
   Future<void> addWatchedKey(String scope, String key) async {
     if (scope.isEmpty || key.isEmpty) return;
-    final list = watchedKeys(scope);
-    if (list.contains(key)) return;
-    list.add(key);
-    await setWatchedKeys(scope, list);
+    await _setLibrary(scope, library(scope).withWatched(key));
   }
 
   static const _kSeriesResume = 'series_resume.v1';
@@ -451,24 +514,9 @@ class SettingsStore {
   /// Last episode for a series: episodeId, season, episodeNum.
   Map<String, String> seriesResume(String scope, String seriesId) {
     if (scope.isEmpty || seriesId.isEmpty) return const {};
-    final raw = _prefs.getString(_kSeriesResume);
-    if (raw == null || raw.isEmpty) return const {};
-    try {
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map) return const {};
-      final byScope = decoded[scope];
-      if (byScope is! Map) return const {};
-      final entry = byScope[seriesId];
-      if (entry is! Map) return const {};
-      final out = <String, String>{};
-      for (final e in entry.entries) {
-        final v = '${e.value}';
-        if (v.isNotEmpty) out['${e.key}'] = v;
-      }
-      return out;
-    } catch (_) {
-      return const {};
-    }
+    final entry = library(scope).seriesResume[seriesId];
+    if (entry == null) return const {};
+    return Map<String, String>.from(entry);
   }
 
   Future<void> setSeriesResume(
@@ -478,24 +526,14 @@ class SettingsStore {
     required int season,
     required int episodeNum,
   }) async {
-    if (scope.isEmpty || seriesId.isEmpty || episodeId.isEmpty) return;
-    final raw = _prefs.getString(_kSeriesResume);
-    Map<String, dynamic> root = {};
-    if (raw != null && raw.isNotEmpty) {
-      try {
-        final decoded = jsonDecode(raw);
-        if (decoded is Map) root = Map<String, dynamic>.from(decoded);
-      } catch (_) {}
-    }
-    final byScope = Map<String, dynamic>.from(
-      root[scope] is Map ? root[scope] as Map : const {},
+    await _setLibrary(
+      scope,
+      library(scope).withSeriesResume(
+        seriesId: seriesId,
+        episodeId: episodeId,
+        season: season,
+        episodeNum: episodeNum,
+      ),
     );
-    byScope[seriesId] = {
-      'episodeId': episodeId,
-      'season': '$season',
-      'episodeNum': '$episodeNum',
-    };
-    root[scope] = byScope;
-    await _prefs.setString(_kSeriesResume, jsonEncode(root));
   }
 }

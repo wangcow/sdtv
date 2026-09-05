@@ -14,14 +14,14 @@ Movies and TV Shows right panes are a **poster grid**. **←** on the first colu
 
 **Title landing:** poster, title, description, director, cast, provider rating. **↑↓** actions · **A** select · **B** / **←** back to the same poster. **LB/RB** do not change actions (those bumpers are for seasons / EPG time).
 
-- **Movies:** in-progress titles get **Resume Playing** · **Start from Beginning**; otherwise **Play Now**. **Watch trailer** is hidden when the panel has none.
-- **TV Shows:** in-progress shows get **Resume Playing** (last episode) · **Start from Beginning** (S1E1); otherwise **Play Now**. **Seasons & episodes** is always present. **Watch trailer** is hidden when none.
+- **Movies:** in-progress titles get **Resume Playing** · **Start from Beginning**; otherwise **Play Now**. Then **Add to Favorites** / **Remove from Favorites**. **Watch trailer** is hidden when the panel has none.
+- **TV Shows:** in-progress shows get **Resume Playing** (last episode) · **Start from Beginning** (S1E1); otherwise **Play Now**. Then **Add to Favorites** / **Remove from Favorites**. **Seasons & episodes** is always present. **Watch trailer** is hidden when none.
 
 YouTube trailers open in the system/YouTube client (TiviMate-style), not mpv.
 
 **Seasons & episodes (TV Shows):** **↑↓** pick an episode · **LB/RB** change season · **A** plays that episode · **B** / **←** back to the title. **☰** still opens Search (do not use RB for Search here). Resume progress is per episode. Finished episodes show a check.
 
-While a movie or episode is playing: **A** menu (Resume, ±10s, subs, audio, mute, back) · **←/→** or **LB/RB** seek 10s · **B** back to the title. Position is saved every 10s (continue watching). No live-edge reload. When an episode ends, the **next episode starts automatically** (OSD shows SxEy). The last episode holds on the final frame — **B** back to the title.
+While a movie or episode is playing: **A** menu (Resume, ±10s, subs, audio, mute, back) · **←/→** or **LB/RB** seek 10s · **B** on the menu closes it and keeps playing · **B** while playing returns to the title (position is saved). Position is also saved every 10s. No live-edge reload. When an episode ends, the **next episode starts automatically** (OSD shows SxEy). The last episode holds on the final frame — **B** back to the title.
 
 ## Guide (browse)
 
@@ -41,9 +41,10 @@ On the **category column** (Live, Movies, and TV Shows): **B** jumps to the top 
 
 ### Favorites
 
-- **Y** (or **F**, long-press on touch) stars the focused channel. Y again on a starred channel asks **Keep / Remove** (A confirms, B keeps).
-- **★ Favorites** is pinned at the top of the category list.
-- Stars are stored locally, scoped per playlist/panel.
+- **Live:** **Y** (or **F**) stars the focused channel. Y again asks **Keep / Remove**. While a *live* channel is playing, Y still stars that channel.
+- **Movies / TV Shows:** star only from the **title landing** — **Add to Favorites** / **Remove from Favorites** (or **Y** on that page). Y while a movie or episode is playing does nothing.
+- **★ Favorites** is pinned at the top of Live, Movies, and TV Shows category lists. A gold star on the poster marks a favorite; a green check is watched.
+- Stars, resume positions, and watched flags are one local `UserLibrary` document per playlist/panel. A future paid Wangcow Continuity service could host that same JSON across devices — not in this phase. See [LIBRARY.md](LIBRARY.md).
 
 ### Hidden categories
 
@@ -62,7 +63,7 @@ On the **category column** (Live, Movies, and TV Shows): **B** jumps to the top 
 - Successful **Demo / M3U / Xtream** connect is stored on-device (no retyping).
 - Login home lists **SAVED PLAYLISTS** — **A** opens one.
 - Guide **☰ → Switch playlist** swaps sources without signing out.
-- Favorites / hidden cats / last-played stay **per source** (scoped).
+- Favorites / hidden cats / last-played stay **per source** (scoped). The watch library (favorites, progress, watched) is the same `UserLibrary` JSON a future Continuity service would sync.
 
 ### Search
 
@@ -73,7 +74,7 @@ On the **category column** (Live, Movies, and TV Shows): **B** jumps to the top 
 
 ## Player chrome (external mpv — daily)
 
-Video is **mpv**, not a Flutter texture. Banner + pause menu are drawn on mpv’s OSD (ASS overlay). That is the TiviMate-like path that can stay at 60fps.
+Video is **mpv**, not a Flutter texture. Banner + pause menu are a **bottom HUD** on mpv’s OSD (styled `show-text` / optional ASS overlay): LIVE badge, now/next, VOD progress bar, pause list. That is the TiviMate-like path that can stay at 60fps. The Flutter embed HUD is the look we copy — it cannot sit over Game Mode mpv.
 
 Stock mpv OSC (seek bar) is **disabled** — on live it rewinds the cache.
 
@@ -114,8 +115,8 @@ sdtv uses a **text menu** instead:
 
 | Mode | How you enter | D-pad / shoulders | A | B |
 |------|----------------|-------------------|---|---|
-| **Playing** | Start channel / Resume | Volume ↑↓ · Channel ←→ / LB RB | Open menu (pauses) | Quit to guide |
-| **Watch menu** | A while playing | Move selection · ←→ change subs/audio | Activate row | Close menu (stay paused) |
+| **Playing** | Start channel / Resume | Volume ↑↓ · Channel ←→ / LB RB | Open menu (pauses) | Quit to guide / title |
+| **Watch menu** | A while playing | Move selection · ←→ change subs/audio | Activate row | Close menu and keep playing |
 
 Menu rows (OSD list with ▶ cursor):
 
