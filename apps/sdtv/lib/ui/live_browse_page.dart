@@ -69,7 +69,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   int _searchIndex = 0;
   int _switchSourceIndex = 0;
   int _unfavIndex = 0;
-  LiveChannel? _unfavChannel;
+  String _unfavName = '';
+  Future<void> Function()? _unfavRemove;
 
   final _catScroll = ScrollController();
   final _chanScroll = ScrollController();
@@ -1323,7 +1324,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _aboutOpen = false;
       _manageCatsOpen = false;
       _unfavOpen = false;
-      _unfavChannel = null;
+      _unfavName = '';
+      _unfavRemove = null;
       _searchOpen = true;
       _searchBrowseResults = false;
       _searchIndex = 0;
@@ -1810,14 +1812,48 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (mounted) setState(() {});
   }
 
-  /// Y / F: star or unstar channel (guide focus, or now-playing while watching).
+  /// Y / F: star live from the guide; movies / TV shows only on the title page.
   Future<void> _toggleFavorite() async {
     if (_overlayOpen) return;
     _lastFavoriteAt = DateTime.now();
 
+    if (session.isWatchingExternal) {
+      if (session.nowPlayingVod != null || session.nowPlayingSeries != null) {
+        return;
+      }
+    } else if (_isMovies || _isSeries) {
+      if (!_vodDetailOpen || _seriesEpisodesOpen) {
+        _favoriteHint('Open the title, then Add to Favorites');
+        return;
+      }
+      if (_isMovies) {
+        final item = session.vodDetailItem;
+        if (item == null) {
+          _favoriteHint('Open the title, then Add to Favorites');
+          return;
+        }
+        if (session.isVodFavorite(item)) {
+          _openUnfav(item.name, () => _applyVodFavoriteToggle(item));
+          return;
+        }
+        await _applyVodFavoriteToggle(item);
+        return;
+      }
+      final show = session.seriesDetailItem;
+      if (show == null) {
+        _favoriteHint('Open the title, then Add to Favorites');
+        return;
+      }
+      if (session.isSeriesFavorite(show)) {
+        _openUnfav(show.name, () => _applySeriesFavoriteToggle(show));
+        return;
+      }
+      await _applySeriesFavoriteToggle(show);
+      return;
+    }
+
     LiveChannel? ch;
     if (session.isWatchingExternal) {
-      // Search → play → Y used to no-op here; star the playing channel instead.
       ch = session.nowPlaying;
     } else if (_column == 1) {
       final chans = session.channelsInCategory;
@@ -1827,52 +1863,72 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
 
     if (ch == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Highlight a channel (or play one), then Y to favorite'),
-          duration: Duration(seconds: 2),
-        ),
-      );
+      _favoriteHint('Highlight a channel (or play one), then Y to favorite');
       return;
     }
 
-    // Guide: confirm before removing a star. Add is still one-shot.
-    // While mpv is up the overlay would be hidden, so unstar stays immediate.
     if (session.isFavorite(ch) && !session.isWatchingExternal) {
-      setState(() {
-        _unfavOpen = true;
-        _unfavIndex = 0;
-        _unfavChannel = ch;
-      });
+      final channel = ch;
+      _openUnfav(channel.name, () => _applyFavoriteToggle(channel));
       return;
     }
 
     await _applyFavoriteToggle(ch);
+  }
+
+  void _favoriteHint(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(text), duration: const Duration(seconds: 2)),
+    );
+  }
+
+  void _openUnfav(String name, Future<void> Function() remove) {
+    setState(() {
+      _unfavOpen = true;
+      _unfavIndex = 0;
+      _unfavName = name;
+      _unfavRemove = remove;
+    });
   }
 
   void _closeUnfav() {
     setState(() {
       _unfavOpen = false;
       _unfavIndex = 0;
-      _unfavChannel = null;
+      _unfavName = '';
+      _unfavRemove = null;
     });
   }
 
   Future<void> _resolveUnfav() async {
-    final ch = _unfavChannel;
     final remove = _unfavIndex == 1;
+    final action = _unfavRemove;
     _closeUnfav();
-    if (!remove || ch == null) return;
-    await _applyFavoriteToggle(ch);
+    if (!remove || action == null) return;
+    await action();
   }
 
   Future<void> _applyFavoriteToggle(LiveChannel ch) async {
     final nowFav = await session.toggleFavorite(ch);
+    _starSnack(nowFav, ch.name);
+  }
+
+  Future<void> _applyVodFavoriteToggle(VodItem item) async {
+    final nowFav = await session.toggleVodFavorite(item);
+    _starSnack(nowFav, item.name);
+  }
+
+  Future<void> _applySeriesFavoriteToggle(SeriesItem show) async {
+    final nowFav = await session.toggleSeriesFavorite(show);
+    _starSnack(nowFav, show.name);
+  }
+
+  void _starSnack(bool nowFav, String name) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(nowFav ? '★ ${ch.name}' : '☆ Removed ${ch.name}'),
+        content: Text(nowFav ? '★ $name' : '☆ Removed $name'),
         duration: const Duration(seconds: 2),
       ),
     );
@@ -1906,6 +1962,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         icon: Icons.play_arrow_rounded,
       ));
     }
+    out.add(_favoriteAction(
+      favorited: item != null && session.isVodFavorite(item),
+    ));
     if (info != null && info.hasTrailer) {
       out.add((
         id: 'trailer',
@@ -1914,6 +1973,16 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       ));
     }
     return out;
+  }
+
+  ({String id, String label, IconData icon}) _favoriteAction({
+    required bool favorited,
+  }) {
+    return (
+      id: 'favorite',
+      label: favorited ? 'Remove from Favorites' : 'Add to Favorites',
+      icon: favorited ? Icons.star_rounded : Icons.star_border_rounded,
+    );
   }
 
   List<({String id, String label, IconData icon})> _seriesDetailActions(
@@ -1945,6 +2014,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         icon: Icons.play_arrow_rounded,
       ));
     }
+    out.add(_favoriteAction(favorited: session.isSeriesFavorite(series)));
     out.add((
       id: 'seasons',
       label: 'Seasons & episodes',
@@ -2125,6 +2195,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       err = await session.watchVod(item);
     } else if (id == 'start') {
       err = await session.watchVod(item, fromBeginning: true);
+    } else if (id == 'favorite') {
+      await _toggleFavorite();
+      return;
     } else if (id == 'trailer') {
       final info = session.vodDetail ?? VodInfo.fromVodItem(item);
       err = await session.watchTrailer(info);
@@ -2142,6 +2215,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (show == null) return;
     if (id == 'seasons') {
       _openSeriesEpisodes();
+      return;
+    }
+    if (id == 'favorite') {
+      await _toggleFavorite();
       return;
     }
     String? err;
@@ -2206,6 +2283,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         actionIndex: ai,
         loading: session.vodDetailLoading,
         watched: session.isVodWatched(item),
+        favorited: session.isVodFavorite(item),
         artCache: session.artwork,
         artScope: session.prefsScope,
         onAction: (id) => unawaited(_runVodDetailActionId(id)),
@@ -2237,7 +2315,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                   child: Text(
                     session.vodError ??
                         (session.vodCatalogReady
-                            ? 'No movies in this category.'
+                            ? (session.selectedVodCategoryId ==
+                                    kFavoritesCategoryId
+                                ? 'No favorite movies yet.\n'
+                                    'Open a title · Add to Favorites'
+                                : 'No movies in this category.')
                             : 'Loading movies…'),
                     style: theme.textTheme.bodyLarge,
                   ),
@@ -2291,6 +2373,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                           focused: focused,
                           progress: progress,
                           watched: session.isVodWatched(v),
+                          favorited: session.isVodFavorite(v),
                           posterUrl: v.streamIcon,
                           artId: '${v.streamId}',
                           artScope: session.prefsScope,
@@ -2357,6 +2440,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         actionIndex: ai,
         loading: session.vodDetailLoading,
         watched: show != null && session.isSeriesWatched(show),
+        favorited: show != null && session.isSeriesFavorite(show),
         artCache: session.artwork,
         artScope: session.prefsScope,
         onAction: (id) => unawaited(_runVodDetailActionId(id)),
@@ -2388,7 +2472,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                   child: Text(
                     session.seriesError ??
                         (session.seriesCatalogReady
-                            ? 'No shows in this category.'
+                            ? (session.selectedSeriesCategoryId ==
+                                    kFavoritesCategoryId
+                                ? 'No favorite TV shows yet.\n'
+                                    'Open a title · Add to Favorites'
+                                : 'No shows in this category.')
                             : 'Loading TV shows…'),
                     style: theme.textTheme.bodyLarge,
                   ),
@@ -2439,6 +2527,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                           focused: focused,
                           progress: progress,
                           watched: session.isSeriesWatched(s),
+                          favorited: session.isSeriesFavorite(s),
                           posterUrl: s.cover,
                           artId: 's:${s.seriesId}',
                           artScope: session.prefsScope,
@@ -2634,7 +2723,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
             : '↑↓ episodes · A play · B back';
       }
       if (_vodDetailOpen) {
-        return '↑↓ actions · A select · B back';
+        return '↑↓ actions · A select · Y star · B back';
       }
       if (_column == 1) {
         return '↑↓←→ posters · A title · B cats · ☰ Search';
@@ -2885,6 +2974,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                   !_sectionFocus && _column == 0 && selected;
                               final isFavCat =
                                   cats[i].categoryId == kFavoritesCategoryId;
+                              final favN = movies
+                                  ? session.vodFavoriteCount
+                                  : series
+                                      ? session.seriesFavoriteCount
+                                      : session.favoriteCount;
                               return SizedBox(
                                 height: _rowExtent,
                                 child: Padding(
@@ -2892,7 +2986,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                   child: _BrowseTile(
                                     label: isFavCat
                                         ? '${cats[i].categoryName}'
-                                            '${session.favoriteCount > 0 ? ' (${session.favoriteCount})' : ''}'
+                                            '${favN > 0 ? ' ($favN)' : ''}'
                                         : cats[i].categoryName,
                                     icon: isFavCat
                                         ? Icons.star_rounded
@@ -3482,7 +3576,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              _unfavChannel?.name ?? '',
+                              _unfavName,
                               style: theme.textTheme.bodyLarge,
                             ),
                             const SizedBox(height: 20),

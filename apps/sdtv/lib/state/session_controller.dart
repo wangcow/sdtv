@@ -208,7 +208,20 @@ class SessionController extends ChangeNotifier {
   bool isFavorite(LiveChannel channel) =>
       _favoriteKeys.contains(channel.favoriteKey);
 
-  int get favoriteCount => _favoriteKeys.length;
+  bool isVodFavorite(VodItem item) =>
+      _favoriteKeys.contains(item.favoriteKey);
+
+  bool isSeriesFavorite(SeriesItem item) =>
+      _favoriteKeys.contains(item.favoriteKey);
+
+  int get favoriteCount =>
+      _favoriteKeys.where(UserLibrary.isLiveFavoriteKey).length;
+
+  int get vodFavoriteCount =>
+      _favoriteKeys.where(UserLibrary.isVodFavoriteKey).length;
+
+  int get seriesFavoriteCount =>
+      _favoriteKeys.where(UserLibrary.isSeriesFavoriteKey).length;
 
   int get hiddenCategoryCount => _hiddenCategoryIds.length;
 
@@ -398,8 +411,16 @@ class SessionController extends ChangeNotifier {
   }
 
   /// Star / unstar [channel]. Returns true if now favorited.
-  Future<bool> toggleFavorite(LiveChannel channel) async {
-    final key = channel.favoriteKey;
+  Future<bool> toggleFavorite(LiveChannel channel) =>
+      toggleFavoriteKey(channel.favoriteKey);
+
+  Future<bool> toggleVodFavorite(VodItem item) =>
+      toggleFavoriteKey(item.favoriteKey);
+
+  Future<bool> toggleSeriesFavorite(SeriesItem item) =>
+      toggleFavoriteKey(item.favoriteKey);
+
+  Future<bool> toggleFavoriteKey(String key) async {
     final nowFav = await _settings.toggleFavoriteKey(prefsScope, key);
     _reloadFavorites();
     notifyListeners();
@@ -545,7 +566,13 @@ class SessionController extends ChangeNotifier {
 
   List<MediaCategory> get browseVodCategories {
     final hidden = _hiddenCategoryIds;
-    return vodCategories.where((c) => !hidden.contains(c.categoryId)).toList();
+    final visible =
+        vodCategories.where((c) => !hidden.contains(c.categoryId)).toList();
+    const fav = MediaCategory(
+      categoryId: kFavoritesCategoryId,
+      categoryName: '★ Favorites',
+    );
+    return [fav, ...visible];
   }
 
   int vodResumeSeconds(VodItem item) =>
@@ -553,19 +580,52 @@ class SessionController extends ChangeNotifier {
 
   List<MediaCategory> get browseSeriesCategories {
     final hidden = _hiddenCategoryIds;
-    return seriesCategories
+    final visible = seriesCategories
         .where((c) => !hidden.contains(c.categoryId))
         .toList();
+    const fav = MediaCategory(
+      categoryId: kFavoritesCategoryId,
+      categoryName: '★ Favorites',
+    );
+    return [fav, ...visible];
   }
 
   List<SeriesItem> get seriesInCategory {
     final id = selectedSeriesCategoryId;
+    if (id == kFavoritesCategoryId) {
+      final byKey = <String, SeriesItem>{
+        for (final s in allSeries) s.favoriteKey: s,
+      };
+      final out = <SeriesItem>[];
+      final seen = <String>{};
+      for (final k in _favoriteKeys) {
+        if (!UserLibrary.isSeriesFavoriteKey(k)) continue;
+        final s = byKey[k];
+        if (s == null || !seen.add(s.favoriteKey)) continue;
+        out.add(s);
+      }
+      return out;
+    }
     if (id == null || id.isEmpty) return allSeries;
     return allSeries.where((s) => s.categoryId == id).toList();
   }
 
   List<VodItem> get vodInCategory {
     final id = selectedVodCategoryId;
+    if (id == kFavoritesCategoryId) {
+      final byKey = <String, VodItem>{
+        for (final v in allVod) v.favoriteKey: v,
+      };
+      final out = <VodItem>[];
+      final seen = <String>{};
+      for (final k in _favoriteKeys) {
+        if (!UserLibrary.isVodFavoriteKey(k)) continue;
+        final v = byKey[k];
+        if (v == null || !seen.add(v.favoriteKey)) continue;
+        out.add(v);
+      }
+      return out;
+    }
     if (id == null || id.isEmpty) return allVod;
     return allVod.where((v) => v.categoryId == id).toList();
   }
@@ -641,7 +701,7 @@ class SessionController extends ChangeNotifier {
         title: watchingVod ? _nowPlayingLabel : _nowPlayingLabel,
         nowLine: 'Paused',
         hint: watchingVod
-            ? 'A menu  ·  B movies  ·  ←→ seek'
+            ? 'A menu  ·  B title  ·  ←→ seek'
             : 'A menu  ·  B guide  ·  LB/RB ch  ·  ↑↓ vol',
         durationMs: 2500,
       );
@@ -746,20 +806,22 @@ class SessionController extends ChangeNotifier {
       'Mute: $muteLabel',
       'Back to guide',
     ];
-
-    final buf = StringBuffer('❚❚  $_nowPlayingLabel\n');
-    for (var i = 0; i < rows.length; i++) {
-      final mark = i == watchMenuIndex ? '▶ ' : '   ';
-      buf.writeln('$mark${rows[i]}');
-    }
-    buf.write('↑↓ move · ←→ change · A select · B close menu');
+    const hint = '↑↓ move  ·  ←→ change  ·  A select  ·  B close';
     await externalMpv.showChromeOverlay(
       watchMenuAss(
         title: _nowPlayingLabel,
         rows: rows,
         selected: watchMenuIndex,
+        live: true,
+        hint: hint,
       ),
-      fallbackText: buf.toString(),
+      fallbackText: watchMenuPlain(
+        title: _nowPlayingLabel,
+        rows: rows,
+        selected: watchMenuIndex,
+        live: true,
+        hint: hint,
+      ),
     );
   }
 
@@ -767,20 +829,20 @@ class SessionController extends ChangeNotifier {
     const rows = ['Retry', 'Back to guide'];
     final idx = watchMenuIndex.clamp(0, rows.length - 1);
     final reason = externalMpv.playError(stallKind: _stallKind).line;
-    final buf = StringBuffer('$reason\n$_nowPlayingLabel\n\n');
-    for (var i = 0; i < rows.length; i++) {
-      final mark = i == idx ? '▶ ' : '   ';
-      buf.writeln('$mark${rows[i]}');
-    }
-    buf.write('A select · B guide');
+    const hint = 'A select  ·  B guide';
     await externalMpv.showChromeOverlay(
       watchMenuAss(
-        title: '$reason · $_nowPlayingLabel',
+        title: '$reason\n$_nowPlayingLabel',
         rows: rows,
         selected: idx,
-        hint: 'A select  ·  B guide',
+        hint: hint,
       ),
-      fallbackText: buf.toString(),
+      fallbackText: watchMenuPlain(
+        title: '$reason\n$_nowPlayingLabel',
+        rows: rows,
+        selected: idx,
+        hint: hint,
+      ),
     );
   }
 
@@ -803,6 +865,7 @@ class SessionController extends ChangeNotifier {
     final timeLine = dur.inSeconds > 0
         ? '${_fmtDur(pos)} / ${_fmtDur(dur)}'
         : _fmtDur(pos);
+    final progress = dur.inSeconds > 0 ? pos.inSeconds / dur.inSeconds : 0.0;
     final rows = <String>[
       'Resume',
       '−10 seconds',
@@ -812,50 +875,86 @@ class SessionController extends ChangeNotifier {
       'Mute: $muteLabel',
       'Back to movies',
     ];
-    final buf = StringBuffer('❚❚  $_nowPlayingLabel\n$timeLine\n');
-    for (var i = 0; i < rows.length; i++) {
-      final mark = i == watchMenuIndex ? '▶ ' : '   ';
-      buf.writeln('$mark${rows[i]}');
-    }
-    buf.write('↑↓ move · A select · ←→ seek 10s · B movies');
+    const hint = '↑↓ move  ·  A select  ·  ←→ seek  ·  B back';
     await externalMpv.showChromeOverlay(
       watchMenuAss(
-        title: '$_nowPlayingLabel  $timeLine',
+        title: _nowPlayingLabel,
         rows: rows,
         selected: watchMenuIndex,
-        hint: '↑↓ move  ·  A select  ·  ←→ seek  ·  B movies',
+        timeLine: timeLine,
+        progress: progress,
+        hint: hint,
       ),
-      fallbackText: buf.toString(),
+      fallbackText: watchMenuPlain(
+        title: _nowPlayingLabel,
+        rows: rows,
+        selected: watchMenuIndex,
+        timeLine: timeLine,
+        progress: progress,
+        hint: hint,
+      ),
     );
   }
+
+  Timer? _vodHudKick;
 
   void _startVodProgressWatch() {
     _stopVodProgressWatch();
     _vodProgressWatch = Timer.periodic(const Duration(seconds: 10), (_) {
       unawaited(_saveVodProgress());
     });
+    _vodHudKick?.cancel();
+    _vodHudKick = Timer(const Duration(milliseconds: 1400), () {
+      unawaited(_showVodPlayingHud());
+    });
   }
 
   void _stopVodProgressWatch() {
     _vodProgressWatch?.cancel();
     _vodProgressWatch = null;
+    _vodHudKick?.cancel();
+    _vodHudKick = null;
+  }
+
+  Future<void> _showVodPlayingHud() async {
+    if (!watchingVod || !isWatchingExternal || watchMenuOpen) return;
+    try {
+      final pos = await externalMpv.timePos();
+      final dur = await externalMpv.duration();
+      await externalMpv.showVodHud(
+        title: _nowPlayingLabel,
+        position: pos,
+        duration: dur,
+        durationMs: 2800,
+      );
+    } catch (_) {}
   }
 
   Future<void> _saveVodProgress() async {
     if (!watchingVod) return;
+    // After mpv exits, IPC reads 0 and used to *erase* a real resume.
+    if (!externalMpv.isRunning) return;
     try {
       final pos = await externalMpv.timePos();
+      if (pos.inSeconds <= kVodResumeMinSeconds) return;
       final mpvDur = await externalMpv.duration();
       final ep = nowPlayingEpisode;
       final show = nowPlayingSeries;
       if (ep != null) {
-        final dur =
-            mpvDur.inSeconds > 0 ? mpvDur.inSeconds : ep.durationSecs;
+        final dur = vodEffectiveDuration(
+          positionSecs: pos.inSeconds,
+          mpvDurationSecs: mpvDur.inSeconds,
+          catalogDurationSecs: ep.durationSecs,
+        );
         final finished = vodReachedEnd(pos.inSeconds, dur);
         await _settings.setVodProgressSeconds(
           prefsScope,
           ep.progressKey,
           finished ? 0 : pos.inSeconds,
+        );
+        debugPrint(
+          'sdtv: vod progress ep=${ep.progressKey} '
+          '${pos.inSeconds}s dur=$dur finished=$finished',
         );
         if (finished) {
           await _addWatchedKey(ep.progressKey);
@@ -875,12 +974,20 @@ class SessionController extends ChangeNotifier {
       final item = nowPlayingVod;
       if (item == null) return;
       final catalogDur = vodDetail?.durationSecs ?? item.durationSecs;
-      final dur = mpvDur.inSeconds > 0 ? mpvDur.inSeconds : catalogDur;
+      final dur = vodEffectiveDuration(
+        positionSecs: pos.inSeconds,
+        mpvDurationSecs: mpvDur.inSeconds,
+        catalogDurationSecs: catalogDur,
+      );
       final finished = vodReachedEnd(pos.inSeconds, dur);
       await _settings.setVodProgressSeconds(
         prefsScope,
         item.favoriteKey,
         finished ? 0 : pos.inSeconds,
+      );
+      debugPrint(
+        'sdtv: vod progress ${item.favoriteKey} '
+        '${pos.inSeconds}s dur=$dur finished=$finished',
       );
       if (finished) await _addWatchedKey(item.favoriteKey);
     } catch (e) {
@@ -913,6 +1020,16 @@ class SessionController extends ChangeNotifier {
   Future<void> seekVodBy(Duration delta) async {
     if (!watchingVod || !isWatchingExternal) return;
     await externalMpv.seekBy(delta);
+    if (watchMenuOpen) return;
+    try {
+      final pos = await externalMpv.timePos();
+      final dur = await externalMpv.duration();
+      await externalMpv.showVodHud(
+        title: _nowPlayingLabel,
+        position: pos,
+        duration: dur,
+      );
+    } catch (_) {}
   }
 
   void _startStallWatch() {
@@ -1052,7 +1169,7 @@ class SessionController extends ChangeNotifier {
     }
   }
 
-  /// B while watching: close menu first, else quit to guide.
+  /// B while watching: dismiss the pause list and keep playing; B again leaves.
   Future<void> watchBack() async {
     if (!isWatchingExternal) return;
     if (watchStallOpen) {
@@ -1060,7 +1177,7 @@ class SessionController extends ChangeNotifier {
       return;
     }
     if (watchMenuOpen) {
-      await watchCloseMenu(resume: false);
+      await watchCloseMenu(resume: true);
       return;
     }
     await watchQuit();
@@ -1070,6 +1187,9 @@ class SessionController extends ChangeNotifier {
   Future<void> watchQuit() async {
     if (!isWatchingExternal) return;
     debugPrint('sdtv: watchQuit');
+    if (watchingVod) {
+      await _saveVodProgress();
+    }
     _stopStallWatch();
     watchMenuOpen = false;
     watchStallOpen = false;
@@ -1844,6 +1964,10 @@ class SessionController extends ChangeNotifier {
   }
 
   void _applySavedVodCategory(String? vodId) {
+    if (vodId == kFavoritesCategoryId) {
+      selectedVodCategoryId = kFavoritesCategoryId;
+      return;
+    }
     if (vodId == null || vodId.isEmpty || vodCategories.isEmpty) {
       if (selectedVodCategoryId == null && vodCategories.isNotEmpty) {
         selectedVodCategoryId = vodCategories.first.categoryId;
@@ -1859,6 +1983,10 @@ class SessionController extends ChangeNotifier {
   }
 
   void _applySavedSeriesCategory(String? seriesId) {
+    if (seriesId == kFavoritesCategoryId) {
+      selectedSeriesCategoryId = kFavoritesCategoryId;
+      return;
+    }
     if (seriesId == null || seriesId.isEmpty || seriesCategories.isEmpty) {
       if (selectedSeriesCategoryId == null && seriesCategories.isNotEmpty) {
         selectedSeriesCategoryId = seriesCategories.first.categoryId;

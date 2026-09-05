@@ -20,6 +20,7 @@ class VodTitlePane extends StatelessWidget {
     required this.onAction,
     this.loading = false,
     this.watched = false,
+    this.favorited = false,
     this.artCache,
     this.artScope = '',
   });
@@ -31,6 +32,7 @@ class VodTitlePane extends StatelessWidget {
   final ValueChanged<String> onAction;
   final bool loading;
   final bool watched;
+  final bool favorited;
   final ArtworkCache? artCache;
   final String artScope;
 
@@ -152,6 +154,7 @@ class VodTitlePane extends StatelessWidget {
                         scope: artScope,
                         id: '${item.streamId}',
                         watched: watched,
+                        favorited: favorited,
                       ),
                     ),
                     const SizedBox(height: 10),
@@ -166,7 +169,7 @@ class VodTitlePane extends StatelessWidget {
                     ],
                     const SizedBox(height: 8),
                     Text(
-                      '↑↓ actions · A select · B back',
+                      '↑↓ actions · A select · Y star · B back',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.outline,
                       ),
@@ -191,7 +194,7 @@ class VodTitlePane extends StatelessWidget {
     const actionH = 52.0;
     const actionGap = 8.0;
     const hintH = 28.0;
-    final n = actionCount.clamp(1, 4);
+    final n = actionCount.clamp(1, 5);
     final actionsBlock =
         gap + n * actionH + (n - 1) * actionGap + hintH;
     final maxPosterH = (paneH - actionsBlock).clamp(180.0, 420.0);
@@ -208,6 +211,7 @@ class _Poster extends StatelessWidget {
     this.scope = '',
     this.id = '',
     this.watched = false,
+    this.favorited = false,
   });
 
   final String url;
@@ -215,6 +219,7 @@ class _Poster extends StatelessWidget {
   final String scope;
   final String id;
   final bool watched;
+  final bool favorited;
 
   @override
   Widget build(BuildContext context) {
@@ -251,6 +256,12 @@ class _Poster extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             Positioned.fill(child: art),
+            if (favorited)
+              const Positioned(
+                top: 8,
+                left: 8,
+                child: FavoriteStarMark(size: 28),
+              ),
             if (watched)
               const Positioned(
                 top: 8,

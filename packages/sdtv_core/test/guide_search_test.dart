@@ -117,6 +117,20 @@ void main() {
       ),
     ];
 
+    test('marks favorited movies in subtitle and score', () {
+      final hits = GuideSearch.search(
+        query: 'batman',
+        categories: cats,
+        channels: channels,
+        vodCategories: vodCats,
+        vodItems: vods,
+        favoriteKeys: {vods[0].favoriteKey},
+      );
+      final movie = hits.firstWhere((h) => h.isVod);
+      expect(movie.subtitle, contains('★'));
+      expect(movie.score, greaterThan(40));
+    });
+
     test('finds a movie by title', () {
       final hits = GuideSearch.search(
         query: 'batman',

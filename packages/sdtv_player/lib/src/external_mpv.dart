@@ -678,15 +678,30 @@ class ExternalMpvLauncher {
   static const _chromeOverlayId = 1;
   Timer? _chromeHideTimer;
 
-  /// Whether to use mpv `osd-overlay` (ASS). Off by default.
+  /// Whether to use mpv `osd-overlay` (ASS drawings). Off by default.
   ///
   /// Some Deck / Flatpak mpv builds treat a named-arg overlay table as fatal
   /// and **exit**. That pops Flutter back to the guide (audio just stops).
   /// Opt in with `SDTV_MPV_OVERLAY=1` once a build is known-good.
+  ///
+  /// Styled [show-text] (osd-ass-override) is tried first so Deck still gets
+  /// a Flutter-like HUD without that IPC.
   static bool get _assOverlayEnabled =>
       Platform.environment['SDTV_MPV_OVERLAY'] == '1';
 
-  /// Couch chrome on the video plane. Default is [showText] (safe).
+  bool _osdAssOverrideOk = false;
+  bool _osdAssOverrideTried = false;
+
+  Future<bool> _ensureOsdAssOverride() async {
+    if (_osdAssOverrideTried) return _osdAssOverrideOk;
+    _osdAssOverrideTried = true;
+    _osdAssOverrideOk =
+        await sendCommand(['set_property', 'osd-ass-override', 'v']);
+    return _osdAssOverrideOk;
+  }
+
+  /// Couch chrome on the video plane. Prefers styled OSD, then overlay, then
+  /// plain [showText].
   Future<void> showChromeOverlay(
     String? ass, {
     int? hideAfterMs,
@@ -694,36 +709,41 @@ class ExternalMpvLauncher {
   }) async {
     _chromeHideTimer?.cancel();
     _chromeHideTimer = null;
+    final ms = hideAfterMs ?? 4000;
+    if (ass != null && ass.isNotEmpty && await _ensureOsdAssOverride()) {
+      await showText(ass, durationMs: ms);
+      return;
+    }
+    if (_assOverlayEnabled && ass != null && ass.isNotEmpty) {
+      final ok = await sendCommand([
+        'osd-overlay',
+        'id',
+        _chromeOverlayId,
+        'format',
+        'ass-events',
+        'data',
+        ass,
+        'res_x',
+        1920,
+        'res_y',
+        1080,
+        'z',
+        20,
+      ]);
+      if (ok) {
+        if (hideAfterMs != null && hideAfterMs > 0) {
+          _chromeHideTimer = Timer(Duration(milliseconds: hideAfterMs), () {
+            unawaited(_clearChromeOverlay());
+          });
+        }
+        return;
+      }
+    }
     final text = fallbackText;
-    if (!_assOverlayEnabled || ass == null || ass.isEmpty) {
-      if (text != null && text.isNotEmpty) {
-        await showText(text, durationMs: hideAfterMs ?? 4000);
-      } else {
-        await _clearChromeOverlay();
-      }
-      return;
-    }
-    final ok = await sendCommand([
-      'osd-overlay',
-      {
-        'id': _chromeOverlayId,
-        'format': 'ass-events',
-        'data': ass,
-        'res_x': 1920,
-        'res_y': 1080,
-        'z': 20,
-      },
-    ]);
-    if (!ok) {
-      if (text != null && text.isNotEmpty) {
-        await showText(text, durationMs: hideAfterMs ?? 4000);
-      }
-      return;
-    }
-    if (hideAfterMs != null && hideAfterMs > 0) {
-      _chromeHideTimer = Timer(Duration(milliseconds: hideAfterMs), () {
-        unawaited(_clearChromeOverlay());
-      });
+    if (text != null && text.isNotEmpty) {
+      await showText(text, durationMs: ms);
+    } else {
+      await _clearChromeOverlay();
     }
   }
 
@@ -751,21 +771,52 @@ class ExternalMpvLauncher {
     String? hint,
     int durationMs = 4500,
   }) {
+    final h = hint ?? 'A menu  ·  B guide  ·  LB/RB channel';
     final ass = liveBannerAss(
       title: title,
       nowLine: nowLine,
       nextLine: nextLine,
-      hint: hint ?? 'A menu  ·  B guide  ·  LB/RB channel',
+      hint: h,
     );
-    final plain = [
-      title,
-      ?nowLine,
-      ?nextLine,
-    ].join('\n');
     return showChromeOverlay(
       ass,
       hideAfterMs: durationMs,
-      fallbackText: plain,
+      fallbackText: liveBannerPlain(
+        title: title,
+        nowLine: nowLine,
+        nextLine: nextLine,
+        hint: h,
+      ),
+    );
+  }
+
+  /// Transient VOD transport HUD (seek / start) — Flutter chrome analogue.
+  Future<void> showVodHud({
+    required String title,
+    required Duration position,
+    required Duration duration,
+    String hint = '←→ seek 10s  ·  A menu  ·  B back',
+    int durationMs = 2200,
+  }) {
+    final durSecs = duration.inSeconds;
+    final progress = durSecs > 0 ? position.inSeconds / durSecs : 0.0;
+    final timeLine = durSecs > 0
+        ? '${osdFmtDuration(position)}  /  ${osdFmtDuration(duration)}'
+        : osdFmtDuration(position);
+    return showChromeOverlay(
+      vodHudAss(
+        title: title,
+        timeLine: timeLine,
+        progress: progress,
+        hint: hint,
+      ),
+      hideAfterMs: durationMs,
+      fallbackText: vodHudPlain(
+        title: title,
+        timeLine: timeLine,
+        progress: progress,
+        hint: hint,
+      ),
     );
   }
 
@@ -1183,11 +1234,15 @@ class ExternalMpvLauncher {
       confDir = await Directory.systemTemp.createTemp('sdtv_mpv_');
       final confFile = File('${confDir.path}/input.conf');
       await confFile.writeAsString('''
-# sdtv — quit back to guide
-ESC quit
+# sdtv — Flutter owns B / Esc (js*). Steam injects Esc + gamepad East for B;
+# if those quit here, VOD dumps to the title before progress is saved.
+ESC ignore
+BS ignore
+GAMEPAD_ACTION_EAST ignore
+GAMEPAD_ACTION_RIGHT ignore
+GAMEPAD_BACK ignore
 q quit
 Q quit
-BS quit
 MOUSE_BTN2 quit
 # Pause (lua script also forces OSC on pause)
 SPACE cycle pause
@@ -1204,19 +1259,16 @@ PLAYLIST_NEXT playlist-next force
 < playlist-prev force
 > playlist-next force
 n playlist-next force
-# SDL gamepad (if mpv owns the pad)
+# SDL gamepad (if mpv owns the pad) — A pause only; B/Start stay with Flutter
 GAMEPAD_ACTION_DOWN cycle pause
-GAMEPAD_ACTION_RIGHT quit
-GAMEPAD_ACTION_EAST quit
-GAMEPAD_BACK quit
 GAMEPAD_DPAD_UP osd-msg-bar add volume 5
 GAMEPAD_DPAD_DOWN osd-msg-bar add volume -5
 GAMEPAD_DPAD_LEFT playlist-prev force
 GAMEPAD_DPAD_RIGHT playlist-next force
 GAMEPAD_SHOULDER_L playlist-prev force
 GAMEPAD_SHOULDER_R playlist-next force
-GAMEPAD_START quit
-GAMEPAD_GUIDE quit
+GAMEPAD_START ignore
+GAMEPAD_GUIDE ignore
 ''');
 
       // Intentionally no "force OSC on pause" script: OSC seek on live
@@ -1312,8 +1364,20 @@ GAMEPAD_GUIDE quit
           '--panscan=0',
           '--border=no',
           '--hwdec=vaapi,vaapi-copy,auto-copy,auto',
-          '--profile=fast',
-          '--framedrop=vo',
+          // Live: cheapest scale so 60fps holds. VOD: lanczos (mpv default)
+          // — profile=fast is bilinear and looks soft on movies.
+          if (vod) ...[
+            '--scale=lanczos',
+            '--cscale=lanczos',
+            '--dscale=mitchell',
+            '--correct-downscaling=yes',
+            '--sigmoid-upscaling=yes',
+            '--dither-depth=auto',
+            '--framedrop=no',
+          ] else ...[
+            '--profile=fast',
+            '--framedrop=vo',
+          ],
           ...geoArgs,
           ...extraArgs,
           if (useList) ...[

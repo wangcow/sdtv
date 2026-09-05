@@ -47,7 +47,7 @@ cd packages/sdtv_core && dart test
 
 Daily watch is **external mpv** (`vo=gpu`). Flutter is the guide. On-video chrome is mpv OSD / ASS overlay. Do **not** chase Flutter-texture FPS for live TV — Deck embed is 7–15fps and cannot match mpv picture quality.
 
-- **Now:** Live tab is the EPG grid · external mpv + OSD/ASS chrome · Movies / TV Shows poster grid · title landing · seasons/episodes · provider art cache · Search covers live, movies, and TV shows
+- **Now:** Live tab is the EPG grid · external mpv + OSD/ASS chrome · Movies / TV Shows poster grid · title landing · seasons/episodes · provider art cache · Search covers live, movies, and TV shows · ★ Favorites on live, movies, and TV shows
 - **Next:** Flathub
-- Later: program search in Search overlay · catch-up if the panel supports it
+- Later: program search in Search overlay · catch-up if the panel supports it · paid Wangcow Continuity (host `UserLibrary` JSON across devices — see [docs/LIBRARY.md](docs/LIBRARY.md))
 - **Future product (not this phase):** Flutter HUD *over* live mpv so widgets sit on a separate plane. Video must **never** go through `media_kit`’s `Video` texture. Gamescope Game Mode is the hard constraint — do not chase X11 `--wid` / stacked windows.
