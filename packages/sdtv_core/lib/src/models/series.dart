@@ -155,6 +155,18 @@ class SeriesCatalog {
     return null;
   }
 
+  /// Next episode after [current] in season/episode order, or null if last.
+  SeriesEpisode? nextEpisode(SeriesEpisode current) {
+    var found = false;
+    for (final s in seasons) {
+      for (final e in s.episodes) {
+        if (found) return e;
+        if (e.id == current.id) found = true;
+      }
+    }
+    return null;
+  }
+
   factory SeriesCatalog.fromXtreamJson(
     Map<String, dynamic> json, {
     SeriesItem? fallback,

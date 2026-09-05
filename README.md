@@ -163,12 +163,12 @@ See [docs/STEAM_DECK.md](docs/STEAM_DECK.md). Short version: install Flatpak →
 4. ~~Favorites / short EPG (now·next mini guide)~~  
 5. ~~Movies + Series + full EPG grid~~  
 6. Flathub  
-7. *Future:* Flutter HUD over live mpv (transparent overlay / `--wid`) — not Flutter texture video. See [docs/STEAM_DECK.md](docs/STEAM_DECK.md).
+7. *Future:* Flutter HUD over live mpv — not Flutter texture video. Gamescope Game Mode is the constraint. See [docs/STEAM_DECK.md](docs/STEAM_DECK.md).
 
 ### Movies / TV art
 
 1. ~~Poster grid chrome (placeholders, pad 2D nav). Live stays a list.~~  
-2. ~~**Title landing page** (right pane). **A** on a poster opens it — does not start playback. Resume / Play from beginning / Watch trailer. **B** / **←** back to the grid.~~  
+2. ~~**Title landing page** (right pane). **A** on a poster opens it — does not start playback. Resume Playing + Start from Beginning when in progress, else Play Now. Watch trailer when the panel has one. **B** / **←** back to the grid.~~  
 3. ~~Provider `stream_icon` / `cover` + on-disk cache (visible tiles + lookahead; landing poster uses the same cache)~~  
 4. ~~TV Shows tab (same grid → landing → season/episode list)~~
 

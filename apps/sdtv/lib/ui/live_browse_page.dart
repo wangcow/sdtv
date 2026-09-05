@@ -84,10 +84,14 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   DateTime? _lastNavAt;
   DateTime? _lastFavoriteAt;
+  DateTime? _lastPageAt;
+  DateTime? _lastMenuAt;
   // Allow accelerated hold-scroll from the joystick reader (~40ms + bursts).
   static const _navCooldown = Duration(milliseconds: 28);
   /// Steam injects PageDown with Y; ignore the page jump that follows a star.
   static const _ignorePageAfterFavorite = Duration(milliseconds: 450);
+  /// Deck often double-fires RB as pageDown + ☰/Start (menu first row is Search).
+  static const _ignoreMenuAfterPage = Duration(milliseconds: 450);
 
   /// Fixed row height so scroll offset matches the selected tile (highlight stays on-screen).
   static const _rowExtent = 78.0;
@@ -386,6 +390,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         _episodeIndex =
             eps.isEmpty ? 0 : _episodeIndex.clamp(0, eps.length - 1);
       }
+    }
+    if (_searchOpen) {
+      _searchHits = session.searchGuide(_searchCtrl.text);
+      _searchIndex = _searchHits.isEmpty
+          ? 0
+          : _searchIndex.clamp(0, _searchHits.length - 1);
     }
     setState(() {});
   }
@@ -688,7 +698,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       // OSK uses D-pad to pick keys. Do not steal the field until B / RB.
       if (!_searchBrowseResults) return;
       if (!_acceptNav()) return;
-      if (_searchHits.isEmpty) return;
+      if (_searchHits.isEmpty || (delta < 0 && _searchIndex <= 0)) {
+        _returnToSearchField();
+        return;
+      }
       setState(() {
         _searchIndex =
             (_searchIndex + delta).clamp(0, _searchHits.length - 1);
@@ -912,6 +925,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
             _ignorePageAfterFavorite) {
       return;
     }
+    if (_lastMenuAt != null &&
+        DateTime.now().difference(_lastMenuAt!) < _ignoreMenuAfterPage) {
+      return;
+    }
     if (session.isWatchMenuActive) {
       unawaited(session.watchMenuMove(delta));
       return;
@@ -920,14 +937,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       unawaited(session.watchChannelAdjacent(delta));
       return;
     }
-    // Guide: shoulders page the category list, or jump EPG time in Live.
-    if (_searchOpen && !_searchBrowseResults) {
-      _enterSearchResults();
-      return;
-    }
-    if (_isLive && _column == 1 && !_overlayOpen) {
-      if (!_acceptNav()) return;
-      _shiftEpgWindow(delta < 0 ? -kEpgJump : kEpgJump);
+    _lastPageAt = DateTime.now();
+    // Overlays own LB/RB. Checking this before seasons/title prevents a
+    // dual-fired ☰ menu from also changing season, and stops RB-in-search
+    // from mutating the page underneath.
+    if (_overlayOpen) {
+      _moveVertical(delta < 0 ? -1 : 1);
       return;
     }
     if (_seriesEpisodesOpen) {
@@ -936,16 +951,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
     if (_vodDetailOpen) {
-      if (!_acceptNav()) return;
-      final n = _vodDetailActions.length;
-      if (n == 0) return;
-      setState(() {
-        _vodDetailAction = (_vodDetailAction + delta).clamp(0, n - 1);
-      });
+      // Title landing is ↑↓ only — LB/RB are season (episodes) / EPG time.
       return;
     }
-    if (_overlayOpen) {
-      _moveVertical(delta < 0 ? -1 : 1);
+    if (_isLive && _column == 1) {
+      if (!_acceptNav()) return;
+      _shiftEpgWindow(delta < 0 ? -kEpgJump : kEpgJump);
       return;
     }
     if (_column == 0) {
@@ -1256,6 +1267,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   void _openMenu() {
     // ☰ / Start always opens menu (or closes overlay if one is up).
+    // Ignore a Start/menu edge that arrived with LB/RB (Deck dual-fire).
+    if (_lastPageAt != null &&
+        DateTime.now().difference(_lastPageAt!) < _ignoreMenuAfterPage) {
+      return;
+    }
+    _lastMenuAt = DateTime.now();
     if (_unfavOpen) {
       _closeUnfav();
       return;
@@ -1312,6 +1329,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _searchIndex = 0;
       _searchHits = session.searchGuide(_searchCtrl.text);
     });
+    unawaited(_ensureSearchCatalogs());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _searchFocus.requestFocus();
@@ -1323,6 +1341,22 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
           offset: _searchCtrl.text.length,
         );
       }
+    });
+  }
+
+  Future<void> _ensureSearchCatalogs() async {
+    if (session.moviesAvailable && !session.vodCatalogReady) {
+      await session.loadVodCatalog();
+    }
+    if (session.seriesAvailable && !session.seriesCatalogReady) {
+      await session.loadSeriesCatalog();
+    }
+    if (!mounted || !_searchOpen) return;
+    setState(() {
+      _searchHits = session.searchGuide(_searchCtrl.text);
+      _searchIndex = _searchHits.isEmpty
+          ? 0
+          : _searchIndex.clamp(0, _searchHits.length - 1);
     });
   }
 
@@ -1461,6 +1495,17 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
   }
 
+  void _returnToSearchField() {
+    if (!_searchOpen) return;
+    setState(() => _searchBrowseResults = false);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_searchOpen) return;
+      _searchFocus.requestFocus();
+      final t = _searchCtrl.text;
+      _searchCtrl.selection = TextSelection.collapsed(offset: t.length);
+    });
+  }
+
   Future<void> _activateSearchHit() async {
     if (_searchHits.isEmpty) return;
     final hit = _searchHits[_searchIndex.clamp(0, _searchHits.length - 1)];
@@ -1480,8 +1525,20 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
 
+    if (hit.section == GuideSearchSection.movies) {
+      await _jumpSearchToMovies(hit);
+      return;
+    }
+    if (hit.section == GuideSearchSection.series) {
+      await _jumpSearchToSeries(hit);
+      return;
+    }
+
     final catId = hit.categoryId;
     if (catId == null || catId.isEmpty) return;
+
+    await session.setGuideSection(GuideSection.live);
+    if (!mounted) return;
 
     // Jump guide to this category / channel.
     final cats = session.browseCategories;
@@ -1520,6 +1577,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _chanIndexByCategory[catId] = chIdx;
       _closeSearch();
       setState(() {
+        _vodDetailOpen = false;
+        _seriesEpisodesOpen = false;
+        _sectionFocus = false;
         _column = 1;
         _chanIndex = chIdx;
       });
@@ -1532,7 +1592,92 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
     // Category hit: open that list at remembered/top position.
     _closeSearch();
+    setState(() {
+      _vodDetailOpen = false;
+      _seriesEpisodesOpen = false;
+      _sectionFocus = false;
+    });
     _enterChannelColumn();
+  }
+
+  Future<void> _jumpSearchToMovies(GuideSearchHit hit) async {
+    final catId = hit.categoryId;
+    if (catId == null || catId.isEmpty) return;
+    await session.setGuideSection(GuideSection.movies);
+    if (!mounted) return;
+    session.selectVodCategory(catId);
+    final list = session.vodInCategory;
+    var idx = 0;
+    if (hit.vod != null && list.isNotEmpty) {
+      final i = list.indexWhere((v) => v.streamId == hit.vod!.streamId);
+      idx = i >= 0 ? i : 0;
+    } else {
+      idx = _vodIndexFor(catId, list.length);
+    }
+    final cats = session.browseVodCategories;
+    var catIdx = cats.indexWhere((c) => c.categoryId == catId);
+    if (catIdx < 0) catIdx = 0;
+    _chanIndexByCategory['vod:$catId'] = idx;
+    _closeSearch();
+    setState(() {
+      _vodDetailOpen = false;
+      _seriesEpisodesOpen = false;
+      _sectionFocus = false;
+      _column = 1;
+      _catIndex = catIdx;
+      _chanIndex = idx;
+      _indexCategoryId = catId;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scrollTo(
+        _catScroll,
+        catIdx,
+        itemExtent: _rowExtent,
+        headerExtent: _listHeaderExtent,
+      );
+      _scrollToVodIndex(idx);
+    });
+  }
+
+  Future<void> _jumpSearchToSeries(GuideSearchHit hit) async {
+    final catId = hit.categoryId;
+    if (catId == null || catId.isEmpty) return;
+    await session.setGuideSection(GuideSection.series);
+    if (!mounted) return;
+    session.selectSeriesCategory(catId);
+    final list = session.seriesInCategory;
+    var idx = 0;
+    if (hit.series != null && list.isNotEmpty) {
+      final i = list.indexWhere((s) => s.seriesId == hit.series!.seriesId);
+      idx = i >= 0 ? i : 0;
+    } else {
+      idx = _seriesIndexFor(catId, list.length);
+    }
+    final cats = session.browseSeriesCategories;
+    var catIdx = cats.indexWhere((c) => c.categoryId == catId);
+    if (catIdx < 0) catIdx = 0;
+    _chanIndexByCategory['series:$catId'] = idx;
+    _closeSearch();
+    setState(() {
+      _vodDetailOpen = false;
+      _seriesEpisodesOpen = false;
+      _sectionFocus = false;
+      _column = 1;
+      _catIndex = catIdx;
+      _chanIndex = idx;
+      _indexCategoryId = catId;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scrollTo(
+        _catScroll,
+        catIdx,
+        itemExtent: _rowExtent,
+        headerExtent: _listHeaderExtent,
+      );
+      _scrollToVodIndex(idx);
+    });
   }
 
   Future<void> _runMenuAction(String id) async {
@@ -1744,18 +1889,23 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     final saved = item == null ? 0 : session.vodResumeSeconds(item);
     final out = <({String id, String label, IconData icon})>[];
     if (saved > 15) {
-      final m = Duration(seconds: saved).inMinutes;
       out.add((
         id: 'resume',
-        label: 'Resume · ${m}m',
+        label: 'Resume Playing',
+        icon: Icons.play_arrow_rounded,
+      ));
+      out.add((
+        id: 'start',
+        label: 'Start from Beginning',
+        icon: Icons.replay_rounded,
+      ));
+    } else {
+      out.add((
+        id: 'start',
+        label: 'Play Now',
         icon: Icons.play_arrow_rounded,
       ));
     }
-    out.add((
-      id: 'start',
-      label: 'Play from beginning',
-      icon: Icons.replay_rounded,
-    ));
     if (info != null && info.hasTrailer) {
       out.add((
         id: 'trailer',
@@ -1774,24 +1924,27 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     final resume = session.seriesResume(series);
     final epId = resume['episodeId'] ?? '';
     final resumeEp = epId.isEmpty ? null : cat?.episodeById(epId);
+    final saved =
+        resumeEp == null ? 0 : session.episodeProgressSeconds(resumeEp);
     final out = <({String id, String label, IconData icon})>[];
-    if (resumeEp != null) {
-      final saved = session.episodeProgressSeconds(resumeEp);
-      final loc = 'S${resumeEp.season}E${resumeEp.episodeNum}';
-      final label = saved > 15
-          ? 'Resume · $loc · ${saved ~/ 60}m'
-          : 'Resume · $loc';
+    if (resumeEp != null && saved > 15) {
       out.add((
         id: 'resume',
-        label: label,
+        label: 'Resume Playing · S${resumeEp.season}E${resumeEp.episodeNum}',
+        icon: Icons.play_arrow_rounded,
+      ));
+      out.add((
+        id: 'start',
+        label: 'Start from Beginning',
+        icon: Icons.replay_rounded,
+      ));
+    } else {
+      out.add((
+        id: 'start',
+        label: 'Play Now',
         icon: Icons.play_arrow_rounded,
       ));
     }
-    out.add((
-      id: 'start',
-      label: 'Play from beginning',
-      icon: Icons.replay_rounded,
-    ));
     out.add((
       id: 'seasons',
       label: 'Seasons & episodes',
@@ -2052,6 +2205,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         actions: actions,
         actionIndex: ai,
         loading: session.vodDetailLoading,
+        watched: session.isVodWatched(item),
         artCache: session.artwork,
         artScope: session.prefsScope,
         onAction: (id) => unawaited(_runVodDetailActionId(id)),
@@ -2136,6 +2290,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                           selected: selected,
                           focused: focused,
                           progress: progress,
+                          watched: session.isVodWatched(v),
                           posterUrl: v.streamIcon,
                           artId: '${v.streamId}',
                           artScope: session.prefsScope,
@@ -2194,12 +2349,14 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       final ai = actions.isEmpty
           ? 0
           : _vodDetailAction.clamp(0, actions.length - 1);
+      final show = session.seriesDetailItem;
       return VodTitlePane(
         item: item,
         info: info,
         actions: actions,
         actionIndex: ai,
         loading: session.vodDetailLoading,
+        watched: show != null && session.isSeriesWatched(show),
         artCache: session.artwork,
         artScope: session.prefsScope,
         onAction: (id) => unawaited(_runVodDetailActionId(id)),
@@ -2281,6 +2438,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                           selected: selected,
                           focused: focused,
                           progress: progress,
+                          watched: session.isSeriesWatched(s),
                           posterUrl: s.cover,
                           artId: 's:${s.seriesId}',
                           artScope: session.prefsScope,
@@ -2424,7 +2582,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             child: _BrowseTile(
                               label: ep.label,
                               subtitle: _episodeSubtitle(ep),
-                              icon: Icons.play_circle_outline,
+                              icon: session.isEpisodeWatched(ep)
+                                  ? Icons.check_circle
+                                  : Icons.play_circle_outline,
                               selected: selected,
                               onTap: () async {
                                 setState(() => _episodeIndex = i);
@@ -2434,6 +2594,15 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                           );
                         },
                       ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            seasons.length > 1
+                ? '↑↓ episodes · LB/RB season · A play · B back'
+                : '↑↓ episodes · A play · B back',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
           ),
         ],
       ),
@@ -2448,6 +2617,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     final saved = session.episodeProgressSeconds(ep);
     if (saved > 15) {
       bits.add('Resume ${saved ~/ 60}m');
+    } else if (session.isEpisodeWatched(ep)) {
+      bits.add('Watched');
     }
     if (ep.plot.isNotEmpty) bits.add(ep.plot);
     if (bits.isEmpty) return null;
@@ -2457,10 +2628,13 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   String get _footerHint {
     if (_isPosterGuide) {
       if (_seriesEpisodesOpen) {
-        return '↑↓ episodes · LB/RB season · A play · B title';
+        final seasons = session.seriesCatalog?.seasons ?? const [];
+        return seasons.length > 1
+            ? '↑↓ episodes · LB/RB season · A play · B back'
+            : '↑↓ episodes · A play · B back';
       }
       if (_vodDetailOpen) {
-        return '↑↓ actions · A select · B posters';
+        return '↑↓ actions · A select · B back';
       }
       if (_column == 1) {
         return '↑↓←→ posters · A title · B cats · ☰ Search';
@@ -2987,7 +3161,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                 ),
               ],
 
-              // —— Guide search (categories + channels; EPG later) ——
+              // —— Guide search (live, movies, TV shows; EPG later) ——
               if (_searchOpen) ...[
                 Positioned.fill(
                   child: GestureDetector(
@@ -3020,8 +3194,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              'Categories & channels'
-                              '${session.hiddenCategoryCount > 0 ? ' · hidden cats excluded' : ''}'
+                              'Live, movies & TV shows'
+                              '${session.hiddenCategoryCount > 0 ? ' · hidden cats marked' : ''}'
                               ' · EPG later',
                               style: theme.textTheme.bodySmall?.copyWith(
                                 color: theme.colorScheme.outline,
@@ -3034,7 +3208,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                               autofocus: true,
                               style: theme.textTheme.titleMedium,
                               decoration: InputDecoration(
-                                hintText: 'e.g. bloomberg, espn, usa…',
+                                hintText: 'e.g. bloomberg, batman, friends…',
                                 prefixIcon: const Icon(Icons.search),
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
@@ -3051,7 +3225,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             Expanded(
                               child: _searchCtrl.text.trim().isEmpty
                                   ? Text(
-                                      'Type with OSK · B to list · A to guide · B close',
+                                      'Type with OSK · B to list · A jumps there · B close',
                                       style: theme.textTheme.bodyLarge,
                                     )
                                   : _searchHits.isEmpty
@@ -3065,12 +3239,17 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                           itemCount: _searchHits.length,
                                           itemBuilder: (context, i) {
                                             final hit = _searchHits[i];
-                                            final selected = _searchIndex == i;
-                                            final icon = hit.isCategory
-                                                ? Icons.folder_outlined
-                                                : hit.isEpg
-                                                    ? Icons.event_outlined
-                                                    : Icons.live_tv_outlined;
+                                            final selected = _searchBrowseResults &&
+                                                _searchIndex == i;
+                                            final icon = hit.isVod
+                                                ? Icons.movie_outlined
+                                                : hit.isSeries
+                                                    ? Icons.tv_outlined
+                                                    : hit.isCategory
+                                                        ? Icons.folder_outlined
+                                                        : hit.isEpg
+                                                            ? Icons.event_outlined
+                                                            : Icons.live_tv_outlined;
                                             final label = hit.subtitle.isEmpty
                                                 ? hit.title
                                                 : '${hit.title}  ·  ${hit.subtitle}';
@@ -3095,7 +3274,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              'Steam+X OSK · B to list · A to guide · B close',
+                              _searchBrowseResults
+                                  ? '↑ search box · A jump · B close'
+                                  : 'Steam+X OSK · B to list · A jump · B close',
                               style: theme.textTheme.bodySmall?.copyWith(
                                 color: theme.colorScheme.outline,
                               ),

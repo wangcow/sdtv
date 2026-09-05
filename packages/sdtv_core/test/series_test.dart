@@ -71,6 +71,20 @@ void main() {
     expect(cat.episodeById('8201')?.containerExtension, 'mkv');
     expect(cat.episodeById('8201')?.progressKey, 'se:8201');
     expect(cat.seasons.last.name, 'Season 2');
+    expect(cat.nextEpisode(cat.episodeById('8101')!)?.id, '8102');
+    expect(cat.nextEpisode(cat.episodeById('8102')!)?.id, '8201');
+    expect(cat.nextEpisode(cat.episodeById('8201')!), isNull);
+    expect(
+      cat.nextEpisode(
+        const SeriesEpisode(
+          id: 'missing',
+          season: 1,
+          episodeNum: 9,
+          title: 'Gone',
+        ),
+      ),
+      isNull,
+    );
   });
 
   test('seriesStreamUri uses /series/user/pass/id.ext', () {
