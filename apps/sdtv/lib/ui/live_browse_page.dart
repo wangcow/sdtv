@@ -942,6 +942,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         DateTime.now().difference(_lastMenuAt!) < _ignoreMenuAfterPage) {
       return;
     }
+    // Error menu on a live channel: LB/RB zaps away instead of moving rows.
+    if (session.watchStallOpen && !session.watchingVod) {
+      unawaited(session.watchZapFromError(delta));
+      return;
+    }
     if (session.isWatchMenuActive) {
       unawaited(session.watchMenuMove(delta));
       return;

@@ -77,8 +77,15 @@ class _FakeOverlay implements MpvBitmapOverlay {
 
 /// Reports a running mpv so watch menus open; every IPC call is a no-op.
 class _RunningMpv extends ExternalMpvLauncher {
+  final texts = <String>[];
+
   @override
   bool get isRunning => true;
+
+  @override
+  Future<void> showText(String text, {int durationMs = 2000}) async {
+    texts.add(text);
+  }
 }
 
 Future<void> _settle(WidgetTester tester, bool Function() done) async {
@@ -233,5 +240,23 @@ void main() {
     expect(find.text('101. Mock Entertainment 1'), findsOneWidget);
     expect(find.text('Retry'), findsOneWidget);
     expect(find.byIcon(Icons.refresh_rounded), findsOneWidget);
+  });
+
+  test('a playback error opens the error menu instead of mpv text', () async {
+    SharedPreferences.setMockInitialValues({});
+    final settings = await SettingsStore.open();
+    final mpv = _RunningMpv();
+    final session = SessionController(settings: settings, externalMpv: mpv);
+    mpv.playbackBitmapHud = true; // as when MpvFlutterHud is on screen
+
+    await mpv.showPlaybackError(channelName: '101. Mock Entertainment 1');
+
+    expect(mpv.texts, isEmpty);
+    expect(session.watchStallOpen, isTrue);
+    final menu = session.watchMenuModel!;
+    expect(menu.isError, isTrue);
+    expect(menu.errorCode, isNotEmpty);
+    expect([for (final r in menu.rows) r.id], ['retry', 'guide']);
+    expect(menu.hint, contains('LB/RB'));
   });
 }

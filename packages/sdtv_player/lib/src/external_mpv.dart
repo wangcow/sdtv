@@ -240,8 +240,14 @@ class ExternalMpvLauncher {
     return buf.toString();
   }
 
-  /// Show a multi-line playback error on the OSD.
+  /// When set, playback errors go here first (sdtv opens its error menu).
+  /// Return true when handled; false falls back to mpv text.
+  Future<bool> Function(String? channelName)? onPlaybackError;
+
+  /// Show a playback error: [onPlaybackError], else multi-line mpv text.
   Future<void> showPlaybackError({String? channelName}) async {
+    final hook = onPlaybackError;
+    if (hook != null && await hook(channelName)) return;
     await showText(
       playbackErrorHint(channelName: channelName),
       durationMs: 5000,

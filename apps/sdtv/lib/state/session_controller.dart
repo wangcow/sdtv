@@ -35,7 +35,9 @@ class SessionController extends ChangeNotifier {
     ExternalMpvLauncher? externalMpv,
   }) : _settings = settings,
        artwork = artwork ?? ArtworkCache(),
-       externalMpv = externalMpv ?? ExternalMpvLauncher();
+       externalMpv = externalMpv ?? ExternalMpvLauncher() {
+    this.externalMpv.onPlaybackError = _showPlaybackErrorMenu;
+  }
 
   final SettingsStore _settings;
   final ArtworkCache artwork;
@@ -825,6 +827,25 @@ class SessionController extends ChangeNotifier {
     );
   }
 
+  /// Start / zap / retry failures open the same error menu as a stall, so
+  /// Retry and Back are one press away instead of a block of text.
+  Future<bool> _showPlaybackErrorMenu(String? _) async {
+    if (!isWatchingExternal) return false;
+    _stallKind = null; // classify from the mpv log (E403, E-TMO, …)
+    await _openStallMenu();
+    return watchStallOpen;
+  }
+
+  /// LB/RB on the error menu: leave it and try the neighbouring channel.
+  Future<void> watchZapFromError(int delta) async {
+    if (!watchStallOpen || watchingVod) return;
+    watchMenuOpen = false;
+    watchStallOpen = false;
+    watchMenuIndex = 0;
+    notifyListeners();
+    await watchChannelAdjacent(delta);
+  }
+
   Future<void> _paintStallMenu() async {
     final err = externalMpv.playError(stallKind: _stallKind);
     await _showMenu(
@@ -833,7 +854,9 @@ class SessionController extends ChangeNotifier {
         errorCode: err.code,
         errorMessage: err.message,
         selected: watchMenuIndex.clamp(0, 1),
-        hint: 'A select  ·  B guide',
+        hint: watchingVod
+            ? 'A select  ·  B back'
+            : 'A select  ·  B guide  ·  LB/RB channel',
         rows: const [
           WatchMenuRow('retry', 'Retry'),
           WatchMenuRow('guide', 'Back to guide'),
