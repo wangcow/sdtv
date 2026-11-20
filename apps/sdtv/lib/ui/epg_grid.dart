@@ -3,11 +3,11 @@ library;
 
 const kEpgSlot = Duration(minutes: 30);
 const kEpgJump = Duration(hours: 2);
-const kEpgRowExtent = 68.0;
+const kEpgRowExtent = 60.0;
 
 /// Shared channel-name column. Header ticks and program cells must both
 /// start exactly this many pixels from the pane left.
-const kEpgGutterWidth = 176.0;
+const kEpgGutterWidth = 210.0;
 const kEpgHeaderHeight = 40.0;
 const kEpgTimeHeaderHeight = 36.0;
 
@@ -17,12 +17,15 @@ DateTime epgSnapDown(DateTime t) {
   return DateTime(t.year, t.month, t.day, t.hour, m);
 }
 
-/// Visible window length: whole 30-minute slots, ~3 px/minute.
+/// Visible window length: whole 30-minute slots, ~6 px/minute (about two
+/// hours across a Deck), so a half-hour show has room for a one-line title.
 Duration epgWindowLength(double programWidth) {
-  if (programWidth <= 0) return const Duration(hours: 3);
-  const targetPpm = 3.0;
-  final slots =
-      (programWidth / (kEpgSlot.inMinutes * targetPpm)).floor().clamp(4, 16);
+  if (programWidth <= 0) return const Duration(hours: 2);
+  const targetPpm = 6.0;
+  final slots = (programWidth / (kEpgSlot.inMinutes * targetPpm)).floor().clamp(
+    3,
+    12,
+  );
   return Duration(minutes: slots * kEpgSlot.inMinutes);
 }
 
@@ -102,9 +105,19 @@ EpgLayout epgLayoutFor({
   );
 }
 
-/// Shift [windowStart] by [delta], snapped. Does not clamp to data.
-DateTime epgShiftWindow(DateTime windowStart, Duration delta) {
-  return epgSnapDown(windowStart.add(delta));
+/// Shift [windowStart] by [delta], snapped. Never earlier than the
+/// half-hour slot holding [now]: the guide shows now and later only.
+DateTime epgShiftWindow(DateTime windowStart, Duration delta, {DateTime? now}) {
+  return epgClampToNow(
+    epgSnapDown(windowStart.add(delta)),
+    now ?? DateTime.now(),
+  );
+}
+
+/// [windowStart] moved forward to the current slot if it is in the past.
+DateTime epgClampToNow(DateTime windowStart, DateTime now) {
+  final floor = epgSnapDown(now);
+  return windowStart.isBefore(floor) ? floor : windowStart;
 }
 
 /// Nudge [windowStart] by whole 30-minute slots until [start] is in view.

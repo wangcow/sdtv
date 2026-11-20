@@ -104,6 +104,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   /// Fixed row height so scroll offset matches the selected tile (highlight stays on-screen).
   static const _rowExtent = 78.0;
+
+  /// Category column row pitch (compact, TiviMate-style list).
+  static const _catRowExtent = 52.0;
   static const _listHeaderExtent = 44.0;
 
   /// Movies poster grid (LayoutBuilder keeps these in sync with width).
@@ -273,7 +276,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         _scrollTo(
           _catScroll,
           catIdx,
-          itemExtent: _rowExtent,
+          itemExtent: _catRowExtent,
           headerExtent: _listHeaderExtent,
         );
       });
@@ -609,7 +612,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _scrollTo(
         _catScroll,
         _catIndex,
-        itemExtent: _rowExtent,
+        itemExtent: _catRowExtent,
         headerExtent: _listHeaderExtent,
       );
       return;
@@ -800,7 +803,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _scrollTo(
         _catScroll,
         _catIndex,
-        itemExtent: _rowExtent,
+        itemExtent: _catRowExtent,
         headerExtent: _listHeaderExtent,
       );
     } else if (_isPosterGuide) {
@@ -926,7 +929,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _scrollTo(
         _catScroll,
         _catIndex,
-        itemExtent: _rowExtent,
+        itemExtent: _catRowExtent,
         headerExtent: _listHeaderExtent,
       );
     }
@@ -1212,7 +1215,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _scrollTo(
         _catScroll,
         _catIndex,
-        itemExtent: _rowExtent,
+        itemExtent: _catRowExtent,
         headerExtent: _listHeaderExtent,
       );
       return;
@@ -1265,7 +1268,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     _scrollTo(
       _catScroll,
       0,
-      itemExtent: _rowExtent,
+      itemExtent: _catRowExtent,
       headerExtent: _listHeaderExtent,
     );
   }
@@ -1435,9 +1438,16 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     _scrollTo(
       _catScroll,
       _catIndex,
-      itemExtent: _rowExtent,
+      itemExtent: _catRowExtent,
       headerExtent: _listHeaderExtent,
     );
+  }
+
+  /// Guide window / focus, never before now (the guide shows now and later).
+  DateTime get _epgWindowNow => epgClampToNow(_epgWindowStart, DateTime.now());
+  DateTime get _epgFocusNow {
+    final now = DateTime.now();
+    return _epgFocusTime.isBefore(now) ? now : _epgFocusTime;
   }
 
   void _moveEpgProgram(int delta) {
@@ -1457,40 +1467,50 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _shiftEpgWindow(kEpgSlot);
       return;
     }
-    final i = epg!.indexForTime(_epgFocusTime);
-    if (delta < 0 && i <= 0) {
+    final now = DateTime.now();
+    final i = epg!.indexForTime(_epgFocusNow);
+    // ← on what is airing now (or anything earlier) goes back to the
+    // categories instead of walking into the past.
+    if (delta < 0 && (i <= 0 || !listings[i].start.isAfter(now))) {
       _leaveEpgToCategories();
       return;
     }
     final next = (i + delta).clamp(0, listings.length - 1);
     if (next == i) {
-      _shiftEpgWindow(delta > 0 ? kEpgSlot : -kEpgSlot);
+      if (delta > 0) _shiftEpgWindow(kEpgSlot);
       return;
     }
     final p = listings[next];
-    final t = p.isLiveAt(DateTime.now())
-        ? DateTime.now()
-        : p.start.add(const Duration(minutes: 1));
+    if (delta < 0 && !p.end.isAfter(now)) {
+      _leaveEpgToCategories();
+      return;
+    }
+    final t = p.isLiveAt(now) ? now : p.start.add(const Duration(minutes: 1));
     setState(() {
       _epgFocusTime = t;
-      _epgWindowStart = epgEnsureVisible(
-        windowStart: _epgWindowStart,
-        windowLength: _epgWindowLength,
-        start: p.start,
-        end: p.end,
+      _epgWindowStart = epgClampToNow(
+        epgEnsureVisible(
+          windowStart: _epgWindowNow,
+          windowLength: _epgWindowLength,
+          start: p.start,
+          end: p.end,
+        ),
+        now,
       );
     });
   }
 
   void _shiftEpgWindow(Duration delta) {
-    final next = epgShiftWindow(_epgWindowStart, delta);
+    final now = DateTime.now();
+    final next = epgShiftWindow(_epgWindowNow, delta, now: now);
     final len = _epgWindowLength;
-    var t = _epgFocusTime.add(delta);
+    var t = _epgFocusNow.add(delta);
     if (t.isBefore(next)) {
       t = next.add(const Duration(minutes: 1));
     } else if (!t.isBefore(next.add(len))) {
       t = next.add(len).subtract(const Duration(minutes: 1));
     }
+    if (t.isBefore(now)) t = now;
     setState(() {
       _epgWindowStart = next;
       _epgFocusTime = t;
@@ -1648,7 +1668,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _scrollTo(
         _catScroll,
         catIdx,
-        itemExtent: _rowExtent,
+        itemExtent: _catRowExtent,
         headerExtent: _listHeaderExtent,
       );
       _scrollToVodIndex(idx);
@@ -1688,7 +1708,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _scrollTo(
         _catScroll,
         catIdx,
-        itemExtent: _rowExtent,
+        itemExtent: _catRowExtent,
         headerExtent: _listHeaderExtent,
       );
       _scrollToVodIndex(idx);
@@ -2887,10 +2907,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           SizedBox(
-                            width: 280,
+                            width: 250,
                             child: ListView.builder(
                               controller: _catScroll,
-                              padding: const EdgeInsets.fromLTRB(24, 8, 12, 24),
+                              padding: const EdgeInsets.fromLTRB(16, 8, 10, 24),
                               itemCount: cats.length + 1,
                               itemBuilder: (context, index) {
                                 if (index == 0) {
@@ -2935,17 +2955,18 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                     ? session.seriesFavoriteCount
                                     : session.favoriteCount;
                                 return SizedBox(
-                                  height: _rowExtent,
+                                  height: _catRowExtent,
                                   child: Padding(
-                                    padding: const EdgeInsets.only(bottom: 6),
-                                    child: _BrowseTile(
+                                    padding: const EdgeInsets.only(bottom: 4),
+                                    child: _CategoryRow(
+                                      // The row draws its own star icon.
                                       label: isFavCat
-                                          ? '${cats[i].categoryName}'
-                                                '${favN > 0 ? ' ($favN)' : ''}'
+                                          ? cats[i].categoryName
+                                                .replaceFirst('★', '')
+                                                .trim()
                                           : cats[i].categoryName,
-                                      icon: isFavCat
-                                          ? Icons.star_rounded
-                                          : Icons.folder_outlined,
+                                      count: isFavCat && favN > 0 ? favN : null,
+                                      icon: isFavCat ? Icons.star_rounded : null,
                                       selected: focused,
                                       dimSelected: selected && !focused,
                                       onTap: () {
@@ -2989,10 +3010,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                     channels: channels,
                                     channelIndex: _chanIndex,
                                     categoryTitle: catTitle,
-                                    windowStart: _epgWindowStart,
-                                    focusTime: _epgFocusTime,
+                                    windowStart: _epgWindowNow,
+                                    focusTime: _epgFocusNow,
                                     now: DateTime.now(),
                                     epgFor: session.cachedFullEpg,
+                                    isFavorite: session.isFavorite,
                                     scrollController: _epgScroll,
                                     gridFocused: !_sectionFocus && _column == 1,
                                     m3u:
@@ -3634,6 +3656,85 @@ class _SectionChip extends StatelessWidget {
   }
 }
 
+/// One row of the guide's category column: flat, single line, TiviMate-style.
+class _CategoryRow extends StatelessWidget {
+  const _CategoryRow({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.icon,
+    this.count,
+    this.dimSelected = false,
+  });
+
+  final String label;
+  final IconData? icon;
+  final int? count;
+
+  /// The pad is on this row.
+  final bool selected;
+
+  /// This is the open category while the pad is on the grid.
+  final bool dimSelected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final fg = selected ? scheme.onPrimary : scheme.onSurface;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: BoxDecoration(
+          color: selected
+              ? scheme.primary
+              : dimSelected
+              ? scheme.primary.withValues(alpha: 0.16)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+          border: dimSelected && !selected
+              ? Border(left: BorderSide(color: scheme.primary, width: 3))
+              : null,
+        ),
+        child: Row(
+          children: [
+            if (icon != null) ...[
+              Icon(
+                icon,
+                size: 20,
+                color: selected ? fg : Colors.amber.shade400,
+              ),
+              const SizedBox(width: 10),
+            ],
+            Expanded(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.titleSmall?.copyWith(
+                  color: fg.withValues(alpha: selected || dimSelected ? 1 : 0.8),
+                  fontWeight: selected || dimSelected
+                      ? FontWeight.w700
+                      : FontWeight.w500,
+                ),
+              ),
+            ),
+            if (count != null)
+              Text(
+                '$count',
+                style: theme.textTheme.labelLarge?.copyWith(
+                  color: fg.withValues(alpha: 0.6),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _BrowseTile extends StatelessWidget {
   const _BrowseTile({
     required this.label,
@@ -3641,7 +3742,6 @@ class _BrowseTile extends StatelessWidget {
     required this.onTap,
     this.icon,
     this.subtitle,
-    this.dimSelected = false,
     this.danger = false,
     this.watched = false,
   });
@@ -3656,16 +3756,13 @@ class _BrowseTile extends StatelessWidget {
   /// unless this row is the cursor.
   final bool watched;
 
-  /// Soft highlight when this row is the cursor but the other column is focused.
-  final bool dimSelected;
-
   /// Destructive action (e.g. Sign out) — red styling so it is harder to mis-hit.
   final bool danger;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final active = selected || dimSelected;
+    final active = selected;
     final dangerColor = theme.colorScheme.error;
     final Color bg;
     final Color fg;
@@ -3678,9 +3775,6 @@ class _BrowseTile extends StatelessWidget {
     } else if (selected) {
       bg = theme.colorScheme.primary;
       fg = theme.colorScheme.onPrimary;
-    } else if (dimSelected) {
-      bg = theme.colorScheme.primary.withValues(alpha: 0.28);
-      fg = theme.colorScheme.onSurface;
     } else if (watched) {
       bg = theme.colorScheme.surfaceContainerHighest;
       fg = theme.colorScheme.onSurface.withValues(alpha: 0.5);

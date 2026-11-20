@@ -3,7 +3,12 @@ import 'package:sdtv_core/sdtv_core.dart';
 
 import '../epg_grid.dart';
 
-/// Live-pane TV Guide grid (replaces the channel list + now/next miniguide).
+/// Gap between grid cells (rows and programmes). The background shows
+/// through, which draws the grid lines.
+const _kGap = 2.0;
+
+/// Live-pane TV Guide: programme info on top, then a time axis and a flat
+/// channel × time grid (TiviMate-style).
 class EpgGuidePane extends StatelessWidget {
   const EpgGuidePane({
     super.key,
@@ -22,6 +27,7 @@ class EpgGuidePane extends StatelessWidget {
     this.gridFocused = true,
     this.m3u = false,
     this.emptyMessage,
+    this.isFavorite,
   });
 
   final List<LiveChannel> channels;
@@ -42,6 +48,9 @@ class EpgGuidePane extends StatelessWidget {
   final bool m3u;
   final String? emptyMessage;
 
+  /// ★ next to favourite channels.
+  final bool Function(LiveChannel channel)? isFavorite;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -59,39 +68,12 @@ class EpgGuidePane extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SizedBox(
-            height: kEpgHeaderHeight,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'GUIDE · ${categoryTitle.toUpperCase()}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.outline,
-                        letterSpacing: 1.1,
-                      ),
-                    ),
-                  ),
-                  Text(
-                    epgAxisLabel(now),
-                    style: theme.textTheme.labelLarge?.copyWith(
-                      color: theme.colorScheme.primary,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+          _InfoPanel(channel: focused, program: sel, now: now, m3u: m3u),
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final programWidth =
-                    (constraints.maxWidth - kEpgGutterWidth).clamp(120.0, 4000.0);
+                final programWidth = (constraints.maxWidth - kEpgGutterWidth)
+                    .clamp(120.0, 4000.0);
                 final onWidth = onProgramWidth;
                 if (onWidth != null) {
                   WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -107,7 +89,22 @@ class EpgGuidePane extends StatelessWidget {
                     SizedBox(
                       height: kEpgTimeHeaderHeight,
                       child: _EpgLane(
-                        gutter: const SizedBox.expand(),
+                        gutter: Padding(
+                          padding: const EdgeInsets.only(left: 16),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              categoryTitle.toUpperCase(),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: theme.colorScheme.outline,
+                                letterSpacing: 1.1,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
                         program: _TimeAxis(layout: layout, now: now),
                       ),
                     ),
@@ -137,6 +134,7 @@ class EpgGuidePane extends StatelessWidget {
                                   epg: epgFor(ch),
                                   focusTime: selected ? focusTime : null,
                                   m3u: m3u,
+                                  favorite: isFavorite?.call(ch) ?? false,
                                   onTapChannel: () => onTapChannel(i),
                                   onLongPressChannel: onLongPressChannel == null
                                       ? null
@@ -150,11 +148,6 @@ class EpgGuidePane extends StatelessWidget {
                 );
               },
             ),
-          ),
-          _EpgDetail(
-            channel: focused,
-            program: sel,
-            m3u: m3u,
           ),
         ],
       ),
@@ -197,32 +190,32 @@ class _TimeAxis extends StatelessWidget {
       children: [
         for (final tick in layout.ticks)
           Positioned(
-            left: layout.xFor(tick),
+            left: layout.xFor(tick) + 8,
             top: 0,
             bottom: 0,
-            child: Row(
-              children: [
-                Container(
-                  width: 1,
-                  color: theme.colorScheme.outline.withValues(alpha: 0.45),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                epgAxisLabel(tick),
+                style: theme.textTheme.labelMedium?.copyWith(
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                  fontWeight: FontWeight.w600,
                 ),
-                const SizedBox(width: 6),
-                Text(
-                  epgAxisLabel(tick),
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.colorScheme.outline,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         if (nowX != null)
           Positioned(
-            left: nowX,
-            top: 0,
+            left: nowX - 4,
             bottom: 0,
-            child: Container(width: 2, color: theme.colorScheme.primary),
+            child: Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.primary,
+                shape: BoxShape.circle,
+              ),
+            ),
           ),
       ],
     );
@@ -242,6 +235,7 @@ class _EpgRow extends StatelessWidget {
     this.onLongPressChannel,
     this.focusTime,
     this.m3u = false,
+    this.favorite = false,
   });
 
   final LiveChannel channel;
@@ -252,6 +246,7 @@ class _EpgRow extends StatelessWidget {
   final ShortEpg? epg;
   final DateTime? focusTime;
   final bool m3u;
+  final bool favorite;
   final VoidCallback onTapChannel;
   final VoidCallback? onLongPressChannel;
   final ValueChanged<EpgProgram> onTapProgram;
@@ -259,12 +254,9 @@ class _EpgRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final active = selected && gridFocused;
-    final dim = selected && !gridFocused;
-    final fg = active
-        ? theme.colorScheme.onPrimary
-        : theme.colorScheme.onSurface;
-    final programs = epg?.inWindow(layout.windowStart, layout.windowEnd) ??
+    final scheme = theme.colorScheme;
+    final programs =
+        epg?.inWindow(layout.windowStart, layout.windowEnd) ??
         const <EpgProgram>[];
     final focusIdx = epg == null || focusTime == null
         ? -1
@@ -273,128 +265,123 @@ class _EpgRow extends StatelessWidget {
         ? epg!.listings[focusIdx.clamp(0, epg!.listings.length - 1)]
         : null;
     final nowX = layout.contains(now) ? layout.xFor(now) : null;
-    final label = channel.num > 0
-        ? '${channel.num}. ${channel.name}'
-        : channel.name;
 
-    return SizedBox(
-      height: kEpgRowExtent,
+    // The channel cell lights up while the categories have the pad, so the
+    // row you will return to is obvious; in the grid the programme does.
+    final channelBg = selected
+        ? (gridFocused
+              ? scheme.primary.withValues(alpha: 0.22)
+              : scheme.primary.withValues(alpha: 0.32))
+        : scheme.surfaceContainerHigh;
+    final fg = scheme.onSurface;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: _kGap),
       child: _EpgLane(
-        gutter: Padding(
-          padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
-          child: GestureDetector(
-            onTap: onTapChannel,
-            onLongPress: onLongPressChannel,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              decoration: BoxDecoration(
-                color: active
-                    ? theme.colorScheme.primary
-                    : dim
-                        ? theme.colorScheme.primary.withValues(alpha: 0.28)
-                        : theme.colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: selected
-                      ? theme.colorScheme.primary
-                      : Colors.transparent,
-                  width: 2,
-                ),
-              ),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  label,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.labelLarge?.copyWith(
-                    color: fg,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                    height: 1.15,
+        gutter: GestureDetector(
+          onTap: onTapChannel,
+          onLongPress: onLongPressChannel,
+          child: Container(
+            margin: const EdgeInsets.only(right: _kGap),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: channelBg,
+              border: selected
+                  ? Border(left: BorderSide(color: scheme.primary, width: 3))
+                  : null,
+            ),
+            child: Row(
+              children: [
+                if (channel.num > 0)
+                  SizedBox(
+                    width: 40,
+                    child: Text(
+                      '${channel.num}',
+                      style: theme.textTheme.labelLarge?.copyWith(
+                        color: fg.withValues(alpha: 0.55),
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ),
+                Expanded(
+                  child: Text(
+                    channel.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: fg,
+                      fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                    ),
                   ),
                 ),
-              ),
+                if (favorite)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 6),
+                    child: Icon(
+                      Icons.star_rounded,
+                      size: 16,
+                      color: Colors.amber.shade400,
+                    ),
+                  ),
+              ],
             ),
           ),
         ),
-        program: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Stack(
-            clipBehavior: Clip.hardEdge,
-            children: [
+        program: Stack(
+          clipBehavior: Clip.hardEdge,
+          children: [
+            Positioned.fill(
+              child: ColoredBox(
+                color: scheme.surfaceContainer.withValues(alpha: 0.6),
+              ),
+            ),
+            if (programs.isEmpty)
               Positioned.fill(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerHighest
-                        .withValues(alpha: 0.35),
-                    borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      epg == null && !m3u ? 'Loading…' : 'No programme info',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: scheme.outline,
+                      ),
+                    ),
                   ),
                 ),
               ),
-              for (final tick in layout.ticks)
-                Positioned(
-                  left: layout.xFor(tick),
-                  top: 0,
-                  bottom: 0,
-                  child: IgnorePointer(
-                    child: Container(
-                      width: 1,
-                      color: theme.colorScheme.outline.withValues(alpha: 0.28),
+            for (final p in programs)
+              Builder(
+                builder: (context) {
+                  final left = layout.clipLeft(p.start);
+                  final width = layout.clipWidth(p.start, p.end);
+                  if (width < 6) return const SizedBox.shrink();
+                  final focused =
+                      focusedProgram != null && _sameProgram(p, focusedProgram);
+                  return Positioned(
+                    left: left,
+                    width: width,
+                    top: 0,
+                    bottom: 0,
+                    child: _EpgCell(
+                      program: p,
+                      now: now,
+                      focused: focused && gridFocused,
+                      onTap: () => onTapProgram(p),
                     ),
-                  ),
+                  );
+                },
+              ),
+            if (nowX != null)
+              Positioned(
+                left: nowX - 1,
+                top: 0,
+                bottom: 0,
+                child: IgnorePointer(
+                  child: Container(width: 2, color: scheme.primary),
                 ),
-              if (programs.isEmpty)
-                Positioned.fill(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        epg == null && !m3u ? 'Loading…' : 'No EPG',
-                        style: theme.textTheme.labelMedium?.copyWith(
-                          color: theme.colorScheme.outline,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              for (final p in programs)
-                Builder(
-                  builder: (context) {
-                    final left = layout.clipLeft(p.start);
-                    final width = layout.clipWidth(p.start, p.end);
-                    if (width < 8) return const SizedBox.shrink();
-                    final focused = focusedProgram != null &&
-                        _sameProgram(p, focusedProgram);
-                    return Positioned(
-                      left: left,
-                      width: width,
-                      top: 0,
-                      bottom: 0,
-                      child: _EpgCell(
-                        program: p,
-                        now: now,
-                        focused: focused && gridFocused,
-                        dim: focused && !gridFocused,
-                        onTap: () => onTapProgram(p),
-                      ),
-                    );
-                  },
-                ),
-              if (nowX != null)
-                Positioned(
-                  left: nowX,
-                  top: 0,
-                  bottom: 0,
-                  child: IgnorePointer(
-                    child: Container(
-                      width: 2,
-                      color: theme.colorScheme.primary,
-                    ),
-                  ),
-                ),
-            ],
-          ),
+              ),
+          ],
         ),
       ),
     );
@@ -411,146 +398,221 @@ class _EpgCell extends StatelessWidget {
     required this.program,
     required this.now,
     required this.focused,
-    required this.dim,
     required this.onTap,
   });
 
   final EpgProgram program;
   final DateTime now;
   final bool focused;
-  final bool dim;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     final live = program.isLiveAt(now);
     final bg = focused
-        ? theme.colorScheme.primary
-        : dim
-            ? theme.colorScheme.primary.withValues(alpha: 0.28)
-            : live
-                ? theme.colorScheme.primary.withValues(alpha: 0.22)
-                : theme.colorScheme.surfaceContainerHighest;
-    final fg = focused
-        ? theme.colorScheme.onPrimary
-        : theme.colorScheme.onSurface;
+        ? scheme.primary
+        : live
+        ? scheme.surfaceContainerHighest
+        : scheme.surfaceContainerHigh;
+    final fg = focused ? scheme.onPrimary : scheme.onSurface;
+
     return GestureDetector(
       onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 90),
-        padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: focused || dim
-                ? theme.colorScheme.primary
-                : theme.colorScheme.outline.withValues(alpha: 0.25),
-            width: focused ? 2 : 1,
-          ),
-        ),
-        child: Stack(
-          children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                program.title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.labelLarge?.copyWith(
-                  color: fg,
-                  fontWeight: focused || live ? FontWeight.w700 : FontWeight.w500,
-                  height: 1.15,
+      child: Container(
+        margin: const EdgeInsets.only(right: _kGap),
+        color: bg,
+        child: LayoutBuilder(
+          builder: (context, c) {
+            final roomy = c.maxWidth >= 110;
+            return Stack(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        program.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        softWrap: false,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          color: fg,
+                          fontWeight: focused || live
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                        ),
+                      ),
+                      if (roomy) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          program.timeRangeLabel(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          softWrap: false,
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: fg.withValues(alpha: focused ? 0.85 : 0.55),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
-              ),
-            ),
-            if (live && !focused)
-              Align(
-                alignment: Alignment.bottomCenter,
-                child: LinearProgressIndicator(
-                  value: program.progressAt(now).clamp(0.0, 1.0),
-                  minHeight: 3,
-                  backgroundColor: Colors.transparent,
-                ),
-              ),
-          ],
+                if (live)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: LinearProgressIndicator(
+                      value: program.progressAt(now).clamp(0.0, 1.0),
+                      minHeight: 3,
+                      backgroundColor: Colors.transparent,
+                      valueColor: AlwaysStoppedAnimation(
+                        focused ? scheme.onPrimary : scheme.primary,
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
         ),
       ),
     );
   }
 }
 
-class _EpgDetail extends StatelessWidget {
-  const _EpgDetail({
+/// Selected programme at the top of the guide, like TiviMate.
+class _InfoPanel extends StatelessWidget {
+  const _InfoPanel({
     required this.channel,
     required this.program,
+    required this.now,
     required this.m3u,
   });
 
   final LiveChannel? channel;
   final EpgProgram? program;
+  final DateTime now;
   final bool m3u;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     final ch = channel;
     final p = program;
     final chName = ch == null
         ? ''
-        : (ch.num > 0 ? '${ch.num}. ${ch.name}' : ch.name);
+        : (ch.num > 0 ? '${ch.num}  ${ch.name}' : ch.name);
+    final live = p != null && p.isLiveAt(now);
     String body;
     if (m3u) {
       body = 'M3U playlists have no panel EPG. A still plays the channel.';
     } else if (p == null) {
-      body = 'No program data for this time. A plays the live channel.';
-    } else if (p.description.trim().isEmpty) {
-      body = p.timeRangeLabel();
+      body = 'No programme data for this time. A plays the live channel.';
     } else {
       body = p.description.trim();
     }
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(20, 10, 20, 14),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest,
-        border: Border(
-          top: BorderSide(
-            color: theme.colorScheme.outline.withValues(alpha: 0.25),
-          ),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
+      height: 132,
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 12),
+      color: scheme.surfaceContainerLow,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            p?.title ?? (chName.isEmpty ? 'TV Guide' : chName),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w800,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  p?.title ?? (chName.isEmpty ? 'TV Guide' : chName),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    if (live) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 1,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade700,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          'LIVE',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                    Flexible(
+                      child: Text(
+                        [
+                          if (p != null) p.timeRangeLabel(),
+                          if (chName.isNotEmpty) chName,
+                        ].join('   ·   '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          color: scheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    if (live) ...[
+                      const SizedBox(width: 12),
+                      SizedBox(
+                        width: 120,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(2),
+                          child: LinearProgressIndicator(
+                            value: p.progressAt(now).clamp(0.0, 1.0),
+                            minHeight: 4,
+                            backgroundColor: scheme.outline.withValues(
+                              alpha: 0.3,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (body.isNotEmpty)
+                  Text(
+                    body,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: scheme.onSurface.withValues(alpha: 0.75),
+                      height: 1.35,
+                    ),
+                  ),
+              ],
             ),
           ),
-          if (p != null) ...[
-            const SizedBox(height: 2),
-            Text(
-              '${p.timeRangeLabel()}${chName.isEmpty ? '' : '  ·  $chName'}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.labelLarge?.copyWith(
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-          const SizedBox(height: 6),
+          const SizedBox(width: 24),
           Text(
-            body,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.bodyMedium,
+            epgAxisLabel(now),
+            style: theme.textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.w600,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
           ),
         ],
       ),

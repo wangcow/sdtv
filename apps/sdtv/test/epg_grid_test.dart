@@ -188,4 +188,35 @@ void main() {
       expect(epg.indexForTime(DateTime(2026, 9, 4, 23, 0)), 2);
     });
   });
+
+  group('guide never goes before now', () {
+    final now = DateTime(2026, 9, 4, 20, 14);
+
+    test('a past window snaps forward to the current slot', () {
+      expect(
+        epgClampToNow(DateTime(2026, 9, 4, 18, 30), now),
+        DateTime(2026, 9, 4, 20, 0),
+      );
+      expect(
+        epgClampToNow(DateTime(2026, 9, 4, 21, 0), now),
+        DateTime(2026, 9, 4, 21, 0),
+      );
+    });
+
+    test('paging back stops at the current slot', () {
+      final start = DateTime(2026, 9, 4, 22, 0);
+      expect(
+        epgShiftWindow(start, const Duration(hours: -2), now: now),
+        DateTime(2026, 9, 4, 20, 0),
+      );
+      expect(
+        epgShiftWindow(start, const Duration(hours: -6), now: now),
+        DateTime(2026, 9, 4, 20, 0),
+      );
+      expect(
+        epgShiftWindow(start, const Duration(hours: 2), now: now),
+        DateTime(2026, 9, 5, 0, 0),
+      );
+    });
+  });
 }
