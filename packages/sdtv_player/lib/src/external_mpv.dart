@@ -110,6 +110,9 @@ class ExternalMpvLauncher {
   /// `overlay-add` ids for the HUD bands (top bar, bottom bar).
   static const bitmapOverlayId = 2;
   static const bitmapOverlayIdBottom = 3;
+
+  /// Centered pause / stall menu card.
+  static const bitmapOverlayIdMenu = 4;
   final Map<int, String> _bitmapPaths = {};
   final Set<int> _shownBitmapIds = {};
 

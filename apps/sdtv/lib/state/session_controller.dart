@@ -10,6 +10,7 @@ import '../services/artwork_cache.dart';
 import '../services/open_external_url.dart';
 import '../services/saved_source.dart';
 import '../services/settings_store.dart';
+import 'watch_menu.dart';
 import '../services/vod_progress.dart';
 
 enum SessionPhase { boot, login, loading, browse, error }
@@ -498,6 +499,12 @@ class SessionController extends ChangeNotifier {
   /// True when the menu is the stall/error sheet (Retry / Back), not pause.
   bool watchStallOpen = false;
 
+  WatchMenuModel? _watchMenuModel;
+
+  /// The open pause / stall menu for the HUD to draw, or null when closed.
+  WatchMenuModel? get watchMenuModel =>
+      isWatchMenuActive ? _watchMenuModel : null;
+
   Timer? _stallWatch;
   DateTime? _stallSince;
   double? _lastStallPos;
@@ -660,9 +667,11 @@ class SessionController extends ChangeNotifier {
     _miniGuideGen++;
     watchMenuOpen = true;
     watchMenuIndex = 0;
-    // Drop the bitmap before the text menu, or the bitmap stays on top.
+    _watchMenuModel = null;
     notifyListeners();
-    await externalMpv.hideBitmapOverlay();
+    // The bitmap HUD swaps its own layers. Only the text fallback needs the
+    // chrome bitmap dropped first, or it stays on top of the text.
+    if (!externalMpv.playbackBitmapHud) await externalMpv.hideBitmapOverlay();
     // Live IPTV: do **not** enable mpv OSC — its seek bar rewinds the live
     // cache (old segment / wrong audio). Text menu only.
     await externalMpv.setOscVisible(false);
@@ -799,49 +808,70 @@ class SessionController extends ChangeNotifier {
     final muted = await externalMpv.getProperty('mute');
     final muteLabel = (muted == true || muted == 'yes') ? 'On' : 'Off';
 
-    final rows = <String>[
-      'Resume',
-      'Subtitles: $sub',
-      'Audio: $aud',
-      'Mute: $muteLabel',
-      'Back to guide',
-    ];
-    const hint = '↑↓ move  ·  ←→ change  ·  A select  ·  B close';
-    await externalMpv.showChromeOverlay(
-      watchMenuAss(
+    await _showMenu(
+      WatchMenuModel(
         title: _nowPlayingLabel,
-        rows: rows,
-        selected: watchMenuIndex,
         live: true,
-        hint: hint,
-      ),
-      fallbackText: watchMenuPlain(
-        title: _nowPlayingLabel,
-        rows: rows,
         selected: watchMenuIndex,
-        live: true,
-        hint: hint,
+        hint: '↑↓ move  ·  ←→ change  ·  A select  ·  B close',
+        rows: [
+          const WatchMenuRow('resume', 'Resume'),
+          WatchMenuRow('subtitles', 'Subtitles', value: sub, adjustable: true),
+          WatchMenuRow('audio', 'Audio', value: aud, adjustable: true),
+          WatchMenuRow('mute', 'Mute', value: muteLabel, adjustable: true),
+          const WatchMenuRow('guide', 'Back to guide'),
+        ],
       ),
     );
   }
 
   Future<void> _paintStallMenu() async {
-    const rows = ['Retry', 'Back to guide'];
-    final idx = watchMenuIndex.clamp(0, rows.length - 1);
-    final reason = externalMpv.playError(stallKind: _stallKind).line;
-    const hint = 'A select  ·  B guide';
+    final err = externalMpv.playError(stallKind: _stallKind);
+    await _showMenu(
+      WatchMenuModel(
+        title: _nowPlayingLabel,
+        errorCode: err.code,
+        errorMessage: err.message,
+        selected: watchMenuIndex.clamp(0, 1),
+        hint: 'A select  ·  B guide',
+        rows: const [
+          WatchMenuRow('retry', 'Retry'),
+          WatchMenuRow('guide', 'Back to guide'),
+        ],
+      ),
+    );
+  }
+
+  /// Hands [model] to the bitmap HUD, or paints the ASS text fallback when
+  /// that HUD is not running.
+  Future<void> _showMenu(WatchMenuModel model) async {
+    _watchMenuModel = model;
+    if (externalMpv.playbackBitmapHud) {
+      notifyListeners();
+      return;
+    }
+    final title = model.isError
+        ? '${model.errorCode}  ${model.errorMessage}\n${model.title}'
+        : model.title;
+    final rows = [for (final r in model.rows) r.plain];
     await externalMpv.showChromeOverlay(
       watchMenuAss(
-        title: '$reason\n$_nowPlayingLabel',
+        title: title,
         rows: rows,
-        selected: idx,
-        hint: hint,
+        selected: model.selected,
+        timeLine: model.timeLine,
+        progress: model.progress,
+        live: model.live,
+        hint: model.hint,
       ),
       fallbackText: watchMenuPlain(
-        title: '$reason\n$_nowPlayingLabel',
+        title: title,
         rows: rows,
-        selected: idx,
-        hint: hint,
+        selected: model.selected,
+        timeLine: model.timeLine,
+        progress: model.progress,
+        live: model.live,
+        hint: model.hint,
       ),
     );
   }
@@ -865,32 +895,22 @@ class SessionController extends ChangeNotifier {
         ? '${_fmtDur(pos)} / ${_fmtDur(dur)}'
         : _fmtDur(pos);
     final progress = dur.inSeconds > 0 ? pos.inSeconds / dur.inSeconds : 0.0;
-    final rows = <String>[
-      'Resume',
-      '−10 seconds',
-      '+10 seconds',
-      'Subtitles: $sub',
-      'Audio: $aud',
-      'Mute: $muteLabel',
-      'Back to movies',
-    ];
-    const hint = '↑↓ move  ·  A select  ·  ←→ seek  ·  B back';
-    await externalMpv.showChromeOverlay(
-      watchMenuAss(
+    await _showMenu(
+      WatchMenuModel(
         title: _nowPlayingLabel,
-        rows: rows,
         selected: watchMenuIndex,
         timeLine: timeLine,
         progress: progress,
-        hint: hint,
-      ),
-      fallbackText: watchMenuPlain(
-        title: _nowPlayingLabel,
-        rows: rows,
-        selected: watchMenuIndex,
-        timeLine: timeLine,
-        progress: progress,
-        hint: hint,
+        hint: '↑↓ move  ·  A select  ·  ←→ seek  ·  B back',
+        rows: [
+          const WatchMenuRow('resume', 'Resume'),
+          const WatchMenuRow('seekBack', '−10 seconds'),
+          const WatchMenuRow('seekFwd', '+10 seconds'),
+          WatchMenuRow('subtitles', 'Subtitles', value: sub),
+          WatchMenuRow('audio', 'Audio', value: aud),
+          WatchMenuRow('mute', 'Mute', value: muteLabel),
+          const WatchMenuRow('guide', 'Back to movies'),
+        ],
       ),
     );
   }
@@ -1138,8 +1158,9 @@ class SessionController extends ChangeNotifier {
     watchMenuOpen = true;
     watchStallOpen = true;
     watchMenuIndex = 0;
+    _watchMenuModel = null;
     notifyListeners();
-    await externalMpv.hideBitmapOverlay();
+    if (!externalMpv.playbackBitmapHud) await externalMpv.hideBitmapOverlay();
     await externalMpv.setOscVisible(false);
     await _paintStallMenu();
     notifyListeners();

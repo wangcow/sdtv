@@ -8,6 +8,7 @@ import 'package:sdtv_player/sdtv_player.dart';
 
 import '../../state/session_controller.dart';
 import 'player_chrome.dart';
+import 'watch_menu_card.dart';
 
 /// Bitmap target for [MpvFlutterHud]. Tests pass a fake; the app uses mpv.
 abstract class MpvBitmapOverlay {
@@ -144,6 +145,11 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
   final GlobalKey _rootKey = GlobalKey();
   final GlobalKey _topBandKey = GlobalKey();
   final GlobalKey _bottomBandKey = GlobalKey();
+  final GlobalKey _menuKey = GlobalKey();
+
+  /// Bumped when the menu opens or closes, so a capture that started before
+  /// the swap does not leave the old layer on the video.
+  int _layerGen = 0;
   StreamSubscription<({String name, Object? value})>? _props;
 
   late final MpvBitmapOverlay _overlay =
@@ -234,21 +240,33 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
     super.dispose();
   }
 
+  bool get _menuActive =>
+      widget.session.isWatchMenuActive || widget.session.watchStallOpen;
+
+  /// A capture is wanted for the chrome bands or for the menu card.
+  bool get _wantCapture => _showHud || widget.session.watchMenuModel != null;
+
   void _onSession() {
     if (!mounted) return;
-    final menu =
-        widget.session.isWatchMenuActive || widget.session.watchStallOpen;
-    if (menu) {
+    if (_menuActive) {
       if (!_menuWasOpen) {
         _menuWasOpen = true;
+        _layerGen++;
+        _hideHudTimer?.cancel();
         _showHud = false;
         _syncTick();
         unawaited(_overlay.clear());
       }
+      // The menu card appears once the session has its model, and redraws on
+      // every selection or value change.
+      setState(() {});
+      _scheduleCapture();
       return;
     }
     if (_menuWasOpen) {
       _menuWasOpen = false;
+      _layerGen++;
+      unawaited(_overlay.clear());
       unawaited(_syncPause());
       _bumpHud();
       return;
@@ -459,7 +477,7 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
   }
 
   void _scheduleCapture() {
-    if (!mounted || !_showHud || _gaveUp) return;
+    if (!mounted || !_wantCapture || _gaveUp) return;
     if (_captureQueued) {
       _captureDirty = true;
       return;
@@ -476,9 +494,9 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
       _captureDirty = true;
       return;
     }
-    if (!mounted || !_showHud || _gaveUp || widget.session.isWatchMenuActive) {
-      return;
-    }
+    if (!mounted || !_wantCapture || _gaveUp) return;
+    final gen = _layerGen;
+    final menu = widget.session.watchMenuModel != null;
     final root = _rootKey.currentContext?.findRenderObject() as RenderBox?;
     if (root == null || !root.hasSize || root.size.isEmpty) return;
     _captureInFlight = true;
@@ -501,10 +519,16 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
       }
       final targetH = osd?.h ?? (logical.height * sy).round();
 
-      for (final band in [
-        (id: ExternalMpvLauncher.bitmapOverlayId, key: _topBandKey),
-        (id: ExternalMpvLauncher.bitmapOverlayIdBottom, key: _bottomBandKey),
-      ]) {
+      final bands = menu
+          ? [(id: ExternalMpvLauncher.bitmapOverlayIdMenu, key: _menuKey)]
+          : [
+              (id: ExternalMpvLauncher.bitmapOverlayId, key: _topBandKey),
+              (
+                id: ExternalMpvLauncher.bitmapOverlayIdBottom,
+                key: _bottomBandKey,
+              ),
+            ];
+      for (final band in bands) {
         final boundary =
             band.key.currentContext?.findRenderObject()
                 as RenderRepaintBoundary?;
@@ -520,7 +544,7 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
         final w = image.width;
         final h = image.height;
         image.dispose();
-        if (!mounted || !_showHud || widget.session.isWatchMenuActive) return;
+        if (!mounted || !_wantCapture || gen != _layerGen) return;
         final rgba = bytes?.buffer.asUint8List(
           bytes.offsetInBytes,
           bytes.lengthInBytes,
@@ -543,6 +567,13 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
           height: h,
         );
         if (!mounted) return;
+        if (gen != _layerGen) {
+          // Menu opened or closed while this was in flight: drop the stale
+          // layer and draw the current one.
+          await _overlay.clear();
+          retry = true;
+          break;
+        }
         if (ok) {
           _firstFail = null;
         } else {
@@ -567,7 +598,7 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
     }
     if (retry) {
       await Future<void>.delayed(const Duration(milliseconds: 300));
-      if (mounted && _showHud) _scheduleCapture();
+      if (mounted && _wantCapture) _scheduleCapture();
       return;
     }
     if (_captureDirty && mounted) {
@@ -644,8 +675,23 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.session.isWatchMenuActive || widget.session.watchStallOpen) {
-      return const SizedBox.shrink();
+    if (_menuActive) {
+      final menu = widget.session.watchMenuModel;
+      return SizedBox.expand(
+        key: _rootKey,
+        child: menu == null
+            ? null
+            : Center(
+                child: RepaintBoundary(
+                  key: _menuKey,
+                  // Room for the card's shadow inside the captured bitmap.
+                  child: Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: WatchMenuCard(model: menu),
+                  ),
+                ),
+              ),
+      );
     }
     return SizedBox.expand(
       key: _rootKey,

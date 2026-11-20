@@ -7,7 +7,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sdtv/services/settings_store.dart';
 import 'package:sdtv/state/session_controller.dart';
 import 'package:sdtv/theme.dart';
+import 'package:sdtv/state/watch_menu.dart';
 import 'package:sdtv/ui/widgets/mpv_flutter_hud.dart';
+import 'package:sdtv/ui/widgets/watch_menu_card.dart';
 import 'package:sdtv_player/sdtv_player.dart';
 
 class _Band {
@@ -61,7 +63,7 @@ class _FakeOverlay implements MpvBitmapOverlay {
   Stream<({String name, Object? value})> get propertyChanges => props.stream;
 
   @override
-  Future<void> clear() async {}
+  Future<void> clear() async => bands.clear();
 
   @override
   Future<Duration> position() async => Duration.zero;
@@ -71,6 +73,21 @@ class _FakeOverlay implements MpvBitmapOverlay {
 
   @override
   Future<bool> paused() async => false;
+}
+
+/// Reports a running mpv so watch menus open; every IPC call is a no-op.
+class _RunningMpv extends ExternalMpvLauncher {
+  @override
+  bool get isRunning => true;
+}
+
+Future<void> _settle(WidgetTester tester, bool Function() done) async {
+  for (var i = 0; i < 8 && !done(); i++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 250)),
+    );
+    await tester.pump();
+  }
 }
 
 void main() {
@@ -136,5 +153,85 @@ void main() {
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
+  });
+
+  testWidgets('pause menu replaces the chrome bands with one centered card', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final settings = await SettingsStore.open();
+    final session = SessionController(
+      settings: settings,
+      externalMpv: _RunningMpv(),
+    );
+    final fake = _FakeOverlay();
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: sdtvDarkTheme,
+        home: Scaffold(
+          body: MpvFlutterHud(
+            session: session,
+            overlay: fake,
+            capturePixelRatio: 1,
+          ),
+        ),
+      ),
+    );
+    await _settle(tester, () => fake.bands.length >= 2);
+    expect(fake.bands.keys, contains(ExternalMpvLauncher.bitmapOverlayId));
+
+    await tester.runAsync(session.watchOpenMenu);
+    await tester.pump();
+    await _settle(
+      tester,
+      () => fake.bands.containsKey(ExternalMpvLauncher.bitmapOverlayIdMenu),
+    );
+
+    expect(find.text('Resume'), findsOneWidget);
+    expect(find.text('Back to guide'), findsOneWidget);
+    expect(fake.bands.keys, [ExternalMpvLauncher.bitmapOverlayIdMenu]);
+    final card = fake.bands[ExternalMpvLauncher.bitmapOverlayIdMenu]!;
+    // Centered and much smaller than the screen.
+    expect((card.x + card.w / 2 - 640).abs(), lessThan(2));
+    expect((card.y + card.h / 2 - 360).abs(), lessThan(2));
+    expect(card.w * card.h, lessThan(1280 * 720 * 0.4));
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
+  testWidgets('stall card shows the error code, message, and actions', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: sdtvDarkTheme,
+        home: const Scaffold(
+          body: Center(
+            child: WatchMenuCard(
+              model: WatchMenuModel(
+                title: '101. Mock Entertainment 1',
+                errorCode: 'A-HOLD',
+                errorMessage: 'Playback stopped',
+                selected: 0,
+                hint: 'A select  ·  B guide',
+                rows: [
+                  WatchMenuRow('retry', 'Retry'),
+                  WatchMenuRow('guide', 'Back to guide'),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(find.text('A-HOLD'), findsOneWidget);
+    expect(find.text('Playback stopped'), findsOneWidget);
+    expect(find.text('101. Mock Entertainment 1'), findsOneWidget);
+    expect(find.text('Retry'), findsOneWidget);
+    expect(find.byIcon(Icons.refresh_rounded), findsOneWidget);
   });
 }
