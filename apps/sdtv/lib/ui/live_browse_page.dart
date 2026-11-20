@@ -29,7 +29,8 @@ class LiveBrowsePage extends StatefulWidget {
 }
 
 class _LiveBrowsePageState extends State<LiveBrowsePage> {
-  final GlobalKey<MpvFlutterHudState> _mpvHudKey = GlobalKey<MpvFlutterHudState>();
+  final GlobalKey<MpvFlutterHudState> _mpvHudKey =
+      GlobalKey<MpvFlutterHudState>();
 
   /// 0 = categories, 1 = channels / posters
   int _column = 0;
@@ -3106,261 +3107,273 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         body: SafeArea(
           child: Stack(
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
-                    child: Row(
-                      children: [
-                        _SectionChip(
-                          label: 'LIVE',
-                          selected: _isLive,
-                          focused: _sectionFocus && _isLive,
-                        ),
-                        const SizedBox(width: 8),
-                        _SectionChip(
-                          label: 'MOVIES',
-                          selected: movies,
-                          focused: _sectionFocus && movies,
-                        ),
-                        if (session.seriesAvailable) ...[
+              // The guide sits under mpv while watching. Pause its animations
+              // so it does not compete with mpv and the HUD for the GPU.
+              TickerMode(
+                enabled: !session.isWatchingExternal,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+                      child: Row(
+                        children: [
+                          _SectionChip(
+                            label: 'LIVE',
+                            selected: _isLive,
+                            focused: _sectionFocus && _isLive,
+                          ),
                           const SizedBox(width: 8),
                           _SectionChip(
-                            label: 'TV SHOWS',
-                            selected: series,
-                            focused: _sectionFocus && series,
+                            label: 'MOVIES',
+                            selected: movies,
+                            focused: _sectionFocus && movies,
+                          ),
+                          if (session.seriesAvailable) ...[
+                            const SizedBox(width: 8),
+                            _SectionChip(
+                              label: 'TV SHOWS',
+                              selected: series,
+                              focused: _sectionFocus && series,
+                            ),
+                          ],
+                          const SizedBox(width: 16),
+                          Text(
+                            'sdtv',
+                            style: theme.textTheme.headlineSmall?.copyWith(
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.primary.withValues(
+                                alpha: 0.2,
+                              ),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              session.useDemo
+                                  ? 'DEMO'
+                                  : session.useM3u
+                                  ? 'M3U'
+                                  : session.mockCatalog
+                                  ? 'MOCK'
+                                  : 'LIVE',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: theme.colorScheme.primary,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          // Deploy fingerprint — must change after each package-deck.
+                          Text(
+                            SdtvBuildInfo.label,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.outline,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                          const Spacer(),
+                          Text(
+                            user,
+                            style: theme.textTheme.labelMedium?.copyWith(
+                              color: theme.colorScheme.outline,
+                            ),
                           ),
                         ],
-                        const SizedBox(width: 16),
-                        Text(
-                          'sdtv',
-                          style: theme.textTheme.headlineSmall?.copyWith(
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.primary.withValues(
-                              alpha: 0.2,
-                            ),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Text(
-                            session.useDemo
-                                ? 'DEMO'
-                                : session.useM3u
-                                ? 'M3U'
-                                : session.mockCatalog
-                                ? 'MOCK'
-                                : 'LIVE',
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: theme.colorScheme.primary,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        // Deploy fingerprint — must change after each package-deck.
-                        Text(
-                          SdtvBuildInfo.label,
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: theme.colorScheme.outline,
-                            fontFamily: 'monospace',
-                          ),
-                        ),
-                        const Spacer(),
-                        Text(
-                          user,
-                          style: theme.textTheme.labelMedium?.copyWith(
-                            color: theme.colorScheme.outline,
-                          ),
-                        ),
-                      ],
+                      ),
                     ),
-                  ),
-                  Expanded(
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        SizedBox(
-                          width: 280,
-                          child: ListView.builder(
-                            controller: _catScroll,
-                            padding: const EdgeInsets.fromLTRB(24, 8, 12, 24),
-                            itemCount: cats.length + 1,
-                            itemBuilder: (context, index) {
-                              if (index == 0) {
-                                final hiddenN = session.hiddenCategoryCount;
+                    Expanded(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          SizedBox(
+                            width: 280,
+                            child: ListView.builder(
+                              controller: _catScroll,
+                              padding: const EdgeInsets.fromLTRB(24, 8, 12, 24),
+                              itemCount: cats.length + 1,
+                              itemBuilder: (context, index) {
+                                if (index == 0) {
+                                  final hiddenN = session.hiddenCategoryCount;
+                                  return SizedBox(
+                                    height: _listHeaderExtent,
+                                    child: Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: Text(
+                                        movies
+                                            ? (session.vodError ??
+                                                  (hiddenN > 0
+                                                      ? 'MOVIES · $hiddenN hidden'
+                                                      : 'MOVIES'))
+                                            : series
+                                            ? (session.seriesError ??
+                                                  (hiddenN > 0
+                                                      ? 'TV SHOWS · $hiddenN hidden'
+                                                      : 'TV SHOWS'))
+                                            : (hiddenN > 0
+                                                  ? 'CATEGORIES · $hiddenN hidden'
+                                                  : 'CATEGORIES'),
+                                        style: theme.textTheme.labelSmall
+                                            ?.copyWith(
+                                              color: theme.colorScheme.outline,
+                                              letterSpacing: 1.1,
+                                            ),
+                                      ),
+                                    ),
+                                  );
+                                }
+                                final i = index - 1;
+                                // Show cursor even when focus is on the other column.
+                                final selected = _catIndex == i;
+                                final focused =
+                                    !_sectionFocus && _column == 0 && selected;
+                                final isFavCat =
+                                    cats[i].categoryId == kFavoritesCategoryId;
+                                final favN = movies
+                                    ? session.vodFavoriteCount
+                                    : series
+                                    ? session.seriesFavoriteCount
+                                    : session.favoriteCount;
                                 return SizedBox(
-                                  height: _listHeaderExtent,
-                                  child: Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: Text(
-                                      movies
-                                          ? (session.vodError ??
-                                                (hiddenN > 0
-                                                    ? 'MOVIES · $hiddenN hidden'
-                                                    : 'MOVIES'))
-                                          : series
-                                          ? (session.seriesError ??
-                                                (hiddenN > 0
-                                                    ? 'TV SHOWS · $hiddenN hidden'
-                                                    : 'TV SHOWS'))
-                                          : (hiddenN > 0
-                                                ? 'CATEGORIES · $hiddenN hidden'
-                                                : 'CATEGORIES'),
-                                      style: theme.textTheme.labelSmall
-                                          ?.copyWith(
-                                            color: theme.colorScheme.outline,
-                                            letterSpacing: 1.1,
-                                          ),
+                                  height: _rowExtent,
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(bottom: 6),
+                                    child: _BrowseTile(
+                                      label: isFavCat
+                                          ? '${cats[i].categoryName}'
+                                                '${favN > 0 ? ' ($favN)' : ''}'
+                                          : cats[i].categoryName,
+                                      icon: isFavCat
+                                          ? Icons.star_rounded
+                                          : Icons.folder_outlined,
+                                      selected: focused,
+                                      dimSelected: selected && !focused,
+                                      onTap: () {
+                                        setState(() {
+                                          _catIndex = i;
+                                          _column = 0;
+                                          _sectionFocus = false;
+                                        });
+                                        if (movies) {
+                                          session.selectVodCategory(
+                                            cats[i].categoryId,
+                                          );
+                                        } else if (series) {
+                                          session.selectSeriesCategory(
+                                            cats[i].categoryId,
+                                          );
+                                        } else {
+                                          _selectCategoryKeepingChanPos(
+                                            cats[i].categoryId,
+                                          );
+                                        }
+                                      },
                                     ),
                                   ),
                                 );
-                              }
-                              final i = index - 1;
-                              // Show cursor even when focus is on the other column.
-                              final selected = _catIndex == i;
-                              final focused =
-                                  !_sectionFocus && _column == 0 && selected;
-                              final isFavCat =
-                                  cats[i].categoryId == kFavoritesCategoryId;
-                              final favN = movies
-                                  ? session.vodFavoriteCount
-                                  : series
-                                  ? session.seriesFavoriteCount
-                                  : session.favoriteCount;
-                              return SizedBox(
-                                height: _rowExtent,
-                                child: Padding(
-                                  padding: const EdgeInsets.only(bottom: 6),
-                                  child: _BrowseTile(
-                                    label: isFavCat
-                                        ? '${cats[i].categoryName}'
-                                              '${favN > 0 ? ' ($favN)' : ''}'
-                                        : cats[i].categoryName,
-                                    icon: isFavCat
-                                        ? Icons.star_rounded
-                                        : Icons.folder_outlined,
-                                    selected: focused,
-                                    dimSelected: selected && !focused,
-                                    onTap: () {
+                              },
+                            ),
+                          ),
+                          VerticalDivider(
+                            width: 1,
+                            color: theme.colorScheme.outline.withValues(
+                              alpha: 0.3,
+                            ),
+                          ),
+                          Expanded(
+                            child: movies
+                                ? _moviesPane(theme, catTitle, vods)
+                                : series
+                                ? _seriesPane(theme, catTitle, shows)
+                                : EpgGuidePane(
+                                    channels: channels,
+                                    channelIndex: _chanIndex,
+                                    categoryTitle: catTitle,
+                                    windowStart: _epgWindowStart,
+                                    focusTime: _epgFocusTime,
+                                    now: DateTime.now(),
+                                    epgFor: session.cachedFullEpg,
+                                    scrollController: _epgScroll,
+                                    gridFocused: !_sectionFocus && _column == 1,
+                                    m3u:
+                                        session.useM3u &&
+                                        !session.mockCatalog &&
+                                        !session.useDemo,
+                                    emptyMessage: session.isFavoritesCategory
+                                        ? 'No favorites yet.\n'
+                                              'Open any category · highlight a channel · Y to star'
+                                        : 'No channels in this category.',
+                                    onProgramWidth: (w) {
+                                      if ((w - _epgProgramWidth).abs() < 1) {
+                                        return;
+                                      }
+                                      _epgProgramWidth = w;
+                                    },
+                                    onTapChannel: (i) {
                                       setState(() {
-                                        _catIndex = i;
-                                        _column = 0;
+                                        _chanIndex = i;
+                                        _column = 1;
                                         _sectionFocus = false;
                                       });
-                                      if (movies) {
-                                        session.selectVodCategory(
-                                          cats[i].categoryId,
-                                        );
-                                      } else if (series) {
-                                        session.selectSeriesCategory(
-                                          cats[i].categoryId,
-                                        );
-                                      } else {
-                                        _selectCategoryKeepingChanPos(
-                                          cats[i].categoryId,
-                                        );
-                                      }
+                                      _rememberChanIndex();
+                                      session.prefetchFullEpgAround(
+                                        channels,
+                                        i,
+                                      );
+                                    },
+                                    onLongPressChannel: (i) {
+                                      setState(() {
+                                        _chanIndex = i;
+                                        _column = 1;
+                                        _sectionFocus = false;
+                                      });
+                                      _rememberChanIndex();
+                                      unawaited(_toggleFavorite());
+                                    },
+                                    onTapProgram: (i, p) {
+                                      setState(() {
+                                        _chanIndex = i;
+                                        _column = 1;
+                                        _sectionFocus = false;
+                                        _epgFocusTime =
+                                            p.isLiveAt(DateTime.now())
+                                            ? DateTime.now()
+                                            : p.start.add(
+                                                const Duration(minutes: 1),
+                                              );
+                                      });
+                                      unawaited(_playFocusedLive());
                                     },
                                   ),
-                                ),
-                              );
-                            },
                           ),
-                        ),
-                        VerticalDivider(
-                          width: 1,
-                          color: theme.colorScheme.outline.withValues(
-                            alpha: 0.3,
-                          ),
-                        ),
-                        Expanded(
-                          child: movies
-                              ? _moviesPane(theme, catTitle, vods)
-                              : series
-                              ? _seriesPane(theme, catTitle, shows)
-                              : EpgGuidePane(
-                                  channels: channels,
-                                  channelIndex: _chanIndex,
-                                  categoryTitle: catTitle,
-                                  windowStart: _epgWindowStart,
-                                  focusTime: _epgFocusTime,
-                                  now: DateTime.now(),
-                                  epgFor: session.cachedFullEpg,
-                                  scrollController: _epgScroll,
-                                  gridFocused: !_sectionFocus && _column == 1,
-                                  m3u:
-                                      session.useM3u &&
-                                      !session.mockCatalog &&
-                                      !session.useDemo,
-                                  emptyMessage: session.isFavoritesCategory
-                                      ? 'No favorites yet.\n'
-                                            'Open any category · highlight a channel · Y to star'
-                                      : 'No channels in this category.',
-                                  onProgramWidth: (w) {
-                                    if ((w - _epgProgramWidth).abs() < 1) {
-                                      return;
-                                    }
-                                    _epgProgramWidth = w;
-                                  },
-                                  onTapChannel: (i) {
-                                    setState(() {
-                                      _chanIndex = i;
-                                      _column = 1;
-                                      _sectionFocus = false;
-                                    });
-                                    _rememberChanIndex();
-                                    session.prefetchFullEpgAround(channels, i);
-                                  },
-                                  onLongPressChannel: (i) {
-                                    setState(() {
-                                      _chanIndex = i;
-                                      _column = 1;
-                                      _sectionFocus = false;
-                                    });
-                                    _rememberChanIndex();
-                                    unawaited(_toggleFavorite());
-                                  },
-                                  onTapProgram: (i, p) {
-                                    setState(() {
-                                      _chanIndex = i;
-                                      _column = 1;
-                                      _sectionFocus = false;
-                                      _epgFocusTime = p.isLiveAt(DateTime.now())
-                                          ? DateTime.now()
-                                          : p.start.add(
-                                              const Duration(minutes: 1),
-                                            );
-                                    });
-                                    unawaited(_playFocusedLive());
-                                  },
-                                ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
-                    decoration: BoxDecoration(
-                      border: Border(
-                        top: BorderSide(
-                          color: theme.colorScheme.outline.withValues(
-                            alpha: 0.25,
+                    Container(
+                      padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
+                      decoration: BoxDecoration(
+                        border: Border(
+                          top: BorderSide(
+                            color: theme.colorScheme.outline.withValues(
+                              alpha: 0.25,
+                            ),
                           ),
                         ),
                       ),
+                      child: Text(
+                        _footerHint,
+                        style: theme.textTheme.bodySmall,
+                      ),
                     ),
-                    child: Text(_footerHint, style: theme.textTheme.bodySmall),
-                  ),
-                ],
+                  ],
+                ),
               ),
 
               // —— In-page menu (no Navigator dialog) ——
@@ -3431,10 +3444,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                     // Opacity stays above 0 so the child is still painted.
                     child: Opacity(
                       opacity: 0.012,
-                      child: MpvFlutterHud(
-                        key: _mpvHudKey,
-                        session: session,
-                      ),
+                      child: MpvFlutterHud(key: _mpvHudKey, session: session),
                     ),
                   ),
                 ),
@@ -3486,7 +3496,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             const SizedBox(height: 8),
                             _BrowseTile(
                               label: 'mpv overlay',
-                              subtitle: 'External mpv · Flutter HUD on the video',
+                              subtitle:
+                                  'External mpv · Flutter HUD on the video',
                               icon: Icons.ondemand_video_outlined,
                               selected: _surfaceIndex == 1,
                               onTap: () => unawaited(_confirmSurface(index: 1)),

@@ -1,28 +1,29 @@
 import 'dart:typed_data';
 
-/// Straight RGBA8 (Flutter `rawRgba`) → premultiplied BGRA8 for mpv `overlay-add`.
+/// Premultiplied RGBA8 (Flutter `ImageByteFormat.rawRgba`) → premultiplied
+/// BGRA8 for mpv `overlay-add`, **in place**. Returns [rgba].
 ///
-/// mpv's only bitmap format is `bgra`, and the color channels must already be
-/// multiplied by alpha. A zero alpha pixel stays fully transparent so the
-/// video shows through.
-Uint8List rgbaStraightToBgraPremul(Uint8List rgba) {
-  final out = Uint8List(rgba.length);
-  for (var i = 0; i + 3 < rgba.length; i += 4) {
-    final a = rgba[i + 3];
-    if (a == 0) continue;
-    if (a == 255) {
-      out[i] = rgba[i + 2];
-      out[i + 1] = rgba[i + 1];
-      out[i + 2] = rgba[i];
-      out[i + 3] = 255;
-      continue;
+/// Flutter's `rawRgba` is already premultiplied (its straight-alpha format is
+/// `rawStraightRgba`), and mpv's `bgra` wants premultiplied too, so only the
+/// red and blue bytes swap. Fully transparent pixels stay zero.
+Uint8List rgbaPremulToBgraInPlace(Uint8List rgba) {
+  final n = rgba.lengthInBytes & ~3;
+  if (Endian.host == Endian.little && rgba.offsetInBytes % 4 == 0) {
+    final words = rgba.buffer.asUint32List(rgba.offsetInBytes, n >> 2);
+    for (var i = 0; i < words.length; i++) {
+      final v = words[i];
+      if (v == 0) continue;
+      // Little-endian word: A B G R → A R G B.
+      words[i] = (v & 0xFF00FF00) | ((v & 0xFF) << 16) | ((v >> 16) & 0xFF);
     }
-    out[i] = (rgba[i + 2] * a + 127) ~/ 255;
-    out[i + 1] = (rgba[i + 1] * a + 127) ~/ 255;
-    out[i + 2] = (rgba[i] * a + 127) ~/ 255;
-    out[i + 3] = a;
+    return rgba;
   }
-  return out;
+  for (var i = 0; i < n; i += 4) {
+    final r = rgba[i];
+    rgba[i] = rgba[i + 2];
+    rgba[i + 2] = r;
+  }
+  return rgba;
 }
 
 /// Positional `overlay-add` argv. mpv 0.41 accepts this form.

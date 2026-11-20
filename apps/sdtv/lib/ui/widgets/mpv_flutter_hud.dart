@@ -22,14 +22,21 @@ abstract class MpvBitmapOverlay {
 
   Future<({int w, int h})?> readOsdSize();
 
-  /// Straight RGBA8, length >= width * height * 4.
-  Future<bool> pushRgba(
+  /// Shows one HUD band at ([x], [y]) in OSD pixels.
+  ///
+  /// [rgba] is premultiplied RGBA8 (Flutter `rawRgba`), length >=
+  /// width * height * 4. The overlay may convert it in place.
+  Future<bool> pushBand(
     Uint8List rgba, {
+    required int id,
+    required int x,
+    required int y,
     required int width,
     required int height,
-    int? displayWidth,
-    int? displayHeight,
   });
+
+  /// mpv-pushed property changes (`pause`, `duration`, `osd-width`, …).
+  Stream<({String name, Object? value})> get propertyChanges;
 
   Future<void> clear();
 
@@ -70,22 +77,27 @@ class LauncherBitmapOverlay implements MpvBitmapOverlay {
   Future<({int w, int h})?> readOsdSize() => mpv.osdPixelSize();
 
   @override
-  Future<bool> pushRgba(
+  Future<bool> pushBand(
     Uint8List rgba, {
+    required int id,
+    required int x,
+    required int y,
     required int width,
     required int height,
-    int? displayWidth,
-    int? displayHeight,
   }) {
-    final bgra = rgbaStraightToBgraPremul(rgba);
     return mpv.showBitmapOverlay(
-      bgra,
+      rgbaPremulToBgraInPlace(rgba),
+      id: id,
+      x: x,
+      y: y,
       width: width,
       height: height,
-      displayWidth: displayWidth,
-      displayHeight: displayHeight,
     );
   }
+
+  @override
+  Stream<({String name, Object? value})> get propertyChanges =>
+      mpv.propertyChanges;
 
   @override
   Future<void> clear() => mpv.hideBitmapOverlay();
@@ -102,9 +114,11 @@ class LauncherBitmapOverlay implements MpvBitmapOverlay {
 
 /// Rasterizes [PlayerChrome] and composites it on external mpv.
 ///
-/// The picture stays `vo=gpu`. Focus stays in Flutter. The bitmap updates on
-/// input, and a few times a second while the VOD scrubber is on screen.
-/// Auto-hides after a few seconds so a volume readout can use mpv text OSD.
+/// The picture stays `vo=gpu`. Focus stays in Flutter. Only the top and bottom
+/// bands are captured, at mpv's OSD pixel size, as two overlays. The bitmap
+/// updates on input, on mpv-pushed state (pause, duration, OSD size), and once
+/// a second while a VOD clock is on screen. Auto-hides after a few seconds so a
+/// volume readout can use mpv text OSD.
 class MpvFlutterHud extends StatefulWidget {
   const MpvFlutterHud({
     super.key,
@@ -127,7 +141,10 @@ class MpvFlutterHud extends StatefulWidget {
 }
 
 class MpvFlutterHudState extends State<MpvFlutterHud> {
-  final GlobalKey _boundaryKey = GlobalKey();
+  final GlobalKey _rootKey = GlobalKey();
+  final GlobalKey _topBandKey = GlobalKey();
+  final GlobalKey _bottomBandKey = GlobalKey();
+  StreamSubscription<({String name, Object? value})>? _props;
 
   late final MpvBitmapOverlay _overlay =
       widget.overlay ?? LauncherBitmapOverlay(widget.session.externalMpv);
@@ -152,7 +169,9 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
   Timer? _tick;
 
   static const _hudHideAfter = Duration(seconds: 4);
-  static const _tickEvery = Duration(milliseconds: 300);
+
+  /// VOD clock refresh. Pause / duration / OSD size are pushed by mpv.
+  static const _tickEvery = Duration(seconds: 1);
 
   bool get _vod => widget.session.watchingVod;
 
@@ -177,13 +196,39 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
     super.initState();
     _overlay.activate();
     widget.session.addListener(_onSession);
+    _props = _overlay.propertyChanges.listen(_onProperty);
+    unawaited(_syncPause());
+    if (_vod) unawaited(_refreshPosition());
     _bumpHud();
+  }
+
+  void _onProperty(({String name, Object? value}) change) {
+    if (!mounted) return;
+    switch (change.name) {
+      case 'pause':
+        final paused = change.value == true || change.value == 'yes';
+        if (paused == _paused) return;
+        setState(() => _paused = paused);
+        // Pausing pins the HUD up; resuming restarts its hide timer.
+        if (paused || _showHud) _bumpHud();
+      case 'duration':
+        final v = change.value;
+        if (v is! num) return;
+        final dur = Duration(milliseconds: (v * 1000).round());
+        if (dur == _duration) return;
+        setState(() => _duration = dur);
+        _scheduleCapture();
+      case 'osd-width' || 'osd-height':
+        _osd = null;
+        _scheduleCapture();
+    }
   }
 
   @override
   void dispose() {
     _hideHudTimer?.cancel();
     _tick?.cancel();
+    unawaited(_props?.cancel());
     widget.session.removeListener(_onSession);
     _overlay.deactivate();
     super.dispose();
@@ -191,7 +236,8 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
 
   void _onSession() {
     if (!mounted) return;
-    final menu = widget.session.isWatchMenuActive || widget.session.watchStallOpen;
+    final menu =
+        widget.session.isWatchMenuActive || widget.session.watchStallOpen;
     if (menu) {
       if (!_menuWasOpen) {
         _menuWasOpen = true;
@@ -232,7 +278,8 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
   }
 
   void _syncTick() {
-    final want = _showHud && !_gaveUp && !widget.session.isWatchMenuActive;
+    final want =
+        _vod && _showHud && !_gaveUp && !widget.session.isWatchMenuActive;
     if (!want) {
       _tick?.cancel();
       _tick = null;
@@ -244,26 +291,12 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
   }
 
   Future<void> _poll() async {
-    if (!mounted || !_showHud || _gaveUp) return;
-    final paused = await _overlay.paused();
-    Duration? pos;
-    Duration? dur;
-    if (_vod) {
-      pos = await _overlay.position();
-      dur = await _overlay.length();
-    }
+    if (!mounted || !_showHud || _gaveUp || !_vod) return;
+    final pos = await _overlay.position();
     if (!mounted || !_showHud) return;
-    final posChanged =
-        pos != null && (pos - _position).inMilliseconds.abs() > 250;
-    final durChanged = dur != null && dur != _duration;
-    final pauseChanged = paused != _paused;
-    if (!posChanged && !durChanged && !pauseChanged) return;
-    setState(() {
-      _paused = paused;
-      if (paused) _hideHudTimer?.cancel();
-      if (pos != null) _position = pos;
-      if (dur != null) _duration = dur;
-    });
+    // The clock shows whole seconds; skip captures that would look the same.
+    if (pos.inSeconds == _position.inSeconds) return;
+    setState(() => _position = pos);
     _scheduleCapture();
   }
 
@@ -390,7 +423,9 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
 
   Future<void> _nudgeScrub(int dir) async {
     if (!_canSeek) return;
-    final step = Duration(milliseconds: (_duration.inMilliseconds * 0.05).round());
+    final step = Duration(
+      milliseconds: (_duration.inMilliseconds * 0.05).round(),
+    );
     if (step <= Duration.zero) return;
     await widget.session.seekVodBy(dir < 0 ? -step : step);
     await _refreshPosition();
@@ -444,21 +479,44 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
     if (!mounted || !_showHud || _gaveUp || widget.session.isWatchMenuActive) {
       return;
     }
-    final boundary =
-        _boundaryKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-    if (boundary == null || !boundary.hasSize || boundary.size.isEmpty) {
-      return;
-    }
+    final root = _rootKey.currentContext?.findRenderObject() as RenderBox?;
+    if (root == null || !root.hasSize || root.size.isEmpty) return;
     _captureInFlight = true;
     var retry = false;
     var giveUp = false;
     try {
-      if (boundary.debugNeedsPaint) {
-        retry = true;
+      final logical = root.size;
+      final osd = await _osdSize();
+      // Capture straight at OSD pixels so mpv never rescales (no blur).
+      final forced = widget.capturePixelRatio;
+      final double sx;
+      final double sy;
+      if (forced != null && forced > 0) {
+        sx = sy = forced;
+      } else if (osd != null) {
+        sx = osd.w / logical.width;
+        sy = osd.h / logical.height;
       } else {
-        final ratio = _ratioFor(boundary.size);
-        final image = await boundary.toImage(pixelRatio: ratio);
-        final bytes = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+        sx = sy = _ratioFor(logical);
+      }
+      final targetH = osd?.h ?? (logical.height * sy).round();
+
+      for (final band in [
+        (id: ExternalMpvLauncher.bitmapOverlayId, key: _topBandKey),
+        (id: ExternalMpvLauncher.bitmapOverlayIdBottom, key: _bottomBandKey),
+      ]) {
+        final boundary =
+            band.key.currentContext?.findRenderObject()
+                as RenderRepaintBoundary?;
+        if (boundary == null || !boundary.hasSize || boundary.size.isEmpty) {
+          continue;
+        }
+        final offset = boundary.localToGlobal(Offset.zero, ancestor: root);
+        final image = await boundary.toImage(pixelRatio: sx);
+        // rawRgba is premultiplied, which is what mpv's bgra wants.
+        final bytes = await image.toByteData(
+          format: ui.ImageByteFormat.rawRgba,
+        );
         final w = image.width;
         final h = image.height;
         image.dispose();
@@ -469,27 +527,32 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
         );
         if (rgba == null || w < 1 || h < 1 || rgba.length < w * h * 4) {
           retry = true;
+          continue;
+        }
+        final bottomAnchored =
+            offset.dy + boundary.size.height >= logical.height - 0.5;
+        final y = bottomAnchored
+            ? (targetH - h).clamp(0, targetH)
+            : (offset.dy * sy).round();
+        final ok = await _overlay.pushBand(
+          rgba,
+          id: band.id,
+          x: (offset.dx * sx).round(),
+          y: y,
+          width: w,
+          height: h,
+        );
+        if (!mounted) return;
+        if (ok) {
+          _firstFail = null;
         } else {
-          final osd = await _osdSize();
-          final ok = await _overlay.pushRgba(
-            rgba,
-            width: w,
-            height: h,
-            displayWidth: osd?.w,
-            displayHeight: osd?.h,
-          );
-          if (!mounted) return;
-          if (ok) {
-            _firstFail = null;
-          } else {
-            _firstFail ??= DateTime.now();
-            if (DateTime.now().difference(_firstFail!) >
-                const Duration(seconds: 8)) {
-              giveUp = true;
-            } else {
-              retry = true;
-            }
+          _firstFail ??= DateTime.now();
+          if (DateTime.now().difference(_firstFail!) >
+              const Duration(seconds: 8)) {
+            giveUp = true;
+            break;
           }
+          retry = true;
         }
       }
     } catch (e) {
@@ -535,6 +598,7 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
         now.difference(_osdAt!) < const Duration(seconds: 2)) {
       return _osd;
     }
+    // Normally served from mpv-pushed osd-width / osd-height.
     _osd = await _overlay.readOsdSize();
     _osdAt = now;
     return _osd;
@@ -555,7 +619,9 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
     if (show != null && ep != null) {
       final code = 'S${ep.season}E${ep.episodeNum}';
       final name = ep.title.trim();
-      return name.isEmpty ? '${show.name}  $code' : '${show.name}  $code  $name';
+      return name.isEmpty
+          ? '${show.name}  $code'
+          : '${show.name}  $code  $name';
     }
     final vod = widget.session.nowPlayingVod;
     if (vod != null) return vod.name;
@@ -570,9 +636,8 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
     return _vod ? 'On-demand' : 'Live';
   }
 
-  String get _subtitle => _vod
-      ? 'On-demand'
-      : 'Live · LB/RB channel · ←→ chrome';
+  String get _subtitle =>
+      _vod ? 'On-demand' : 'Live · LB/RB channel · ←→ chrome';
 
   SdtvPlayerState get _playerState =>
       _paused ? SdtvPlayerState.paused : SdtvPlayerState.playing;
@@ -582,9 +647,12 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
     if (widget.session.isWatchMenuActive || widget.session.watchStallOpen) {
       return const SizedBox.shrink();
     }
-    return RepaintBoundary(
-      key: _boundaryKey,
+    return SizedBox.expand(
+      key: _rootKey,
       child: PlayerChrome(
+        topBandKey: _topBandKey,
+        bottomBandKey: _bottomBandKey,
+        animate: false,
         title: _title,
         subtitle: _subtitle,
         playerState: _playerState,

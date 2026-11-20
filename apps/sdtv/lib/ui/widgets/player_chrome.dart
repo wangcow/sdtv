@@ -11,6 +11,7 @@ enum PlayerChromeFocus {
   seekBack,
   playPause,
   seekFwd,
+
   /// Scrubber only when [canSeek].
   scrubber,
   back,
@@ -36,6 +37,9 @@ class PlayerChrome extends StatelessWidget {
     this.onSeekFwd,
     this.onBack,
     this.onScrub,
+    this.topBandKey,
+    this.bottomBandKey,
+    this.animate = true,
   });
 
   final String title;
@@ -48,6 +52,7 @@ class PlayerChrome extends StatelessWidget {
   final PlayerChromeFocus focus;
   final bool showChrome;
   final String? decodeLabel;
+
   /// e.g. perf: mpv 60fps · vaapi-copy · src 1280x720
   final String? perfLabel;
 
@@ -56,6 +61,15 @@ class PlayerChrome extends StatelessWidget {
   final VoidCallback? onSeekFwd;
   final VoidCallback? onBack;
   final ValueChanged<double>? onScrub;
+
+  /// Keys for the top / bottom band [RepaintBoundary]s. The mpv HUD captures
+  /// each band on its own so the clear middle of the screen is never sent.
+  final Key? topBandKey;
+  final Key? bottomBandKey;
+
+  /// Focus transitions. Off for the mpv bitmap: it captures one frame per
+  /// change, so a tween would be caught at its start.
+  final bool animate;
 
   bool get _playing =>
       playerState == SdtvPlayerState.playing ||
@@ -73,188 +87,193 @@ class PlayerChrome extends StatelessWidget {
         ? (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0)
         : 0.0;
 
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        // Soft top/bottom scrims so white type stays readable.
-        const IgnorePointer(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Color(0xCC000000),
-                  Color(0x00000000),
-                  Color(0x00000000),
-                  Color(0xE6000000),
-                ],
-                stops: [0.0, 0.28, 0.55, 1.0],
-              ),
-            ),
-          ),
+    // Each band carries its own scrim and fades to clear at its inner edge,
+    // so the middle of the picture is untouched.
+    final top = DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xCC000000), Color(0x66000000), Color(0x00000000)],
+          stops: [0.0, 0.6, 1.0],
         ),
-
-        // —— Top: title + live badge ——
-        Positioned(
-          left: 28,
-          right: 28,
-          top: pad.top + 20,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
+      ),
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(28, pad.top + 20, 28, 44),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.headlineSmall?.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                      height: 1.15,
+                    ),
+                  ),
+                  if (subtitle.isNotEmpty) ...[
+                    const SizedBox(height: 6),
                     Text(
-                      title,
+                      subtitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.headlineSmall?.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w800,
-                        height: 1.15,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
-                    if (subtitle.isNotEmpty) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        subtitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          color: Colors.white70,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
                   ],
-                ),
+                ],
               ),
-              const SizedBox(width: 12),
-              _Badge(
-                label: liveMode ? 'LIVE' : playerState.name.toUpperCase(),
-                emphasized: liveMode,
-              ),
-            ],
-          ),
+            ),
+            const SizedBox(width: 12),
+            _Badge(
+              label: liveMode ? 'LIVE' : playerState.name.toUpperCase(),
+              emphasized: liveMode,
+            ),
+          ],
         ),
+      ),
+    );
 
-        // —— Bottom: scrubber + transport ——
-        Positioned(
-          left: 24,
-          right: 24,
-          bottom: pad.bottom + 18,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (canSeek && !liveMode) ...[
-                _ScrubberRow(
-                  position: position,
-                  duration: duration,
-                  progress: progress,
-                  focused: focus == PlayerChromeFocus.scrubber,
-                  onScrub: onScrub,
-                ),
-                const SizedBox(height: 14),
-              ] else if (liveMode) ...[
-                Row(
-                  children: [
-                    Icon(Icons.circle, size: 10, color: Colors.red.shade400),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Live · no scrubber',
-                      style: theme.textTheme.labelLarge?.copyWith(
-                        color: Colors.white60,
-                        letterSpacing: 0.4,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-              ],
-
+    final bottom = DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0x00000000), Color(0xB3000000), Color(0xE6000000)],
+          stops: [0.0, 0.45, 1.0],
+        ),
+      ),
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(24, 56, 24, pad.bottom + 18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (canSeek && !liveMode) ...[
+              _ScrubberRow(
+                position: position,
+                duration: duration,
+                progress: progress,
+                focused: focus == PlayerChromeFocus.scrubber,
+                onScrub: onScrub,
+              ),
+              const SizedBox(height: 14),
+            ] else if (liveMode) ...[
               Row(
-                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  if (!liveMode && canSeek) ...[
-                    _ChromeIconButton(
-                      icon: Icons.replay_10_rounded,
-                      label: '−10s',
-                      focused: focus == PlayerChromeFocus.seekBack,
-                      onTap: onSeekBack,
+                  Icon(Icons.circle, size: 10, color: Colors.red.shade400),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Live · no scrubber',
+                    style: theme.textTheme.labelLarge?.copyWith(
+                      color: Colors.white60,
+                      letterSpacing: 0.4,
                     ),
-                    const SizedBox(width: 18),
-                  ],
-                  _ChromeIconButton(
-                    icon: _playing
-                        ? Icons.pause_rounded
-                        : Icons.play_arrow_rounded,
-                    label: _playing ? 'Pause' : 'Play',
-                    focused: focus == PlayerChromeFocus.playPause,
-                    large: true,
-                    onTap: onPlayPause,
-                  ),
-                  if (!liveMode && canSeek) ...[
-                    const SizedBox(width: 18),
-                    _ChromeIconButton(
-                      icon: Icons.forward_10_rounded,
-                      label: '+10s',
-                      focused: focus == PlayerChromeFocus.seekFwd,
-                      onTap: onSeekFwd,
-                    ),
-                  ],
-                  const SizedBox(width: 28),
-                  _ChromeIconButton(
-                    icon: Icons.arrow_back_rounded,
-                    label: 'Back',
-                    focused: focus == PlayerChromeFocus.back,
-                    onTap: onBack,
                   ),
                 ],
               ),
-
               const SizedBox(height: 12),
+            ],
+
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (!liveMode && canSeek) ...[
+                  _ChromeIconButton(
+                    animate: animate,
+                    icon: Icons.replay_10_rounded,
+                    label: '−10s',
+                    focused: focus == PlayerChromeFocus.seekBack,
+                    onTap: onSeekBack,
+                  ),
+                  const SizedBox(width: 18),
+                ],
+                _ChromeIconButton(
+                  animate: animate,
+                  icon: _playing
+                      ? Icons.pause_rounded
+                      : Icons.play_arrow_rounded,
+                  label: _playing ? 'Pause' : 'Play',
+                  focused: focus == PlayerChromeFocus.playPause,
+                  large: true,
+                  onTap: onPlayPause,
+                ),
+                if (!liveMode && canSeek) ...[
+                  const SizedBox(width: 18),
+                  _ChromeIconButton(
+                    animate: animate,
+                    icon: Icons.forward_10_rounded,
+                    label: '+10s',
+                    focused: focus == PlayerChromeFocus.seekFwd,
+                    onTap: onSeekFwd,
+                  ),
+                ],
+                const SizedBox(width: 28),
+                _ChromeIconButton(
+                  animate: animate,
+                  icon: Icons.arrow_back_rounded,
+                  label: 'Back',
+                  focused: focus == PlayerChromeFocus.back,
+                  onTap: onBack,
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 12),
+            Text(
+              liveMode
+                  ? 'A play/pause · LB/RB channel · B back · ←→ move chrome'
+                  : canSeek
+                  ? '←→ buttons · ↑ scrubber · ←→ seek on bar · ↓ back · A · B'
+                  : 'A play/pause · B back · ←→ move chrome',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall?.copyWith(color: Colors.white54),
+            ),
+            if (perfLabel != null && perfLabel!.isNotEmpty) ...[
+              const SizedBox(height: 4),
               Text(
-                liveMode
-                    ? 'A play/pause · LB/RB channel · B back · ←→ move chrome'
-                    : canSeek
-                        ? '←→ buttons · ↑ scrubber · ←→ seek on bar · ↓ back · A · B'
-                        : 'A play/pause · B back · ←→ move chrome',
+                perfLabel!,
                 textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: Colors.white54,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: Colors.lightGreenAccent.withValues(alpha: 0.85),
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.w600,
                 ),
               ),
-              if (perfLabel != null && perfLabel!.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text(
-                  perfLabel!,
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: Colors.lightGreenAccent.withValues(alpha: 0.85),
-                    fontFamily: 'monospace',
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-              if (decodeLabel != null && decodeLabel!.isNotEmpty) ...[
-                const SizedBox(height: 2),
-                Text(
-                  decodeLabel!,
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: Colors.white38,
-                    fontFamily: 'monospace',
-                  ),
-                ),
-              ],
             ],
-          ),
+            if (decodeLabel != null && decodeLabel!.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(
+                decodeLabel!,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: Colors.white38,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ],
+          ],
         ),
-      ],
+      ),
+    );
+
+    return SizedBox.expand(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          RepaintBoundary(key: topBandKey, child: top),
+          const Spacer(),
+          RepaintBoundary(key: bottomBandKey, child: bottom),
+        ],
+      ),
     );
   }
 }
@@ -283,10 +302,10 @@ class _Badge extends StatelessWidget {
       child: Text(
         label,
         style: Theme.of(context).textTheme.labelLarge?.copyWith(
-              color: Colors.white,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 1.1,
-            ),
+          color: Colors.white,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 1.1,
+        ),
       ),
     );
   }
@@ -326,10 +345,7 @@ class _ScrubberRow extends StatelessWidget {
             thumbColor: Colors.white,
             overlayColor: theme.colorScheme.primary.withValues(alpha: 0.25),
           ),
-          child: Slider(
-            value: progress,
-            onChanged: onScrub,
-          ),
+          child: Slider(value: progress, onChanged: onScrub),
         ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -373,6 +389,7 @@ class _ChromeIconButton extends StatelessWidget {
     required this.focused,
     this.large = false,
     this.onTap,
+    this.animate = true,
   });
 
   final IconData icon;
@@ -380,6 +397,7 @@ class _ChromeIconButton extends StatelessWidget {
   final bool focused;
   final bool large;
   final VoidCallback? onTap;
+  final bool animate;
 
   @override
   Widget build(BuildContext context) {
@@ -397,7 +415,9 @@ class _ChromeIconButton extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           AnimatedContainer(
-            duration: const Duration(milliseconds: 120),
+            duration: animate
+                ? const Duration(milliseconds: 120)
+                : Duration.zero,
             width: size,
             height: size,
             decoration: BoxDecoration(
@@ -412,7 +432,9 @@ class _ChromeIconButton extends StatelessWidget {
               boxShadow: focused
                   ? [
                       BoxShadow(
-                        color: theme.colorScheme.primary.withValues(alpha: 0.45),
+                        color: theme.colorScheme.primary.withValues(
+                          alpha: 0.45,
+                        ),
                         blurRadius: 16,
                       ),
                     ]

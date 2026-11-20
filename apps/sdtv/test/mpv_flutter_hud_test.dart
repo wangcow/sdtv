@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -7,12 +8,23 @@ import 'package:sdtv/services/settings_store.dart';
 import 'package:sdtv/state/session_controller.dart';
 import 'package:sdtv/theme.dart';
 import 'package:sdtv/ui/widgets/mpv_flutter_hud.dart';
+import 'package:sdtv_player/sdtv_player.dart';
+
+class _Band {
+  _Band(this.rgba, this.x, this.y, this.w, this.h);
+  final Uint8List rgba;
+  final int x;
+  final int y;
+  final int w;
+  final int h;
+
+  int alphaAt(int px, int py) => rgba[py * w * 4 + px * 4 + 3];
+}
 
 class _FakeOverlay implements MpvBitmapOverlay {
   int pushes = 0;
-  Uint8List? rgba;
-  int w = 0;
-  int h = 0;
+  final Map<int, _Band> bands = {};
+  final props = StreamController<({String name, Object? value})>.broadcast();
 
   @override
   bool broken = false;
@@ -32,19 +44,21 @@ class _FakeOverlay implements MpvBitmapOverlay {
   Future<({int w, int h})?> readOsdSize() async => null;
 
   @override
-  Future<bool> pushRgba(
+  Future<bool> pushBand(
     Uint8List rgba, {
+    required int id,
+    required int x,
+    required int y,
     required int width,
     required int height,
-    int? displayWidth,
-    int? displayHeight,
   }) async {
     pushes++;
-    this.rgba = Uint8List.fromList(rgba);
-    w = width;
-    h = height;
+    bands[id] = _Band(Uint8List.fromList(rgba), x, y, width, height);
     return true;
   }
+
+  @override
+  Stream<({String name, Object? value})> get propertyChanges => props.stream;
 
   @override
   Future<void> clear() async {}
@@ -60,7 +74,7 @@ class _FakeOverlay implements MpvBitmapOverlay {
 }
 
 void main() {
-  testWidgets('HUD bitmap keeps a clear center and a solid top scrim', (
+  testWidgets('HUD sends only the top and bottom bands, edge-anchored', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({});
@@ -68,7 +82,7 @@ void main() {
     final session = SessionController(settings: settings);
     final fake = _FakeOverlay();
     final key = GlobalKey<MpvFlutterHudState>();
-    await tester.binding.setSurfaceSize(const Size(640, 360));
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     await tester.pumpWidget(
@@ -85,21 +99,37 @@ void main() {
       ),
     );
     await tester.pump();
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 250)),
-    );
-    await tester.pump();
+    // Each band's toImage completes in its own real-async window.
+    for (var i = 0; i < 4 && fake.bands.length < 2; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 250)),
+      );
+      await tester.pump();
+    }
 
     expect(find.text('Live · LB/RB channel · ←→ chrome'), findsOneWidget);
     expect(find.text('mpv · vo=gpu'), findsOneWidget);
-    expect(fake.pushes, greaterThan(0));
-    expect(fake.w, greaterThan(200));
-    expect(fake.h, greaterThan(120));
-    final bytes = fake.rgba!;
-    final stride = fake.w * 4;
-    int alphaAt(int x, int y) => bytes[y * stride + x * 4 + 3];
-    expect(alphaAt(8, 2), greaterThan(80));
-    expect(alphaAt(fake.w ~/ 2, fake.h ~/ 2), 0);
+    expect(fake.pushes, greaterThanOrEqualTo(2));
+    final top = fake.bands[ExternalMpvLauncher.bitmapOverlayId]!;
+    final bottom = fake.bands[ExternalMpvLauncher.bitmapOverlayIdBottom]!;
+
+    // Full width, pinned to the top and bottom edges of a 1280x720 OSD.
+    expect(top.x, 0);
+    expect(top.y, 0);
+    expect(top.w, 1280);
+    expect(bottom.x, 0);
+    expect(bottom.w, 1280);
+    expect(bottom.y + bottom.h, 720);
+
+    // The clear middle of the picture is never sent.
+    expect(top.h + bottom.h, lessThan(720 * 0.6));
+    expect(top.y + top.h, lessThanOrEqualTo(bottom.y));
+
+    // Solid scrim at the outer edges, clear at the inner edges.
+    expect(top.alphaAt(8, 2), greaterThan(150));
+    expect(top.alphaAt(8, top.h - 1), lessThan(16));
+    expect(bottom.alphaAt(8, bottom.h - 1), greaterThan(150));
+    expect(bottom.alphaAt(8, 0), lessThan(16));
 
     expect(key.currentState!.handleBack(), isTrue);
     expect(key.currentState!.handleBack(), isFalse);

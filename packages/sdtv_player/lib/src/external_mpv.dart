@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:ui' as ui;
@@ -7,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 
 import 'bitmap_overlay.dart';
+import 'mpv_ipc.dart';
 import 'osd_chrome.dart';
 import 'play_error.dart';
 
@@ -107,8 +107,30 @@ class ExternalMpvLauncher {
   /// Set after `overlay-add` keeps failing for this session.
   bool bitmapOverlayBroken = false;
 
+  /// `overlay-add` ids for the HUD bands (top bar, bottom bar).
   static const bitmapOverlayId = 2;
-  String? _bitmapPath;
+  static const bitmapOverlayIdBottom = 3;
+  final Map<int, String> _bitmapPaths = {};
+  final Set<int> _shownBitmapIds = {};
+
+  /// One persistent IPC connection per mpv process (see [_connection]).
+  MpvIpcConnection? _conn;
+  String? _connPath;
+  Future<MpvIpcConnection?>? _connecting;
+
+  /// Properties mpv pushes to us (`observe_property`) instead of polling.
+  static const observedProperties = ['pause', 'duration', 'osd-width', 'osd-height'];
+  final Map<String, Object?> _observed = {};
+  final StreamController<({String name, Object? value})> _propertyChanges =
+      StreamController<({String name, Object? value})>.broadcast();
+
+  /// Fires when an observed property changes (see [observedProperties]).
+  Stream<({String name, Object? value})> get propertyChanges =>
+      _propertyChanges.stream;
+
+  /// Last pushed value of an observed property, or null before the first
+  /// event of this mpv process.
+  Object? observedProperty(String name) => _observed[name];
 
   /// Recent mpv log lines (for HTTP 403-style error messages).
   final List<String> _recentLog = <String>[];
@@ -371,8 +393,6 @@ class ExternalMpvLauncher {
     return '/tmp/sdtv-mpv-$n.sock';
   }
 
-  int _ipcReqId = 1;
-
   /// Send a JSON IPC command; waits for mpv's reply when possible.
   ///
   /// Returns false on transport failure or non-success error from mpv.
@@ -390,69 +410,72 @@ class ExternalMpvLauncher {
 
   /// Low-level IPC: returns decoded JSON reply, or null on failure.
   ///
-  /// [command] is either a JSON list (positional) or a map (named).
+  /// [command] is either a JSON list (positional) or a map (named). All
+  /// requests share one socket per mpv process.
   Future<Map<String, dynamic>?> _ipc(Object command) async {
+    final conn = await _connection();
+    if (conn == null) return null;
+    final reply = await conn.request(command);
+    if (reply == null) {
+      if (conn.isClosed) {
+        debugPrint('sdtv_player: mpv ipc closed during $command');
+        return null;
+      }
+      debugPrint('sdtv_player: mpv ipc no reply for $command');
+      // Write may still have worked (mute/volume often do).
+      return {'error': 'success', 'data': null, 'assumed': true};
+    }
+    if (reply['error'] != null && reply['error'] != 'success') {
+      debugPrint('sdtv_player: mpv ipc error ${reply['error']} for $command');
+    }
+    return reply;
+  }
+
+  /// The open connection for the current mpv process, opening it on demand.
+  Future<MpvIpcConnection?> _connection() {
     final path = _ipcPath;
-    if (path == null || !isRunning) return null;
-    final id = _ipcReqId++;
-    try {
-      final addr = InternetAddress(path, type: InternetAddressType.unix);
-      final socket = await Socket.connect(addr, 0)
-          .timeout(const Duration(milliseconds: 500));
-      final payload = jsonEncode({
-        'command': command,
-        'request_id': id,
-      });
-      socket.write('$payload\n');
-      await socket.flush().timeout(const Duration(milliseconds: 500));
+    if (path == null || !isRunning) return Future.value(null);
+    final c = _conn;
+    if (c != null && !c.isClosed && _connPath == path) return Future.value(c);
+    return _connecting ??= _openConnection(path).whenComplete(() {
+      _connecting = null;
+    });
+  }
 
-      // mpv may emit events; read until our request_id matches.
-      final lines = socket
-          .cast<List<int>>()
-          .transform(utf8.decoder)
-          .transform(const LineSplitter());
-      Map<String, dynamic>? matched;
-      await for (final line in lines.timeout(
-        const Duration(milliseconds: 800),
-        onTimeout: (sink) => sink.close(),
-      )) {
-        if (line.trim().isEmpty) continue;
-        try {
-          final map = jsonDecode(line);
-          if (map is Map<String, dynamic>) {
-            if (map['request_id'] == id ||
-                (map['error'] != null && map['event'] == null)) {
-              matched = map;
-              break;
-            }
-          } else if (map is Map) {
-            final m = Map<String, dynamic>.from(map);
-            if (m['request_id'] == id) {
-              matched = m;
-              break;
-            }
-          }
-        } catch (_) {}
-      }
-      try {
-        await socket.close();
-      } catch (_) {}
-
-      if (matched == null) {
-        debugPrint('sdtv_player: mpv ipc no reply for $command');
-        // Write may still have worked (mute/volume often do).
-        return {'error': 'success', 'data': null, 'assumed': true};
-      }
-      if (matched['error'] != null && matched['error'] != 'success') {
-        debugPrint(
-          'sdtv_player: mpv ipc error ${matched['error']} for $command',
-        );
-      }
-      return matched;
-    } catch (e) {
-      debugPrint('sdtv_player: mpv ipc failed ($command): $e');
+  Future<MpvIpcConnection?> _openConnection(String path) async {
+    _closeConnection();
+    final c = await MpvIpcConnection.connect(path);
+    if (c == null) return null;
+    if (_ipcPath != path) {
+      await c.close();
       return null;
     }
+    _conn = c;
+    _connPath = path;
+    c.events.listen(_onMpvEvent);
+    for (var i = 0; i < observedProperties.length; i++) {
+      unawaited(c.request(['observe_property', i + 1, observedProperties[i]]));
+    }
+    return c;
+  }
+
+  void _onMpvEvent(Map<String, dynamic> event) {
+    if (event['event'] != 'property-change') return;
+    final name = event['name'];
+    if (name is! String) return;
+    final value = event['data'];
+    _observed[name] = value;
+    if (!_propertyChanges.isClosed) {
+      _propertyChanges.add((name: name, value: value));
+    }
+  }
+
+  void _closeConnection() {
+    final c = _conn;
+    _conn = null;
+    _connPath = null;
+    _observed.clear();
+    if (c != null) unawaited(c.close());
   }
 
   Future<Object?> getProperty(String name) async {
@@ -788,22 +811,26 @@ class ExternalMpvLauncher {
 
   /// OSD pixel size (`osd-width` / `osd-height`). Null until the window exists.
   Future<({int w, int h})?> osdPixelSize() async {
-    final rawW = await getProperty('osd-width');
-    final rawH = await getProperty('osd-height');
+    final rawW = _observed['osd-width'] ?? await getProperty('osd-width');
+    final rawH = _observed['osd-height'] ?? await getProperty('osd-height');
     final w = rawW is num ? rawW.toInt() : int.tryParse('$rawW') ?? 0;
     final h = rawH is num ? rawH.toInt() : int.tryParse('$rawH') ?? 0;
     if (w < 16 || h < 16) return null;
     return (w: w, h: h);
   }
 
-  /// Composite a premultiplied BGRA bitmap on the video.
+  /// Composite a premultiplied BGRA bitmap on the video at ([x], [y]).
   ///
-  /// mpv copies the file before the command returns, so the next frame can
-  /// overwrite the same path. This is not ASS `osd-overlay`.
+  /// Each [id] is its own overlay with its own backing file. mpv copies the
+  /// file before the command returns, so the next update can overwrite it.
+  /// This is not ASS `osd-overlay`.
   Future<bool> showBitmapOverlay(
     Uint8List bgra, {
     required int width,
     required int height,
+    int id = bitmapOverlayId,
+    int x = 0,
+    int y = 0,
     int? displayWidth,
     int? displayHeight,
   }) async {
@@ -811,59 +838,71 @@ class ExternalMpvLauncher {
     final stride = width * 4;
     final need = stride * height;
     if (bgra.length < need) return false;
-    _bitmapPath ??= '${Directory.systemTemp.path}/sdtv-hud-$pid.bgra';
+    final path = _bitmapPaths[id] ??=
+        '${Directory.systemTemp.path}/sdtv-hud-$pid-$id.bgra';
     try {
-      final file = File(_bitmapPath!);
+      final file = File(path);
       final bytes = bgra.length == need ? bgra : Uint8List.sublistView(bgra, 0, need);
       await file.writeAsBytes(bytes, flush: false);
       final cmd = bitmapOverlayAddCommand(
-        id: bitmapOverlayId,
-        file: file.path,
+        id: id,
+        file: path,
+        x: x,
+        y: y,
         width: width,
         height: height,
         displayWidth: displayWidth,
         displayHeight: displayHeight,
       );
-      final ok = await sendCommand(cmd);
-      if (ok) return true;
+      var ok = await sendCommand(cmd);
       // Some builds want named args. Retry once without treating it as fatal.
-      return await sendNamedCommand('overlay-add', {
-        'id': bitmapOverlayId,
-        'x': 0,
-        'y': 0,
-        'file': file.path,
-        'offset': 0,
-        'fmt': 'bgra',
-        'w': width,
-        'h': height,
-        'stride': stride,
-        if (displayWidth != null &&
-            displayHeight != null &&
-            (displayWidth != width || displayHeight != height)) ...{
-          'dw': displayWidth,
-          'dh': displayHeight,
-        },
-      });
+      ok = ok ||
+          await sendNamedCommand('overlay-add', {
+            'id': id,
+            'x': x,
+            'y': y,
+            'file': path,
+            'offset': 0,
+            'fmt': 'bgra',
+            'w': width,
+            'h': height,
+            'stride': stride,
+            if (displayWidth != null &&
+                displayHeight != null &&
+                (displayWidth != width || displayHeight != height)) ...{
+              'dw': displayWidth,
+              'dh': displayHeight,
+            },
+          });
+      if (ok) _shownBitmapIds.add(id);
+      return ok;
     } catch (e) {
       debugPrint('sdtv_player: bitmap overlay write failed: $e');
       return false;
     }
   }
 
-  /// Remove the bitmap HUD. The file stays so the next show can overwrite it.
-  Future<void> hideBitmapOverlay() async {
+  /// Remove one bitmap overlay, or every one shown when [id] is null.
+  /// Files stay so the next show can overwrite them.
+  Future<void> hideBitmapOverlay({int? id}) async {
+    final ids = id == null ? _shownBitmapIds.toList() : [id];
+    _shownBitmapIds.removeAll(ids);
     if (!isRunning) return;
-    await sendCommand(['overlay-remove', bitmapOverlayId]);
+    for (final i in ids) {
+      await sendCommand(['overlay-remove', i]);
+    }
   }
 
   void _deleteBitmapFile() {
-    final path = _bitmapPath;
-    _bitmapPath = null;
-    if (path == null) return;
-    try {
-      final f = File(path);
-      if (f.existsSync()) f.deleteSync();
-    } catch (_) {}
+    final paths = _bitmapPaths.values.toList();
+    _bitmapPaths.clear();
+    _shownBitmapIds.clear();
+    for (final path in paths) {
+      try {
+        final f = File(path);
+        if (f.existsSync()) f.deleteSync();
+      } catch (_) {}
+    }
   }
 
   /// Convenience: live banner on the video plane.
@@ -1621,6 +1660,7 @@ GAMEPAD_GUIDE ignore
   }
 
   void _cleanupIpc() {
+    _closeConnection();
     final path = _ipcPath;
     _ipcPath = null;
     if (path == null) return;
