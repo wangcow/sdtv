@@ -26,6 +26,7 @@ class ArtworkCache {
 
   static const kindVod = 'vod';
   static const kindSeries = 'series';
+  static const kindChannel = 'channel';
 
   Future<Directory> rootDir() async {
     if (_resolvedRoot != null) return _resolvedRoot!;

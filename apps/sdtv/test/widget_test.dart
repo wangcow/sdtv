@@ -52,6 +52,9 @@ void main() {
     expect(find.textContaining('CATEGORIES'), findsOneWidget);
     expect(find.text('Entertainment'), findsOneWidget);
     expect(find.textContaining('DEMO'), findsOneWidget);
+    // Footer controls render as key caps + actions.
+    expect(find.text('X'), findsOneWidget);
+    expect(find.text('hide'), findsOneWidget);
   });
 
   testWidgets('A on a live channel plays on mpv without asking', (

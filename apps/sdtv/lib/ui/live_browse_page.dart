@@ -2661,7 +2661,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       if (_epgAwayFromNow) {
         return '↑↓ channels · LB/RB ±30 min · A play · ← cats · B now';
       }
-      return '↑↓ channels · LB/RB ±30 min · A play · ← / B cats';
+      return '↑↓ channels · LB/RB ±30 min · A play · ←/B cats';
     }
     return '↑↓ cats · B top · → guide · X hide · ☰ Search';
   }
@@ -2780,46 +2780,61 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+                      padding: const EdgeInsets.fromLTRB(20, 10, 20, 6),
                       child: Row(
                         children: [
+                          Text(
+                            'sdtv',
+                            style: theme.textTheme.titleLarge?.copyWith(
+                              color: theme.colorScheme.primary,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: -0.5,
+                            ),
+                          ),
+                          const SizedBox(width: 28),
                           _SectionChip(
-                            label: 'LIVE',
+                            label: 'LIVE TV',
                             selected: _isLive,
                             focused: _sectionFocus && _isLive,
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 4),
                           _SectionChip(
                             label: 'MOVIES',
                             selected: movies,
                             focused: _sectionFocus && movies,
                           ),
                           if (session.seriesAvailable) ...[
-                            const SizedBox(width: 8),
+                            const SizedBox(width: 4),
                             _SectionChip(
                               label: 'TV SHOWS',
                               selected: series,
                               focused: _sectionFocus && series,
                             ),
                           ],
-                          const SizedBox(width: 16),
+                          const Spacer(),
+                          // Deploy fingerprint — must change after each package-deck.
                           Text(
-                            'sdtv',
-                            style: theme.textTheme.headlineSmall?.copyWith(
-                              fontWeight: FontWeight.w800,
+                            SdtvBuildInfo.label,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.outline.withValues(
+                                alpha: 0.6,
+                              ),
+                              fontFamily: 'monospace',
                             ),
                           ),
-                          const SizedBox(width: 12),
+                          const SizedBox(width: 14),
                           Container(
                             padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 4,
+                              horizontal: 8,
+                              vertical: 3,
                             ),
                             decoration: BoxDecoration(
-                              color: theme.colorScheme.primary.withValues(
-                                alpha: 0.2,
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: theme.colorScheme.primary.withValues(
+                                  alpha: 0.6,
+                                ),
                               ),
-                              borderRadius: BorderRadius.circular(999),
                             ),
                             child: Text(
                               session.useDemo
@@ -2828,27 +2843,27 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                   ? 'M3U'
                                   : session.mockCatalog
                                   ? 'MOCK'
-                                  : 'LIVE',
+                                  : 'XTREAM',
                               style: theme.textTheme.labelSmall?.copyWith(
                                 color: theme.colorScheme.primary,
-                                fontWeight: FontWeight.w700,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.8,
                               ),
                             ),
                           ),
-                          const SizedBox(width: 10),
-                          // Deploy fingerprint — must change after each package-deck.
-                          Text(
-                            SdtvBuildInfo.label,
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: theme.colorScheme.outline,
-                              fontFamily: 'monospace',
-                            ),
+                          const SizedBox(width: 14),
+                          Icon(
+                            Icons.account_circle_outlined,
+                            size: 20,
+                            color: theme.colorScheme.outline,
                           ),
-                          const Spacer(),
+                          const SizedBox(width: 6),
                           Text(
                             user,
-                            style: theme.textTheme.labelMedium?.copyWith(
-                              color: theme.colorScheme.outline,
+                            style: theme.textTheme.labelLarge?.copyWith(
+                              color: theme.colorScheme.onSurface.withValues(
+                                alpha: 0.75,
+                              ),
                             ),
                           ),
                         ],
@@ -2967,6 +2982,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                     now: DateTime.now(),
                                     epgFor: session.cachedFullEpg,
                                     isFavorite: session.isFavorite,
+                                    artwork: session.artwork,
+                                    artworkScope: session.prefsScope,
                                     scrollController: _epgScroll,
                                     gridFocused: !_sectionFocus && _column == 1,
                                     m3u:
@@ -3023,22 +3040,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                         ],
                       ),
                     ),
-                    Container(
-                      padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
-                      decoration: BoxDecoration(
-                        border: Border(
-                          top: BorderSide(
-                            color: theme.colorScheme.outline.withValues(
-                              alpha: 0.25,
-                            ),
-                          ),
-                        ),
-                      ),
-                      child: Text(
-                        _footerHint,
-                        style: theme.textTheme.bodySmall,
-                      ),
-                    ),
+                    _HintBar(hint: _footerHint),
                   ],
                 ),
               ),
@@ -3563,6 +3565,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 }
 
+/// Top-bar section tab: text with an underline when selected, a pill when
+/// the pad is on the tabs.
 class _SectionChip extends StatelessWidget {
   const _SectionChip({
     required this.label,
@@ -3577,33 +3581,109 @@ class _SectionChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final bg = focused
-        ? theme.colorScheme.primary
-        : selected
-        ? theme.colorScheme.primary.withValues(alpha: 0.35)
-        : theme.colorScheme.surfaceContainerHighest;
+    final scheme = theme.colorScheme;
     final fg = focused
-        ? theme.colorScheme.onPrimary
-        : theme.colorScheme.onSurface;
+        ? scheme.onPrimary
+        : selected
+        ? scheme.onSurface
+        : scheme.onSurface.withValues(alpha: 0.55);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
       decoration: BoxDecoration(
-        color: bg,
+        color: focused ? scheme.primary : Colors.transparent,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: focused || selected
-              ? theme.colorScheme.primary
-              : theme.colorScheme.outline.withValues(alpha: 0.4),
-        ),
       ),
-      child: Text(
-        label,
-        style: theme.textTheme.labelLarge?.copyWith(
-          color: fg,
-          fontWeight: FontWeight.w800,
-          letterSpacing: 0.8,
-        ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: theme.textTheme.labelLarge?.copyWith(
+              color: fg,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.8,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Container(
+            height: 3,
+            width: 24,
+            decoration: BoxDecoration(
+              color: selected && !focused ? scheme.primary : Colors.transparent,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ],
       ),
+    );
+  }
+}
+
+/// Footer controls as key caps (`A`) followed by what they do (`play`).
+///
+/// Reads the same `KEY action · KEY action` strings the page already builds,
+/// so the wording stays in one place.
+class _HintBar extends StatelessWidget {
+  const _HintBar({required this.hint});
+
+  final String hint;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final parts = [
+      for (final seg in hint.split('·'))
+        if (seg.trim().isNotEmpty) seg.trim(),
+    ];
+    return Container(
+      height: 40,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      color: scheme.surfaceContainerLow,
+      child: Row(
+        children: [
+          for (final part in parts) ...[
+            _hint(theme, part),
+            const SizedBox(width: 22),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _hint(ThemeData theme, String part) {
+    final space = part.indexOf(' ');
+    final key = space < 0 ? part : part.substring(0, space);
+    final action = space < 0 ? '' : part.substring(space + 1);
+    final scheme = theme.colorScheme;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+          decoration: BoxDecoration(
+            color: scheme.onSurface.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: scheme.onSurface.withValues(alpha: 0.2)),
+          ),
+          child: Text(
+            key,
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: scheme.onSurface,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+        if (action.isNotEmpty) ...[
+          const SizedBox(width: 6),
+          Text(
+            action,
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: scheme.onSurface.withValues(alpha: 0.6),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }

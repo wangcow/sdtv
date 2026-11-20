@@ -6,7 +6,7 @@ const kEpgRowExtent = 60.0;
 
 /// Shared channel-name column. Header ticks and program cells must both
 /// start exactly this many pixels from the pane left.
-const kEpgGutterWidth = 210.0;
+const kEpgGutterWidth = 240.0;
 const kEpgHeaderHeight = 40.0;
 const kEpgTimeHeaderHeight = 36.0;
 

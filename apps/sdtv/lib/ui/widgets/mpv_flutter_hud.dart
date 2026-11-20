@@ -4,8 +4,10 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:sdtv_core/sdtv_core.dart';
 import 'package:sdtv_player/sdtv_player.dart';
 
+import '../../services/artwork_cache.dart';
 import '../../state/session_controller.dart';
 import 'player_chrome.dart';
 import 'watch_menu_card.dart';
@@ -263,6 +265,7 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
 
   HudStreamInfo _info = const HudStreamInfo();
   ChromeProgramme? _programme;
+  ImageProvider? _logo;
 
   /// Channel the programme / info was fetched for (refetch after a zap).
   String? _infoKey;
@@ -301,12 +304,30 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
         );
       }
     }
+    final logo = ch == null ? null : await _loadLogo(ch);
     if (!mounted || gen != _infoGen) return;
     setState(() {
       _info = info;
       _programme = programme;
+      _logo = logo;
     });
     _scheduleCapture();
+  }
+
+  /// The channel logo from the artwork cache, decoded before it is shown.
+  Future<ImageProvider?> _loadLogo(LiveChannel ch) async {
+    if (ch.streamIcon.trim().isEmpty) return null;
+    final file = await widget.session.artwork.getFile(
+      scope: widget.session.prefsScope,
+      kind: ArtworkCache.kindChannel,
+      id: '${ch.streamId}',
+      url: ch.streamIcon,
+    );
+    if (file == null || !mounted) return null;
+    final provider = ResizeImage(FileImage(file), height: 128);
+    var ok = true;
+    await precacheImage(provider, context, onError: (_, _) => ok = false);
+    return ok ? provider : null;
   }
 
   /// One press of a chrome button (A on the focused one, or a tap).
@@ -857,6 +878,7 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
         showChrome: _showHud,
         buttons: _rowFocusOrder,
         favorite: ch != null && widget.session.isFavorite(ch),
+        logo: _vod ? null : _logo,
         programme: _programme,
         subtitleLabel: _info.subtitles,
         audioLabel: _info.audio,

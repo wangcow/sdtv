@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:sdtv_core/sdtv_core.dart';
 
+import '../../services/artwork_cache.dart';
 import '../epg_grid.dart';
+import 'cached_artwork.dart';
 
 /// Gap between grid cells (rows and programmes). The background shows
 /// through, which draws the grid lines.
@@ -28,6 +30,8 @@ class EpgGuidePane extends StatelessWidget {
     this.m3u = false,
     this.emptyMessage,
     this.isFavorite,
+    this.artwork,
+    this.artworkScope = '',
   });
 
   final List<LiveChannel> channels;
@@ -50,6 +54,10 @@ class EpgGuidePane extends StatelessWidget {
 
   /// ★ next to favourite channels.
   final bool Function(LiveChannel channel)? isFavorite;
+
+  /// Channel logos (provider `stream_icon`). Null hides the logo tile.
+  final ArtworkCache? artwork;
+  final String artworkScope;
 
   @override
   Widget build(BuildContext context) {
@@ -135,6 +143,8 @@ class EpgGuidePane extends StatelessWidget {
                                   focusTime: selected ? focusTime : null,
                                   m3u: m3u,
                                   favorite: isFavorite?.call(ch) ?? false,
+                                  artwork: artwork,
+                                  artworkScope: artworkScope,
                                   onTapChannel: () => onTapChannel(i),
                                   onLongPressChannel: onLongPressChannel == null
                                       ? null
@@ -236,6 +246,8 @@ class _EpgRow extends StatelessWidget {
     this.focusTime,
     this.m3u = false,
     this.favorite = false,
+    this.artwork,
+    this.artworkScope = '',
   });
 
   final LiveChannel channel;
@@ -247,6 +259,8 @@ class _EpgRow extends StatelessWidget {
   final DateTime? focusTime;
   final bool m3u;
   final bool favorite;
+  final ArtworkCache? artwork;
+  final String artworkScope;
   final VoidCallback onTapChannel;
   final VoidCallback? onLongPressChannel;
   final ValueChanged<EpgProgram> onTapProgram;
@@ -294,7 +308,7 @@ class _EpgRow extends StatelessWidget {
               children: [
                 if (channel.num > 0)
                   SizedBox(
-                    width: 40,
+                    width: 36,
                     child: Text(
                       '${channel.num}',
                       style: theme.textTheme.labelLarge?.copyWith(
@@ -303,6 +317,14 @@ class _EpgRow extends StatelessWidget {
                       ),
                     ),
                   ),
+                if (artwork != null) ...[
+                  ChannelLogo(
+                    channel: channel,
+                    cache: artwork!,
+                    scope: artworkScope,
+                  ),
+                  const SizedBox(width: 10),
+                ],
                 Expanded(
                   child: Text(
                     channel.name,
@@ -616,6 +638,59 @@ class _InfoPanel extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Provider channel logo in a fixed tile, so names line up with or without
+/// one. Shows a faint TV glyph until (or unless) the logo loads.
+class ChannelLogo extends StatelessWidget {
+  const ChannelLogo({
+    super.key,
+    required this.channel,
+    required this.cache,
+    required this.scope,
+    this.width = 48,
+    this.height = 34,
+  });
+
+  final LiveChannel channel;
+  final ArtworkCache cache;
+  final String scope;
+  final double width;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final placeholder = Center(
+      child: Icon(
+        Icons.tv_rounded,
+        size: height * 0.55,
+        color: Colors.white.withValues(alpha: 0.25),
+      ),
+    );
+    return Container(
+      width: width,
+      height: height,
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: channel.streamIcon.trim().isEmpty
+          ? placeholder
+          : CachedArtwork(
+              cache: cache,
+              scope: scope,
+              kind: ArtworkCache.kindChannel,
+              id: '${channel.streamId}',
+              url: channel.streamIcon,
+              fit: BoxFit.contain,
+              alignment: Alignment.center,
+              cacheHeight: (height * dpr * 1.5).round(),
+              placeholder: placeholder,
+            ),
     );
   }
 }

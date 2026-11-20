@@ -15,6 +15,8 @@ class CachedArtwork extends StatefulWidget {
     required this.url,
     required this.placeholder,
     this.fit = BoxFit.contain,
+    this.cacheHeight,
+    this.alignment = Alignment.topCenter,
   });
 
   final ArtworkCache cache;
@@ -24,6 +26,11 @@ class CachedArtwork extends StatefulWidget {
   final String url;
   final Widget placeholder;
   final BoxFit fit;
+
+  /// Decode height in physical pixels. Logos are often 512px PNGs; decoding
+  /// them at row size saves memory and upload time.
+  final int? cacheHeight;
+  final Alignment alignment;
 
   @override
   State<CachedArtwork> createState() => _CachedArtworkState();
@@ -63,9 +70,9 @@ class _CachedArtworkState extends State<CachedArtwork> {
           url: url,
         )
         .then((file) {
-      if (!mounted || !identical(_token, token)) return;
-      setState(() => _file = file);
-    });
+          if (!mounted || !identical(_token, token)) return;
+          setState(() => _file = file);
+        });
   }
 
   @override
@@ -75,7 +82,8 @@ class _CachedArtworkState extends State<CachedArtwork> {
     return Image.file(
       file,
       fit: widget.fit,
-      alignment: Alignment.topCenter,
+      alignment: widget.alignment,
+      cacheHeight: widget.cacheHeight,
       width: double.infinity,
       height: double.infinity,
       errorBuilder: (_, _, _) => widget.placeholder,

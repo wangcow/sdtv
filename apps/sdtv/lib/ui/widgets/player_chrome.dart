@@ -60,6 +60,7 @@ class PlayerChrome extends StatelessWidget {
     required this.showChrome,
     required this.buttons,
     this.favorite = false,
+    this.logo,
     this.programme,
     this.subtitleLabel,
     this.audioLabel,
@@ -86,6 +87,10 @@ class PlayerChrome extends StatelessWidget {
   final List<PlayerChromeFocus> buttons;
 
   final bool favorite;
+
+  /// Channel logo, already decoded (the mpv HUD captures one frame, so a
+  /// still-loading image would be caught blank).
+  final ImageProvider? logo;
   final ChromeProgramme? programme;
   final String? subtitleLabel;
   final String? audioLabel;
@@ -143,6 +148,23 @@ class PlayerChrome extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
+            if (logo != null) ...[
+              Container(
+                width: 76,
+                height: 48,
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Image(
+                  image: logo!,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                ),
+              ),
+              const SizedBox(width: 14),
+            ],
             if (favorite) ...[
               Icon(Icons.star_rounded, color: Colors.amber.shade400, size: 28),
               const SizedBox(width: 8),
