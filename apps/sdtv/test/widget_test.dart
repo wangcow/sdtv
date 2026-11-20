@@ -145,7 +145,7 @@ void main() {
     await _pumpFor(tester, const Duration(seconds: 6));
   });
 
-  testWidgets('keyboard ↓ in the search box moves into the results', (
+  testWidgets('search page: rows by kind, keyboard moves through them', (
     tester,
   ) async {
     await _useWideSurface(tester);
@@ -154,20 +154,80 @@ void main() {
 
     _invoke(tester, find.text('CATEGORIES'), const SdtvSearchIntent());
     await _pumpUntil(tester, find.byType(TextField));
-    await tester.enterText(find.byType(TextField), 'mock');
+    await tester.enterText(find.byType(TextField), 'o');
     await _pumpFor(tester, const Duration(milliseconds: 600));
-    const listHint = '↑ search box · A jump · B close';
-    expect(find.text(listHint), findsNothing);
+    expect(find.textContaining('LIVE TV  ·'), findsOneWidget);
+    expect(find.textContaining('MOVIES  ·'), findsOneWidget);
+    expect(find.textContaining('TV SHOWS  ·'), findsOneWidget);
 
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pump();
-    expect(find.text(listHint), findsOneWidget);
+    String selected() {
+      final cards = find.byWidgetPredicate((w) {
+        final t = w.runtimeType.toString();
+        return (t == '_ChannelCard' || t == '_PosterCard') &&
+            (w as dynamic).selected == true;
+      });
+      if (cards.evaluate().isEmpty) return 'box';
+      return ((cards.evaluate().first.widget as dynamic).hit as dynamic).title
+          as String;
+    }
 
-    // Further ↓ moves through the list instead of bouncing back.
+    Future<void> press(LogicalKeyboardKey key) async {
+      await _pastActivateCooldown(tester);
+      await tester.sendKeyEvent(key);
+      await tester.pump();
+      await tester.pump();
+    }
+
+    expect(selected(), 'box');
+    await press(LogicalKeyboardKey.arrowDown);
+    final firstLive = selected();
+    expect(firstLive, isNot('box'));
+    await press(LogicalKeyboardKey.arrowRight);
+    final secondLive = selected();
+    expect(secondLive, isNot(firstLive));
+    await press(LogicalKeyboardKey.arrowDown);
+    final movie = selected();
+    expect(movie, isNot(secondLive));
+    // ↑ returns to the same Live card (each row keeps its column).
+    await press(LogicalKeyboardKey.arrowUp);
+    expect(selected(), secondLive);
+    await press(LogicalKeyboardKey.arrowUp);
+    expect(selected(), 'box');
+  });
+
+  testWidgets('↑ on the first menu row wraps to Exit sdtv', (tester) async {
+    await _useWideSurface(tester);
+    await _pumpDemo(tester);
+    await _pumpUntil(tester, find.text('Entertainment'));
+
+    _invoke(tester, find.text('CATEGORIES'), const SdtvMenuIntent());
+    await _pumpUntil(tester, find.text('Exit sdtv'));
+    String selected() {
+      final rows = find.byWidgetPredicate(
+        (w) =>
+            w.runtimeType.toString() == '_BrowseTile' &&
+            (w as dynamic).selected == true,
+      );
+      return (rows.evaluate().first.widget as dynamic).label as String;
+    }
+
+    expect(selected(), 'Search');
     await _pastActivateCooldown(tester);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    _invoke(
+      tester,
+      find.text('Exit sdtv'),
+      const DirectionalFocusIntent(TraversalDirection.up),
+    );
     await tester.pump();
-    expect(find.text(listHint), findsOneWidget);
+    expect(selected(), 'Exit sdtv');
+    await _pastActivateCooldown(tester);
+    _invoke(
+      tester,
+      find.text('Exit sdtv'),
+      const DirectionalFocusIntent(TraversalDirection.down),
+    );
+    await tester.pump();
+    expect(selected(), 'Search');
   });
 
   testWidgets('menu has no Flutter chrome entry', (tester) async {

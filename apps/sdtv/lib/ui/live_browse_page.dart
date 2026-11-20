@@ -14,6 +14,7 @@ import 'epg_grid.dart';
 import 'vod_grid.dart';
 import 'widgets/epg_guide_pane.dart';
 import 'widgets/mpv_flutter_hud.dart';
+import 'widgets/search_page.dart';
 import 'widgets/vod_poster_tile.dart';
 import 'widgets/vod_title_pane.dart';
 
@@ -72,7 +73,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   int _episodeIndex = 0;
   int _menuIndex = 0;
   int _manageIndex = 0;
-  int _searchIndex = 0;
+  /// Search page cursor: row (Live / Movies / TV Shows / Categories) and
+  /// the column last used in each row.
+  int _searchRow = 0;
+  List<int> _searchCols = const [];
+  List<SearchRow> _searchRows = const [];
+  final _searchListFocus = FocusNode(debugLabel: 'search results');
   int _switchSourceIndex = 0;
   int _unfavIndex = 0;
   String _unfavName = '';
@@ -81,13 +87,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   final _catScroll = ScrollController();
   final _chanScroll = ScrollController();
   final _manageScroll = ScrollController();
-  final _searchScroll = ScrollController();
   final _switchScroll = ScrollController();
   final _episodeScroll = ScrollController();
   final _epgScroll = ScrollController();
   final _searchCtrl = TextEditingController();
   final _searchFocus = FocusNode();
-  List<GuideSearchHit> _searchHits = const [];
 
   DateTime? _lastNavAt;
   DateTime? _lastFavoriteAt;
@@ -190,20 +194,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
           k == LogicalKeyboardKey.gameButtonA ||
           k == LogicalKeyboardKey.select) {
         return KeyEventResult.handled;
-      }
-      // Physical keyboard ↓ leaves the query for the result list (↑ on the
-      // first hit comes back). The pad's D-pad never arrives here as a key,
-      // so on-screen-keyboard letter picking is unaffected; a key Steam
-      // injects right after pad input is ignored too.
-      if (k == LogicalKeyboardKey.arrowDown) {
-        final pad = SdtvJoystickHub.instance.lastEdgeAt;
-        final fromPad =
-            pad != null &&
-            DateTime.now().difference(pad) < const Duration(milliseconds: 300);
-        if (!fromPad && _searchCtrl.text.trim().isNotEmpty) {
-          _enterSearchResults();
-          return KeyEventResult.handled;
-        }
       }
       return KeyEventResult.ignored;
     };
@@ -311,7 +301,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     _catScroll.dispose();
     _chanScroll.dispose();
     _manageScroll.dispose();
-    _searchScroll.dispose();
+    _searchListFocus.dispose();
     _switchScroll.dispose();
     _episodeScroll.dispose();
     _epgScroll.dispose();
@@ -329,13 +319,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 120), () {
       if (!mounted || !_searchOpen) return;
-      final hits = session.searchGuide(_searchCtrl.text);
-      setState(() {
-        _searchHits = hits;
-        _searchIndex = hits.isEmpty
-            ? 0
-            : _searchIndex.clamp(0, hits.length - 1);
-      });
+      final hits = session.searchGuide(_searchCtrl.text, maxResults: 300);
+      setState(() => _setSearchHits(hits, reset: true));
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_searchOpen || _searchBrowseResults) return;
@@ -425,10 +410,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       }
     }
     if (_searchOpen) {
-      _searchHits = session.searchGuide(_searchCtrl.text);
-      _searchIndex = _searchHits.isEmpty
-          ? 0
-          : _searchIndex.clamp(0, _searchHits.length - 1);
+      _setSearchHits(session.searchGuide(_searchCtrl.text, maxResults: 300));
     }
     setState(() {});
   }
@@ -492,15 +474,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       index,
       itemExtent: _rowExtent,
       headerExtent: _listHeaderExtent,
-    );
-  }
-
-  void _scrollToSearchIndex(int index) {
-    _ensureIndexVisible(
-      _searchScroll,
-      index,
-      itemExtent: _rowExtent,
-      headerExtent: 0,
     );
   }
 
@@ -733,17 +706,19 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
     if (_searchOpen) {
-      // OSK uses D-pad to pick keys. Do not steal the field until B / RB.
-      if (!_searchBrowseResults) return;
+      if (!_searchBrowseResults) {
+        // ↓ from the query (keyboard or pad) goes to the results.
+        if (delta > 0) _enterSearchResults();
+        return;
+      }
       if (!_acceptNav()) return;
-      if (_searchHits.isEmpty || (delta < 0 && _searchIndex <= 0)) {
+      if (_searchRows.isEmpty || (delta < 0 && _searchRow <= 0)) {
         _returnToSearchField();
         return;
       }
       setState(() {
-        _searchIndex = (_searchIndex + delta).clamp(0, _searchHits.length - 1);
+        _searchRow = (_searchRow + delta).clamp(0, _searchRows.length - 1);
       });
-      _scrollToSearchIndex(_searchIndex);
       return;
     }
     if (_manageCatsOpen) {
@@ -763,7 +738,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (_menuOpen) {
       if (!_acceptNav()) return;
       setState(() {
-        _menuIndex = (_menuIndex + delta).clamp(0, _menuItems.length - 1);
+        // Wraps: ↑ on Search reaches Exit sdtv at the bottom, and back.
+        final n = _menuItems.length;
+        _menuIndex = ((_menuIndex + delta) % n + n) % n;
       });
       return;
     }
@@ -896,6 +873,20 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   void _moveHorizontal(int delta) {
+    // Search page: ←/→ along the focused row.
+    if (_searchOpen) {
+      if (!_searchBrowseResults || _searchRows.isEmpty) return;
+      if (!_acceptNav()) return;
+      final n = _searchRows[_searchRow].hits.length;
+      setState(() {
+        _searchCols = [..._searchCols];
+        _searchCols[_searchRow] = (_searchCols[_searchRow] + delta).clamp(
+          0,
+          n - 1,
+        );
+      });
+      return;
+    }
     // Watching + menu: ←/→ adjust current row (subs / audio / mute).
     if (session.isWatchMenuActive && !_overlayOpen) {
       unawaited(session.watchMenuAdjust(delta));
@@ -1414,8 +1405,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _unfavRemove = null;
       _searchOpen = true;
       _searchBrowseResults = false;
-      _searchIndex = 0;
-      _searchHits = session.searchGuide(_searchCtrl.text);
+      _searchRow = 0;
+      _searchCols = const [];
+      _setSearchHits(
+        session.searchGuide(_searchCtrl.text, maxResults: 300),
+        reset: true,
+      );
     });
     // Build the index after the search box paints, before the first glyph.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1447,10 +1442,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     // Movies / TV Shows just arrived: rebuild the index now, not on a key.
     session.warmSearchIndex();
     setState(() {
-      _searchHits = session.searchGuide(_searchCtrl.text);
-      _searchIndex = _searchHits.isEmpty
-          ? 0
-          : _searchIndex.clamp(0, _searchHits.length - 1);
+      _setSearchHits(session.searchGuide(_searchCtrl.text, maxResults: 300));
     });
   }
 
@@ -1459,7 +1451,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     setState(() {
       _searchOpen = false;
       _searchBrowseResults = false;
-      _searchIndex = 0;
+      _searchRow = 0;
     });
   }
 
@@ -1545,15 +1537,34 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     session.prefetchFullEpgAround(session.channelsInCategory, _chanIndex);
   }
 
+  /// New results: regroup into rows and keep the cursor in range. [reset]
+  /// (a new query) puts it back on the first card.
+  void _setSearchHits(List<GuideSearchHit> hits, {bool reset = false}) {
+    _searchRows = SearchRow.group(hits);
+    final old = reset ? const <int>[] : _searchCols;
+    _searchCols = [
+      for (var r = 0; r < _searchRows.length; r++)
+        r < old.length ? old[r].clamp(0, _searchRows[r].hits.length - 1) : 0,
+    ];
+    _searchRow = reset || _searchRows.isEmpty
+        ? 0
+        : _searchRow.clamp(0, _searchRows.length - 1);
+  }
+
   void _enterSearchResults() {
-    if (!_searchOpen) return;
+    if (!_searchOpen || _searchRows.isEmpty) return;
+    // Focus a node inside the page, or arrow keys fall through to Flutter's
+    // directional traversal, which moves focus back into the query field.
     _searchFocus.unfocus();
+    // The same key press can also arrive through Shortcuts: do not let it
+    // move a row as well.
+    _lastNavAt = DateTime.now();
     setState(() => _searchBrowseResults = true);
-    if (_searchHits.isNotEmpty) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _searchOpen) _scrollToSearchIndex(_searchIndex);
-      });
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _searchOpen && _searchBrowseResults) {
+        _searchListFocus.requestFocus();
+      }
+    });
   }
 
   void _returnToSearchField() {
@@ -1568,9 +1579,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   Future<void> _activateSearchHit() async {
-    if (_searchHits.isEmpty) return;
-    final hit = _searchHits[_searchIndex.clamp(0, _searchHits.length - 1)];
-    await _applySearchHit(hit);
+    if (_searchRows.isEmpty) return;
+    final row = _searchRows[_searchRow.clamp(0, _searchRows.length - 1)];
+    final col = _searchCols[_searchRow.clamp(0, _searchCols.length - 1)];
+    await _applySearchHit(row.hits[col.clamp(0, row.hits.length - 1)]);
   }
 
   Future<void> _applySearchHit(GuideSearchHit hit) async {
@@ -3273,132 +3285,38 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                 ),
               ],
 
-              // —— Guide search (live, movies, TV shows; EPG later) ——
-              if (_searchOpen) ...[
+              // —— Search page (Live TV / Movies / TV Shows rows) ——
+              if (_searchOpen)
                 Positioned.fill(
-                  child: GestureDetector(
-                    onTap: _closeSearch,
-                    child: ColoredBox(
-                      color: Colors.black.withValues(alpha: 0.55),
-                    ),
+                  child: SearchPage(
+                    controller: _searchCtrl,
+                    fieldFocus: _searchFocus,
+                    resultsFocus: _searchListFocus,
+                    rows: _searchRows,
+                    browsing: _searchBrowseResults,
+                    row: _searchRow,
+                    col: _searchCols.isEmpty
+                        ? 0
+                        : _searchCols[_searchRow.clamp(
+                            0,
+                            _searchCols.length - 1,
+                          )],
+                    loading:
+                        (session.moviesAvailable && !session.vodCatalogReady) ||
+                        (session.seriesAvailable &&
+                            !session.seriesCatalogReady),
+                    artwork: session.artwork,
+                    artworkScope: session.prefsScope,
+                    onTapHit: (r, c) async {
+                      setState(() {
+                        _searchRow = r;
+                        _searchCols = [..._searchCols];
+                        _searchCols[r] = c;
+                      });
+                      await _applySearchHit(_searchRows[r].hits[c]);
+                    },
                   ),
                 ),
-                Center(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(
-                      maxWidth: 560,
-                      maxHeight: 560,
-                    ),
-                    child: Material(
-                      color: theme.colorScheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(16),
-                      elevation: 12,
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Text(
-                              'Search',
-                              style: theme.textTheme.headlineSmall?.copyWith(
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Live, movies & TV shows'
-                              '${session.hiddenCategoryCount > 0 ? ' · hidden cats marked' : ''}'
-                              ' · EPG later',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.outline,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            TextField(
-                              controller: _searchCtrl,
-                              focusNode: _searchFocus,
-                              autofocus: true,
-                              style: theme.textTheme.titleMedium,
-                              decoration: InputDecoration(
-                                hintText: 'e.g. bloomberg, batman, friends…',
-                                prefixIcon: const Icon(Icons.search),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                filled: true,
-                              ),
-                              // Done/Search on the OSK used to submit and play
-                              // the first hit. Play only after ↓ to a result.
-                              textInputAction: TextInputAction.none,
-                              onEditingComplete: () {},
-                              onSubmitted: (_) {},
-                            ),
-                            const SizedBox(height: 12),
-                            Expanded(
-                              child: _searchCtrl.text.trim().isEmpty
-                                  ? Text(
-                                      'Type · ↓ or B to the list · A jumps there · B close',
-                                      style: theme.textTheme.bodyLarge,
-                                    )
-                                  : _searchHits.isEmpty
-                                  ? Text(
-                                      'No matches for “${_searchCtrl.text.trim()}”',
-                                      style: theme.textTheme.bodyLarge,
-                                    )
-                                  : ListView.builder(
-                                      controller: _searchScroll,
-                                      itemExtent: _rowExtent,
-                                      itemCount: _searchHits.length,
-                                      itemBuilder: (context, i) {
-                                        final hit = _searchHits[i];
-                                        final selected =
-                                            _searchBrowseResults &&
-                                            _searchIndex == i;
-                                        final icon = hit.isVod
-                                            ? Icons.movie_outlined
-                                            : hit.isSeries
-                                            ? Icons.tv_outlined
-                                            : hit.isCategory
-                                            ? Icons.folder_outlined
-                                            : hit.isEpg
-                                            ? Icons.event_outlined
-                                            : Icons.live_tv_outlined;
-                                        final label = hit.subtitle.isEmpty
-                                            ? hit.title
-                                            : '${hit.title}  ·  ${hit.subtitle}';
-                                        return Padding(
-                                          padding: const EdgeInsets.only(
-                                            bottom: 6,
-                                          ),
-                                          child: _BrowseTile(
-                                            label: label,
-                                            icon: icon,
-                                            selected: selected,
-                                            onTap: () async {
-                                              setState(() => _searchIndex = i);
-                                              await _applySearchHit(hit);
-                                            },
-                                          ),
-                                        );
-                                      },
-                                    ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              _searchBrowseResults
-                                  ? '↑ search box · A jump · B close'
-                                  : 'Steam+X OSK · ↓ or B to the list · A jump · B close',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.outline,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
 
               // —— Manage categories (show / hide) ——
               if (_manageCatsOpen) ...[

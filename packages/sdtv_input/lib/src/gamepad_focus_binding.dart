@@ -198,10 +198,11 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
         case GamepadEdge.pageDown:
         case GamepadEdge.menu:
         case GamepadEdge.up:
-        case GamepadEdge.down:
         case GamepadEdge.left:
         case GamepadEdge.right:
           return;
+        // ↓ leaves a text field (search query → results; login → next).
+        case GamepadEdge.down:
         case GamepadEdge.back:
           break;
       }
