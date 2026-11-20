@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Build a Deck-friendly Linux release: brew libmpv + media codecs only.
+# Build a Deck-friendly Linux release of the Flutter guide.
+#
+# Video plays in the Deck's own external mpv (system or Flatpak), launched with
+# a system-only LD_LIBRARY_PATH, so no mpv / codec libraries are bundled.
 #
 # Do NOT ship brew GTK / X11 / xkbcommon / mesa / fontconfig — those pull
 # Homebrew *data* paths (/home/linuxbrew/.../share/X11/xkb) and crash on Deck
@@ -10,19 +13,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# Link this release against Homebrew mpv. ./tool/run.sh must not set this.
+# Same Homebrew build env the Deck package has always used.
+# ./tool/run.sh must not set this.
 export SDTV_BREW_DEPS=1
 # shellcheck disable=SC1091
 source "${ROOT}/tool/bazzite-flutter-env.sh"
 
 if ! command -v brew >/dev/null 2>&1; then
-  echo "error: Homebrew not found (need: brew install mpv)" >&2
-  exit 1
-fi
-
-MPV_PREFIX="$(brew --prefix mpv 2>/dev/null || true)"
-if [[ -z "${MPV_PREFIX}" || ! -f "${MPV_PREFIX}/lib/libmpv.so.2" ]]; then
-  echo "error: mpv not installed. Run: brew install mpv" >&2
+  echo "error: Homebrew not found" >&2
   exit 1
 fi
 
@@ -47,7 +45,7 @@ if [[ ! -d "${LIBDIR}" ]]; then
 fi
 
 # Remove previously staged brew UI/graphics libs so a re-package is clean.
-# Keep Flutter/media_kit plugin .so and libapp.so.
+# Keep the Flutter engine .so and libapp.so.
 echo "Pruning stale brew UI/graphics libs from bundle/lib (if any)…"
 (
   cd "${LIBDIR}"
@@ -201,77 +199,8 @@ rewrite_absolute_needed() {
   done < <(patchelf --print-needed "${elf}" 2>/dev/null || true)
 }
 
-echo "Staging Homebrew *media* libraries into bundle/lib (not GTK/X11/mesa)…"
-
+# Tracks libraries already copied by the dependency pass below.
 declare -A SEEN=()
-QUEUE=()
-
-enqueue() {
-  local p="$1"
-  [[ -z "${p}" || ! -e "${p}" ]] && return
-  local real base
-  real="$(readlink -f "${p}")"
-  [[ -f "${real}" ]] || return
-  base="$(basename "${real}")"
-  if is_host_only_lib "${base}" || is_host_only_lib "$(basename "${p}")"; then
-    return
-  fi
-  [[ -n "${SEEN[$real]:-}" ]] && return
-  SEEN[$real]=1
-  QUEUE+=("${real}")
-}
-
-# Seed ONLY libmpv + known media deps. Do not walk sdtv's GTK deps.
-enqueue "${MPV_PREFIX}/lib/libmpv.so.2"
-for extra in \
-  "$(brew --prefix mujs 2>/dev/null)/lib/libmujs.so" \
-  "$(brew --prefix libbluray 2>/dev/null)/lib/libbluray.so" \
-  "$(brew --prefix uchardet 2>/dev/null)/lib/libuchardet.so" \
-  "$(brew --prefix jpeg-turbo 2>/dev/null)/lib/libjpeg.so" \
-  "$(brew --prefix libass 2>/dev/null)/lib/libass.so" \
-  "$(brew --prefix ffmpeg 2>/dev/null)/lib/libavcodec.so" \
-  "$(brew --prefix libplacebo 2>/dev/null)/lib/libplacebo.so" \
-  "$(brew --prefix libxpresent 2>/dev/null)/lib/libXpresent.so" \
-  "$(brew --prefix bzip2 2>/dev/null)/lib/libbz2.so"
-do
-  [[ -n "${extra}" && -e "${extra}" ]] && enqueue "${extra}"
-done
-
-# media_kit plugins may need libmpv only; still walk their brew deps if any
-for f in "${LIBDIR}"/libmedia_kit*.so; do
-  [[ -f "${f}" ]] || continue
-  while read -r dep; do
-    enqueue "${dep}"
-  done < <(collect_brew_deps "${f}")
-done
-
-i=0
-while [[ ${i} -lt ${#QUEUE[@]} ]]; do
-  lib="${QUEUE[$i]}"
-  i=$((i + 1))
-  copy_one "${lib}"
-  while read -r dep; do
-    enqueue "${dep}"
-  done < <(collect_brew_deps "${lib}")
-done
-
-(
-  cd "${LIBDIR}"
-  REAL="$(ls libmpv.so.*.* 2>/dev/null | head -1 || true)"
-  if [[ -z "${REAL}" ]]; then
-    REAL="$(ls libmpv.so.* 2>/dev/null | grep -v '\.2$' | head -1 || true)"
-  fi
-  if [[ -n "${REAL}" ]]; then
-    ln -sfn "${REAL}" libmpv.so.2
-    ln -sfn libmpv.so.2 libmpv.so
-  fi
-  if [[ -f libmujs.so ]] || ls libmujs.so* >/dev/null 2>&1; then
-    MUJS_REAL="$(ls -1 libmujs.so* 2>/dev/null | grep -v '^libmujs\.so$' | head -1 || true)"
-    if [[ -n "${MUJS_REAL}" ]]; then
-      ln -sfn "${MUJS_REAL}" libmujs.so
-    fi
-  fi
-)
 
 echo "Rewriting absolute DT_NEEDED paths → basenames…"
 for so in "${LIBDIR}"/*.so "${LIBDIR}"/*.so.*; do
@@ -300,18 +229,16 @@ for so in "${LIBDIR}"/*.so "${LIBDIR}"/*.so.*; do
   ensure_soname_links "${so}"
 done
 
-# Drop brew libva* so libmpv cannot resolve VA-API to a driver-less Cellar copy.
-# System libva + /usr/lib64/dri/radeonsi is what actually enables hw decode on Deck.
+# Never ship brew libva*. The Deck's system libva + radeonsi does hw decode.
 echo "Removing bundled libva (force system VA-API stack)…"
 (
   cd "${LIBDIR}"
   rm -f libva.so libva.so.* libva-*.so libva-*.so.* 2>/dev/null || true
 )
 
-# RUNPATH: system first (libva/drm/mesa), then $ORIGIN for bundled codecs/mpv.
-# Critical: libmpv's own RUNPATH decides where *its* libva comes from.
+# RUNPATH: system first (GTK/drm/mesa), then $ORIGIN for anything bundled.
 SYS_RPATH='/usr/lib64:/usr/lib'
-echo "Setting RUNPATH=${SYS_RPATH}:\$ORIGIN on media libs / binary…"
+echo "Setting RUNPATH=${SYS_RPATH}:\$ORIGIN on bundled libs / binary…"
 for so in "${LIBDIR}"/*.so "${LIBDIR}"/*.so.*; do
   [[ -f "${so}" && ! -L "${so}" ]] || continue
   patchelf --set-rpath "${SYS_RPATH}:\$ORIGIN" "${so}" 2>/dev/null || true
@@ -320,35 +247,18 @@ if [[ -f "${BUNDLE}/sdtv" ]]; then
   patchelf --set-rpath "${SYS_RPATH}:\$ORIGIN/lib" "${BUNDLE}/sdtv" 2>/dev/null || true
 fi
 
-# Wrapper: media libs first, but force *system* XKB/fontconfig data paths.
+# Wrapper: system libs first, *system* XKB/fontconfig data paths.
 # Never leave LD_LIBRARY_PATH empty of system fallbacks for dlopen of GPU drivers.
 cat > "${BUNDLE}/run-sdtv.sh" <<'EOF'
 #!/bin/sh
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # --- Library search ---
-# Bundled brew libmpv *does* link libva, but we intentionally do NOT ship brew
-# Mesa. Without LIBVA_DRIVERS_PATH, VAAPI has no radeonsi driver → cpu/software.
-# Prefer system libmpv when present; always point VAAPI at system DRI drivers.
+# System first (GTK/drm/mesa), then the bundle.
+export LD_LIBRARY_PATH="/usr/lib64:/usr/lib:${DIR}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-SYS_LIB=""
-for c in /usr/lib64/libmpv.so.2 /usr/lib64/libmpv.so /usr/lib/libmpv.so.2 /usr/lib/libmpv.so; do
-  if [ -e "$c" ]; then
-    SYS_LIB=$(dirname "$c")
-    break
-  fi
-done
-
-if [ -n "$SYS_LIB" ] && [ "${SDTV_FORCE_BUNDLED_MPV:-0}" != "1" ]; then
-  export LD_LIBRARY_PATH="${SYS_LIB}:/usr/lib64:/usr/lib:${DIR}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-  export SDTV_MPV_SOURCE=system
-else
-  # Still put system lib dirs first for libva/drm/mesa interop.
-  export LD_LIBRARY_PATH="/usr/lib64:/usr/lib:${DIR}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-  export SDTV_MPV_SOURCE=bundled
-fi
-
-# Critical: system VAAPI drivers (Steam Deck AMD = radeonsi).
+# Critical: system VAAPI drivers (Steam Deck AMD = radeonsi). sdtv passes these
+# to the external mpv it launches; without them mpv falls back to cpu decode.
 if [ -d /usr/lib64/dri ]; then
   export LIBVA_DRIVERS_PATH="/usr/lib64/dri${LIBVA_DRIVERS_PATH:+:$LIBVA_DRIVERS_PATH}"
 elif [ -d /usr/lib/dri ]; then
@@ -373,7 +283,6 @@ fi
 
 # Optional overrides (you create this file):
 #   SDTV_FORCE_MOCK=1
-#   SDTV_FORCE_BUNDLED_MPV=1
 #   SDTV_MPV_PATH=/usr/bin/mpv
 #   SDTV_MPV_PATH=flatpak:io.mpv.Mpv
 if [ -f "${DIR}/sdtv.env" ]; then
@@ -419,7 +328,6 @@ fi
 
 # Tiny debug breadcrumb (safe to ignore / share when debugging decode)
 {
-  echo "SDTV_MPV_SOURCE=${SDTV_MPV_SOURCE:-}"
   echo "SDTV_MPV_PATH=${SDTV_MPV_PATH:-not found}"
   echo "LIBVA_DRIVER_NAME=${LIBVA_DRIVER_NAME:-}"
   echo "LIBVA_DRIVERS_PATH=${LIBVA_DRIVERS_PATH:-}"
@@ -430,8 +338,6 @@ fi
     "${HOME}/.local/share/flatpak/exports/bin/io.mpv.Mpv" 2>/dev/null || true
   command -v mpv 2>/dev/null || echo "command -v mpv: none"
   command -v flatpak >/dev/null 2>&1 && flatpak info io.mpv.Mpv 2>&1 | head -5 || true
-  echo "--- libmpv ---"
-  ls -la /usr/lib64/libmpv.so* /usr/lib/libmpv.so* "${DIR}/lib"/libmpv.so* 2>/dev/null || true
   echo "--- libva (should prefer system) ---"
   ls -la /usr/lib64/libva.so* /usr/lib/libva.so* 2>/dev/null || true
   ls -la "${DIR}/lib"/libva.so* 2>/dev/null || echo "bundled libva removed (good)"
@@ -453,8 +359,8 @@ find "${BUNDLE}" -type f \( -name '*.so' -o -name '*.so.*' -o -name 'sdtv' -o -n
   -exec chmod u+rwx {} +
 
 echo ""
-echo "=== libmpv / mujs in bundle ==="
-ls -la "${LIBDIR}"/libmpv* "${LIBDIR}"/libmujs* 2>/dev/null || true
+echo "=== bundle/lib ==="
+ls -1 "${LIBDIR}"
 
 echo ""
 echo "=== must NOT be bundled (host UI/GPU) ==="
@@ -485,17 +391,6 @@ done
 if [[ "${abs_left}" -eq 0 ]]; then
   echo "OK: no absolute DT_NEEDED paths"
 fi
-
-echo ""
-echo "=== smoke: ldd libmpv with bundle lib first ==="
-smoke_out="$(LD_LIBRARY_PATH="${LIBDIR}" ldd "${LIBDIR}/libmpv.so.2" 2>&1 || true)"
-if echo "${smoke_out}" | grep -E 'not found|linuxbrew'; then
-  echo "NOTE: unresolved under bundle-only (host libs OK on Deck):" >&2
-  echo "${smoke_out}" | grep -E 'not found|linuxbrew' || true
-else
-  echo "OK: no 'not found' / brew paths for libmpv under LD_LIBRARY_PATH=bundle/lib"
-fi
-echo "${smoke_out}" | grep -i mujs || true
 
 DIST="${ROOT}/dist"
 mkdir -p "${DIST}"

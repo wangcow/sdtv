@@ -40,12 +40,11 @@ if ! _sdtv_prepend_flutter "${FLUTTER_ROOT:-}"; then
 fi
 unset -f _sdtv_prepend_flutter
 
-# Deck packaging sets SDTV_BREW_DEPS=1 so the release links Homebrew mpv,
-# then package-deck.sh copies those media libs into the bundle.
+# Deck packaging sets SDTV_BREW_DEPS=1 to build against the Homebrew prefix
+# (the env the Deck package has always shipped from).
 # A normal ./tool/run.sh must NOT do that. Homebrew's prefix also contains
-# Mesa and glib. CMake then links the media_kit plugins to that EGL, Fedora's
-# Iris/NVIDIA driver is hidden, and Flutter aborts with
-# "No provider of glGetShaderiv found".
+# Mesa and glib. Linking to that EGL hides Fedora's Iris/NVIDIA driver, and
+# Flutter aborts with "No provider of glGetShaderiv found".
 if [[ "${SDTV_BREW_DEPS:-}" == "1" ]] && command -v brew >/dev/null 2>&1; then
   BREW="$(brew --prefix)"
   XORGPROTO="$(brew --prefix xorgproto 2>/dev/null || true)"

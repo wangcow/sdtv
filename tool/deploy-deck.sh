@@ -93,9 +93,10 @@ ssh "${HOST}" "set -e
   tar -xzf ${REMOTE_TAR} -C ${REMOTE_DIR}
   chmod +x ${REMOTE_DIR}/run-sdtv.sh ${REMOTE_DIR}/sdtv
   # Smoke: critical libs present
-  test -f ${REMOTE_DIR}/lib/libmpv.so.2 -o -L ${REMOTE_DIR}/lib/libmpv.so.2
-  test -f ${REMOTE_DIR}/lib/libmujs.so -o -L ${REMOTE_DIR}/lib/libmujs.so
-  ls -la ${REMOTE_DIR}/run-sdtv.sh ${REMOTE_DIR}/lib/libmpv* ${REMOTE_DIR}/lib/libmujs* 2>/dev/null | head -20
+  test -x ${REMOTE_DIR}/sdtv
+  test -f ${REMOTE_DIR}/lib/libapp.so
+  test -f ${REMOTE_DIR}/lib/libflutter_linux_gtk.so
+  ls -la ${REMOTE_DIR}/run-sdtv.sh ${REMOTE_DIR}/sdtv ${REMOTE_DIR}/lib/libapp.so ${REMOTE_DIR}/lib/libflutter_linux_gtk.so 2>/dev/null
   echo OK: ${REMOTE_DIR} updated
 "
 

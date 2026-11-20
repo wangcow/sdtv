@@ -101,7 +101,7 @@ A later use of the same bitmap is a clear corner so the guide can scroll over a 
 
 Stutter + `decode: cpu/software` means **software decode**.
 
-We ship brew `libmpv` + `libva`, but **not** brew Mesa. VAAPI needs the Deck’s driver:
+Video decodes in the Deck’s own mpv (system or Flatpak). sdtv bundles no mpv, codecs, `libva`, or Mesa. VAAPI needs the Deck’s driver:
 
 `/usr/lib64/dri/radeonsi_drv_video.so`
 
@@ -109,7 +109,8 @@ We ship brew `libmpv` + `libva`, but **not** brew Mesa. VAAPI needs the Deck’s
 
 - `LIBVA_DRIVERS_PATH=/usr/lib64/dri`
 - `LIBVA_DRIVER_NAME=radeonsi` (Steam Deck APU)
-- prefers system `libmpv` when present
+
+sdtv passes both to the mpv it launches.
 
 | HUD | Meaning |
 |-----|---------|
@@ -191,7 +192,7 @@ On the Deck: **Exit game** if sdtv is open → launch **sdtv** from the library 
 bash tool/package-deck.sh   # or just ./tool/deploy-deck.sh
 ```
 
-Produces brew **libmpv + codecs** (not brew GTK/X11/mesa), rewritten `DT_NEEDED`, and `run-sdtv.sh` (sets media `LD_LIBRARY_PATH` + system XKB/fontconfig paths).
+Produces the Flutter release bundle (no mpv or codec libraries, no brew GTK/X11/mesa), rewritten `DT_NEEDED`, and `run-sdtv.sh` (system-first `LD_LIBRARY_PATH`, VAAPI driver paths, system XKB/fontconfig paths, and mpv discovery).
 
 Always launch **`run-sdtv.sh`**, not `./sdtv`. Prefer `./tool/deploy-deck.sh` over raw `scp -r` (avoids read-only lib Permission denied).
 
@@ -224,7 +225,7 @@ source tool/bazzite-flutter-env.sh
 
 If still invisible, try `export GDK_BACKEND=x11` before run.
 
-Linux build needs `clang`, `cmake`, `ninja`, GTK 3 development libraries, and (for playback later) `libmpv`.
+Linux build needs `clang`, `cmake`, `ninja`, GTK 3 development libraries. Playback needs an `mpv` binary (system, Flatpak, or `brew install mpv` on the dev machine).
 
 ## Network tips
 

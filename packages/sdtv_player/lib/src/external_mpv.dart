@@ -1583,7 +1583,9 @@ GAMEPAD_GUIDE ignore
         unawaited(() async {
           await Future<void>.delayed(const Duration(milliseconds: 600));
           if (_process != proc || _userQuit) return;
-          await sendCommand(['show-text', hint, 2800]);
+          // The Flutter HUD already shows its own hint line. Plain mpv text
+          // is only the fallback when that bitmap HUD is not running.
+          if (!playbackBitmapHud) await sendCommand(['show-text', hint, 2800]);
           final ok = await waitUntilHealthyOrFallback(
             fb,
             title: fbTitle,

@@ -70,7 +70,7 @@ sdtv/
 
 - [Flutter](https://docs.flutter.dev/get-started/install/linux) stable (Linux desktop)
 - Linux toolchain: `clang`, `cmake`, `ninja`, `pkg-config`, GTK 3 dev libs
-- For playback later: `libmpv` / VAAPI stack
+- For playback: an `mpv` binary + VAAPI stack
 
 ### Bazzite / immutable Fedora (this machine)
 
