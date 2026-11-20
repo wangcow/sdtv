@@ -11,7 +11,6 @@ import '../build_info.dart';
 import '../services/saved_source.dart';
 import '../state/session_controller.dart';
 import 'epg_grid.dart';
-import 'player_page.dart';
 import 'vod_grid.dart';
 import 'widgets/epg_guide_pane.dart';
 import 'widgets/mpv_flutter_hud.dart';
@@ -53,12 +52,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   /// In-page menu (no showDialog — avoids stuck modal barriers on Deck).
   bool _menuOpen = false;
 
-  /// Debug chooser: Flutter chrome vs mpv overlay. Asked on every play.
-  bool _surfaceOpen = false;
-  int _surfaceIndex = 0;
-  String _surfaceTitle = '';
-  Future<String?> Function()? _pendingMpv;
-  Future<String?> Function()? _pendingFlutter;
   bool _aboutOpen = false;
   bool _manageCatsOpen = false;
   bool _searchOpen = false;
@@ -128,12 +121,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
           danger: false,
         ),
         (
-          id: 'chrome_spike',
-          label: 'Flutter chrome (slow)',
-          icon: Icons.smart_display_outlined,
-          danger: false,
-        ),
-        (
           id: 'hide_cat',
           label: 'Hide category',
           icon: Icons.visibility_off_outlined,
@@ -169,8 +156,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _manageCatsOpen ||
       _searchOpen ||
       _switchSourceOpen ||
-      _unfavOpen ||
-      _surfaceOpen;
+      _unfavOpen;
 
   bool _acceptNav() {
     final now = DateTime.now();
@@ -752,11 +738,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       });
       return;
     }
-    if (_surfaceOpen) {
-      if (!_acceptNav()) return;
-      setState(() => _surfaceIndex = (_surfaceIndex + delta).clamp(0, 1));
-      return;
-    }
     if (_seriesEpisodesOpen) {
       if (!_acceptNav()) return;
       _moveSeriesEpisode(delta);
@@ -1061,11 +1042,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
 
-    if (_surfaceOpen) {
-      await _confirmSurface();
-      return;
-    }
-
     if (_seriesEpisodesOpen) {
       await _playSelectedEpisode();
       return;
@@ -1121,43 +1097,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     ).showSnackBar(SnackBar(content: Text(text), duration: duration));
   }
 
-  /// Ask every time. Index 0 is Flutter chrome; 1 is the mpv overlay.
-  /// The highlight starts on mpv so a second A keeps the daily player.
-  void _offerPlay({
-    required String title,
-    required Future<String?> Function() mpv,
-    required Future<String?> Function() flutter,
-  }) {
-    setState(() {
-      _surfaceOpen = true;
-      _surfaceIndex = 1;
-      _surfaceTitle = title;
-      _pendingMpv = mpv;
-      _pendingFlutter = flutter;
-    });
-  }
-
-  void _closeSurface() {
-    setState(() {
-      _surfaceOpen = false;
-      _surfaceIndex = 0;
-      _surfaceTitle = '';
-      _pendingMpv = null;
-      _pendingFlutter = null;
-    });
-  }
-
-  Future<void> _confirmSurface({int? index}) async {
-    final useFlutter = (index ?? _surfaceIndex) == 0;
-    final flutterPlay = _pendingFlutter;
-    final mpvPlay = _pendingMpv;
-    _closeSurface();
-    if (flutterPlay == null || mpvPlay == null) return;
-    if (useFlutter) {
-      await flutterPlay();
-      return;
-    }
-    final err = await mpvPlay();
+  /// Plays on external mpv. Shows the error, or the dock-resolution hint.
+  Future<void> _playMpv(Future<String?> Function() play) async {
+    final err = await play();
     if (!mounted) return;
     if (err != null) {
       _snack(err);
@@ -1178,106 +1120,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (chans.isEmpty) return;
     final ch = chans[_chanIndex.clamp(0, chans.length - 1)];
     _rememberChanIndex();
-    _offerPlay(
-      title: ch.name,
-      mpv: () => session.watchChannel(ch),
-      flutter: () => _playEmbedded(ch),
-    );
-  }
-
-  Future<String?> _playEmbedded(LiveChannel ch) async {
-    if (session.isWatchingExternal) {
-      _snack('Quit playback first, then open Flutter chrome.');
-      return null;
-    }
-    final err = await session.playChannel(ch);
-    if (!mounted) {
-      await session.finishEmbeddedWatch();
-      return null;
-    }
-    await _pushPlayerPage(err);
-    if (mounted) setState(() => _column = 1);
-    return null;
-  }
-
-  Future<String?> _playEmbeddedVod(
-    VodItem item, {
-    bool fromBeginning = false,
-  }) async {
-    if (session.isWatchingExternal) {
-      _snack('Quit playback first, then open Flutter chrome.');
-      return null;
-    }
-    final err = await session.openEmbeddedVod(
-      item,
-      fromBeginning: fromBeginning,
-    );
-    if (!mounted) {
-      await session.finishEmbeddedWatch();
-      return null;
-    }
-    await _pushPlayerPage(err);
-    return null;
-  }
-
-  Future<String?> _playEmbeddedEpisode(
-    SeriesItem show,
-    SeriesEpisode episode, {
-    bool fromBeginning = false,
-  }) async {
-    if (session.isWatchingExternal) {
-      _snack('Quit playback first, then open Flutter chrome.');
-      return null;
-    }
-    final err = await session.openEmbeddedEpisode(
-      show,
-      episode,
-      fromBeginning: fromBeginning,
-    );
-    if (!mounted) {
-      await session.finishEmbeddedWatch();
-      return null;
-    }
-    await _pushPlayerPage(err);
-    return null;
-  }
-
-  Future<String?> _playEmbeddedTrailer(Uri uri, {required String title}) async {
-    if (session.isWatchingExternal) {
-      _snack('Quit playback first, then open Flutter chrome.');
-      return null;
-    }
-    final err = await session.openEmbeddedTrailer(uri, title: title);
-    if (!mounted) {
-      await session.finishEmbeddedWatch();
-      return null;
-    }
-    await _pushPlayerPage(err);
-    return null;
-  }
-
-  /// Opens the Flutter HUD. A playback error still opens the page so A can
-  /// retry. A missing URL does not. Progress is saved when the page pops.
-  Future<void> _pushPlayerPage(String? err) async {
-    if (!mounted) return;
-    if (err != null && session.embeddedUri == null) {
-      _snack(err);
-      await session.finishEmbeddedWatch();
-      return;
-    }
-    if (err != null) _snack(err);
-    if (!mounted) {
-      await session.finishEmbeddedWatch();
-      return;
-    }
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => PlayerPage(session: session)),
-    );
-    try {
-      await session.finishEmbeddedWatch().timeout(const Duration(seconds: 4));
-    } catch (e) {
-      debugPrint('sdtv: stop after embedded player: $e');
-    }
+    await _playMpv(() => session.watchChannel(ch));
   }
 
   Future<void> _offerTrailer(VodInfo info) async {
@@ -1287,130 +1130,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       if (err != null) _snack(err);
       return;
     }
-    final uri = info.trailerUri;
-    if (uri == null) {
+    if (info.trailerUri == null) {
       _snack('No trailer for this title.');
       return;
     }
-    final title = info.title.trim().isEmpty
-        ? 'Trailer'
-        : '${info.title} trailer';
-    _offerPlay(
-      title: title,
-      mpv: () => session.watchTrailer(info),
-      flutter: () => _playEmbeddedTrailer(uri, title: title),
-    );
-  }
-
-  /// ☰ → Flutter chrome (slow). No second ask. Uses the current selection:
-  /// open episode, title landing, highlighted poster, or live channel.
-  Future<void> _playSelectionWithFlutter() async {
-    if (!mounted) return;
-    if (session.isWatchingExternal) {
-      _snack('Quit playback first, then open Flutter chrome.');
-      return;
-    }
-    if (_seriesEpisodesOpen) {
-      final show = session.seriesDetailItem;
-      final eps = _currentEpisodes;
-      if (show == null || eps.isEmpty) {
-        _snack('Highlight a title or channel first.');
-        return;
-      }
-      final ep = eps[_episodeIndex.clamp(0, eps.length - 1)];
-      await _playEmbeddedEpisode(show, ep);
-      return;
-    }
-    if (_vodDetailOpen) {
-      final show = session.seriesDetailItem;
-      if (show != null) {
-        await _playSeriesFlutter(show);
-        return;
-      }
-      final item = session.vodDetailItem;
-      if (item == null) {
-        _snack('Highlight a title or channel first.');
-        return;
-      }
-      await _playEmbeddedVod(
-        item,
-        fromBeginning: session.vodResumeSeconds(item) <= 15,
-      );
-      return;
-    }
-    if (_isMovies) {
-      final list = session.vodInCategory;
-      if (list.isEmpty) {
-        _snack('Highlight a title or channel first.');
-        return;
-      }
-      final item = list[_chanIndex.clamp(0, list.length - 1)];
-      await _playEmbeddedVod(
-        item,
-        fromBeginning: session.vodResumeSeconds(item) <= 15,
-      );
-      return;
-    }
-    if (_isSeries) {
-      final list = session.seriesInCategory;
-      if (list.isEmpty) {
-        _snack('Highlight a title or channel first.');
-        return;
-      }
-      final show = list[_chanIndex.clamp(0, list.length - 1)];
-      await _playSeriesFlutter(show);
-      return;
-    }
-    final chans = session.channelsInCategory;
-    if (chans.isEmpty) {
-      _snack('Highlight a title or channel first.');
-      return;
-    }
-    final ch = chans[_chanIndex.clamp(0, chans.length - 1)];
-    setState(() => _column = 1);
-    _rememberChanIndex();
-    await _playEmbedded(ch);
-  }
-
-  /// Resume when progress is past 15s. Otherwise the first episode.
-  Future<void> _playSeriesFlutter(SeriesItem show) async {
-    final cat = await _seriesCatalogFor(show);
-    if (!mounted) return;
-    if (cat == null) {
-      _snack(
-        session.vodDetailLoading
-            ? 'Loading episodes…'
-            : 'No episodes for this show.',
-      );
-      return;
-    }
-    final epId = session.seriesResume(show)['episodeId'] ?? '';
-    final resumeEp = epId.isEmpty ? null : cat.episodeById(epId);
-    final saved = resumeEp == null
-        ? 0
-        : session.episodeProgressSeconds(resumeEp);
-    final SeriesEpisode? picked;
-    final bool fromBeginning;
-    if (resumeEp != null && saved > 15) {
-      picked = resumeEp;
-      fromBeginning = false;
-    } else {
-      picked = cat.firstEpisode;
-      fromBeginning = true;
-    }
-    if (picked == null) {
-      _snack('No episodes for this show.');
-      return;
-    }
-    await _playEmbeddedEpisode(show, picked, fromBeginning: fromBeginning);
-  }
-
-  Future<SeriesCatalog?> _seriesCatalogFor(SeriesItem show) async {
-    if (session.seriesDetailItem?.seriesId == show.seriesId &&
-        session.seriesCatalog != null) {
-      return session.seriesCatalog;
-    }
-    return session.ensureSeriesInfo(show);
+    await _playMpv(() => session.watchTrailer(info));
   }
 
   /// Hierarchical back: about → manage → menu → categories ← channels.
@@ -1453,10 +1177,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     if (_menuOpen) {
       setState(() => _menuOpen = false);
-      return;
-    }
-    if (_surfaceOpen) {
-      _closeSurface();
       return;
     }
     if (_seriesEpisodesOpen) {
@@ -1575,10 +1295,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     if (_menuOpen) {
       setState(() => _menuOpen = false);
-      return;
-    }
-    if (_surfaceOpen) {
-      _closeSurface();
       return;
     }
     if (session.isWatchingExternal) {
@@ -2005,10 +1721,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       });
       return;
     }
-    if (id == 'chrome_spike') {
-      await _playSelectionWithFlutter();
-      return;
-    }
     if (id == 'hide_cat') {
       await _hideFocusedCategory();
       return;
@@ -2423,16 +2135,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     final eps = _currentEpisodes;
     if (show == null || eps.isEmpty) return;
     final ep = eps[_episodeIndex.clamp(0, eps.length - 1)];
-    final loc = 'S${ep.season}E${ep.episodeNum}';
-    final epTitle = ep.title.trim();
-    _offerPlay(
-      title: epTitle.isEmpty
-          ? '${show.name} · $loc'
-          : '${show.name} · $loc  $epTitle',
-      mpv: () =>
-          session.watchSeriesEpisode(show, ep, fromBeginning: fromBeginning),
-      flutter: () =>
-          _playEmbeddedEpisode(show, ep, fromBeginning: fromBeginning),
+    await _playMpv(
+      () => session.watchSeriesEpisode(show, ep, fromBeginning: fromBeginning),
     );
   }
 
@@ -2461,11 +2165,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     if (id != 'resume' && id != 'start') return;
     final fromBeginning = id == 'start';
-    _offerPlay(
-      title: item.name,
-      mpv: () => session.watchVod(item, fromBeginning: fromBeginning),
-      flutter: () => _playEmbeddedVod(item, fromBeginning: fromBeginning),
-    );
+    await _playMpv(() => session.watchVod(item, fromBeginning: fromBeginning));
   }
 
   Future<void> _runSeriesDetailActionId(String id) async {
@@ -2503,19 +2203,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     final episode = ep;
     final fromBeginning = id == 'start';
-    final loc = 'S${episode.season}E${episode.episodeNum}';
-    final epTitle = episode.title.trim();
-    _offerPlay(
-      title: epTitle.isEmpty
-          ? '${show.name} · $loc'
-          : '${show.name} · $loc  $epTitle',
-      mpv: () => session.watchSeriesEpisode(
+    await _playMpv(
+      () => session.watchSeriesEpisode(
         show,
         episode,
         fromBeginning: fromBeginning,
       ),
-      flutter: () =>
-          _playEmbeddedEpisode(show, episode, fromBeginning: fromBeginning),
     );
   }
 
@@ -3005,11 +2698,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     } catch (e) {
       debugPrint('sdtv: stop before exit: $e');
     }
-    try {
-      await session.player.dispose().timeout(const Duration(seconds: 1));
-    } catch (e) {
-      debugPrint('sdtv: dispose before exit: $e');
-    }
     // Linux desktop / Deck: SystemNavigator.pop is unreliable; exit the process.
     exit(0);
   }
@@ -3448,74 +3136,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                     ),
                   ),
                 ),
-
-              if (_surfaceOpen) ...[
-                Positioned.fill(
-                  child: GestureDetector(
-                    onTap: _closeSurface,
-                    child: ColoredBox(
-                      color: Colors.black.withValues(alpha: 0.55),
-                    ),
-                  ),
-                ),
-                Center(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 480),
-                    child: Material(
-                      color: theme.colorScheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(16),
-                      elevation: 12,
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Text(
-                              'Play',
-                              style: theme.textTheme.headlineSmall?.copyWith(
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              _surfaceTitle,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.bodyMedium,
-                            ),
-                            const SizedBox(height: 20),
-                            _BrowseTile(
-                              label: 'Flutter chrome',
-                              subtitle:
-                                  'Clean HUD on the embedded player (slow)',
-                              icon: Icons.smart_display_outlined,
-                              selected: _surfaceIndex == 0,
-                              onTap: () => unawaited(_confirmSurface(index: 0)),
-                            ),
-                            const SizedBox(height: 8),
-                            _BrowseTile(
-                              label: 'mpv overlay',
-                              subtitle:
-                                  'External mpv · Flutter HUD on the video',
-                              icon: Icons.ondemand_video_outlined,
-                              selected: _surfaceIndex == 1,
-                              onTap: () => unawaited(_confirmSurface(index: 1)),
-                            ),
-                            const SizedBox(height: 12),
-                            Text(
-                              '↑↓ move · A select · B close',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.outline,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
 
               // —— Switch saved playlist ——
               if (_switchSourceOpen) ...[

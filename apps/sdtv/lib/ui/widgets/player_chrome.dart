@@ -3,8 +3,8 @@ import 'package:sdtv_player/sdtv_player.dart';
 
 /// Couch-first playback HUD.
 ///
-/// Drawn over the slow embedded player, and rasterized onto external mpv
-/// (`overlay-add`) for the daily picture. Not mpv `show-text`.
+/// Rasterized onto external mpv (`overlay-add`) by `MpvFlutterHud`.
+/// Not mpv `show-text`.
 ///
 /// [liveMode] hides seek: live IPTV usually has no useful timeline.
 enum PlayerChromeFocus {

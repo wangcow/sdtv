@@ -26,18 +26,17 @@ const kFavoritesCategoryId = '__sdtv_favorites__';
 
 enum GuideSection { live, movies, series }
 
-/// App-wide session: Xtream client, live catalog, player.
+/// App-wide session: Xtream client, catalogs, and external mpv playback.
 class SessionController extends ChangeNotifier {
   SessionController({
     required SettingsStore settings,
-    SdtvPlayerController? player,
     ArtworkCache? artwork,
+    ExternalMpvLauncher? externalMpv,
   }) : _settings = settings,
-       player = player ?? StubSdtvPlayerController(),
-       artwork = artwork ?? ArtworkCache();
+       artwork = artwork ?? ArtworkCache(),
+       externalMpv = externalMpv ?? ExternalMpvLauncher();
 
   final SettingsStore _settings;
-  final SdtvPlayerController player;
   final ArtworkCache artwork;
 
   SessionPhase phase = SessionPhase.boot;
@@ -82,15 +81,6 @@ class SessionController extends ChangeNotifier {
   SeriesEpisode? nowPlayingEpisode;
   SeriesItem? nowPlayingSeries;
 
-  /// Title shown on the Flutter chrome player (VOD / trailer).
-  String? embeddedTitle;
-
-  /// True only for the embedded live path. VOD must not zap channels.
-  bool embeddedLive = false;
-
-  /// Last URL opened in the Flutter player, so A can retry.
-  Uri? embeddedUri;
-  Duration? embeddedStart;
   final Map<int, SeriesCatalog> _seriesInfoCache = {};
 
   /// Ordered favorite keys for the current [favoritesScope].
@@ -487,7 +477,7 @@ class SessionController extends ChangeNotifier {
   }
 
   /// Phase A: fullscreen external mpv for watch sessions.
-  final ExternalMpvLauncher externalMpv = ExternalMpvLauncher();
+  final ExternalMpvLauncher externalMpv;
 
   /// True while [watchChannel] is in flight (before/during external mpv).
   bool _watchInFlight = false;
@@ -943,25 +933,15 @@ class SessionController extends ChangeNotifier {
   Future<void> _saveVodProgress() async {
     if (!watchingVod) return;
     // After mpv exits, IPC reads 0 and used to *erase* a real resume.
-    late final Duration pos;
-    late final Duration reportedDur;
-    if (externalMpv.isRunning) {
-      try {
-        pos = await externalMpv.timePos();
-        reportedDur = await externalMpv.duration();
-      } catch (e) {
-        debugPrint('sdtv: vod progress save: $e');
-        return;
-      }
-    } else {
-      final st = player.state;
-      if (st != SdtvPlayerState.playing &&
-          st != SdtvPlayerState.paused &&
-          st != SdtvPlayerState.buffering) {
-        return;
-      }
-      pos = player.position;
-      reportedDur = player.duration;
+    if (!externalMpv.isRunning) return;
+    final Duration pos;
+    final Duration reportedDur;
+    try {
+      pos = await externalMpv.timePos();
+      reportedDur = await externalMpv.duration();
+    } catch (e) {
+      debugPrint('sdtv: vod progress save: $e');
+      return;
     }
     if (pos.inSeconds <= kVodResumeMinSeconds) return;
     try {
@@ -2638,182 +2618,9 @@ class SessionController extends ChangeNotifier {
     }
   }
 
-  /// IPTV-friendly headers for embedded media_kit (matches panel clients).
-  static const Map<String, String> _streamHttpHeaders = {
-    'User-Agent':
-        'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 '
-        '(KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3',
-  };
-
-  /// Embedded media_kit open (experimental). Prefer [watchChannel]
-  /// for daily live TV (external mpv).
-  ///
-  /// **One URL only** — do not probe .m3u8 then .ts; that double-hits the
-  /// panel and can get the account flagged. Texture size is never put on
-  /// the stream URL.
-  Future<String?> playChannel(LiveChannel channel) async {
-    embeddedLive = true;
-    embeddedTitle = null;
-    watchingVod = false;
-    nowPlayingVod = null;
-    nowPlayingEpisode = null;
-    nowPlayingSeries = null;
-    nowPlaying = channel;
-    notifyListeners();
-
-    Uri? url;
-    if (channel.hasDirectUrl) {
-      url = Uri.tryParse(channel.streamUrl!.trim());
-    } else if (useDemo || mockCatalog) {
-      url = Uri.parse(kDemoPlaybackUri);
-    } else {
-      url = resolvePlayUri(channel);
-    }
-
-    if (url == null) {
-      return 'No playable URL for this channel.';
-    }
-    return _openEmbedded(url);
-  }
-
-  /// Flutter-chrome VOD. Caller pushes [PlayerPage], then [finishEmbeddedWatch].
-  Future<String?> openEmbeddedVod(
-    VodItem item, {
-    bool fromBeginning = false,
-  }) async {
-    if (externalMpv.isRunning) return null;
-    final uri = resolveVodPlayUri(item);
-    if (uri == null) return 'No playable URL for this title.';
-    final saved = _settings.vodProgressSeconds(prefsScope, item.favoriteKey);
-    final startAt = (!fromBeginning && saved > 15)
-        ? Duration(seconds: saved)
-        : null;
-    embeddedLive = false;
-    watchingVod = true;
-    nowPlayingVod = item;
-    nowPlaying = null;
-    nowPlayingEpisode = null;
-    nowPlayingSeries = null;
-    embeddedTitle = item.name;
-    notifyListeners();
-    final err = await _openEmbedded(uri, startAt: startAt);
-    _startVodProgressWatch(hud: false);
-    return err;
-  }
-
-  /// Flutter-chrome episode. Same lifetime as [openEmbeddedVod].
-  Future<String?> openEmbeddedEpisode(
-    SeriesItem show,
-    SeriesEpisode episode, {
-    bool fromBeginning = false,
-  }) async {
-    if (externalMpv.isRunning) return null;
-    final uri = resolveSeriesPlayUri(episode);
-    if (uri == null) return 'No playable URL for this episode.';
-    final saved = episodeProgressSeconds(episode);
-    final startAt = (!fromBeginning && saved > 15)
-        ? Duration(seconds: saved)
-        : null;
-    embeddedLive = false;
-    watchingVod = true;
-    nowPlayingVod = null;
-    nowPlaying = null;
-    nowPlayingSeries = show;
-    nowPlayingEpisode = episode;
-    embeddedTitle = '${show.name}  S${episode.season}E${episode.episodeNum}';
-    notifyListeners();
-    final err = await _openEmbedded(uri, startAt: startAt);
-    _startVodProgressWatch(hud: false);
-    return err;
-  }
-
-  /// Trailer in the Flutter player. Progress is not stored.
-  Future<String?> openEmbeddedTrailer(Uri uri, {required String title}) async {
-    if (externalMpv.isRunning) return null;
-    embeddedLive = false;
-    watchingVod = false;
-    nowPlaying = null;
-    nowPlayingVod = null;
-    nowPlayingEpisode = null;
-    nowPlayingSeries = null;
-    embeddedTitle = title;
-    notifyListeners();
-    return _openEmbedded(uri);
-  }
-
-  /// A on the Flutter player error card.
-  Future<String?> retryEmbedded() async {
-    final uri = embeddedUri;
-    if (uri == null) return 'Nothing to retry';
-    return _openEmbedded(uri, startAt: embeddedStart);
-  }
-
-  Future<String?> _openEmbedded(Uri url, {Duration? startAt}) async {
-    embeddedUri = url;
-    embeddedStart = startAt;
-    try {
-      await player.stop();
-    } catch (_) {}
-
-    debugPrint('sdtv: embed open $url');
-    await player.open(url, httpHeaders: _streamHttpHeaders, start: startAt);
-    for (var t = 0; t < 15; t++) {
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-      if (player.state == SdtvPlayerState.playing ||
-          player.state == SdtvPlayerState.buffering ||
-          player.state == SdtvPlayerState.paused) {
-        notifyListeners();
-        return null;
-      }
-      if (player.state == SdtvPlayerState.error) break;
-    }
-
-    notifyListeners();
-    return player.lastError ?? 'Playback failed (embedded)';
-  }
-
-  /// Save VOD progress (if any) and stop the Flutter player.
-  Future<void> finishEmbeddedWatch() async {
-    if (watchingVod && !externalMpv.isRunning) {
-      await _saveVodProgress();
-    }
-    _stopVodProgressWatch();
-    embeddedLive = false;
-    embeddedTitle = null;
-    embeddedUri = null;
-    embeddedStart = null;
-    watchingVod = false;
-    nowPlayingVod = null;
-    nowPlayingEpisode = null;
-    nowPlayingSeries = null;
-    await stopPlayback();
-  }
-
-  Future<void> playAdjacent(int delta) async {
-    // Zap always uses external mpv (smooth). Do not open a second embed
-    // stream against the panel. Embedded VOD must not zap the live list.
-    if (isWatchingExternal) {
-      await watchChannelAdjacent(delta);
-      return;
-    }
-    if (watchingVod || !embeddedLive) return;
-    final list = channelsInCategory;
-    if (list.isEmpty) return;
-    final idx = nowPlaying == null
-        ? 0
-        : list.indexWhere((c) => c.streamId == nowPlaying!.streamId);
-    final start = idx < 0 ? 0 : idx;
-    final next = (start + delta) % list.length;
-    final i = next < 0 ? next + list.length : next;
-    await watchChannel(list[i]);
-  }
-
   Future<void> stopPlayback({bool notify = true}) async {
     try {
       await externalMpv.stop();
-    } catch (_) {}
-    try {
-      await player.stop();
     } catch (e, st) {
       debugPrint('sdtv: stopPlayback error: $e\n$st');
     }
@@ -2901,7 +2708,6 @@ class SessionController extends ChangeNotifier {
     if (_client is HttpXtreamClient) {
       (_client as HttpXtreamClient).close();
     }
-    player.dispose();
     super.dispose();
   }
 }

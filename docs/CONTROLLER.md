@@ -74,13 +74,11 @@ On the **category column** (Live, Movies, and TV Shows): **B** jumps to the top 
 
 ## Player chrome (external mpv — daily)
 
-Video is **mpv** (`vo=gpu`), not a Flutter texture. The couch HUD is the same Flutter chrome as the slow player, painted onto the video as a bitmap (`overlay-add`). The picture stays on mpv. D-pad focus stays in the app. The bitmap updates when you press a button, and a few times a second while a VOD scrubber is on screen. It hides after a few seconds so the middle of the picture stays clear.
+Video is **mpv** (`vo=gpu`), not a Flutter texture. The couch HUD is Flutter chrome painted onto the video as two bitmaps, a top and a bottom band (`overlay-add`). The picture stays on mpv. D-pad focus stays in the app. The bitmaps update when you press a button, when mpv reports a pause or length change, and once a second while a VOD clock is on screen. It hides after a few seconds so the middle of the picture stays clear.
 
 Stock mpv OSC (seek bar) is **disabled** — on live it rewinds the cache. Styled `show-text` is only the fallback if the bitmap overlay fails, plus short readouts (volume) while the HUD is hidden. The pause list (subs / audio / mute) is still that text menu.
 
-**A** on a channel, program, movie, episode, or file trailer asks which picture to use. **Flutter chrome** is the embedded HUD (slow). **mpv overlay** is external mpv with this Flutter HUD on the video (daily). The ask is not remembered; the highlight starts on mpv. YouTube trailers still open outside the app.
-
-☰ → **Flutter chrome (slow)** skips the ask and opens the embedded HUD on the highlighted channel, movie, show, or episode.
+**A** on a channel, program, movie, episode, or file trailer plays it on mpv straight away. YouTube trailers still open outside the app.
 
 ## Watching (external mpv — daily default)
 

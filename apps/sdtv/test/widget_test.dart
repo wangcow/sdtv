@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sdtv_input/sdtv_input.dart';
+import 'package:sdtv_player/sdtv_player.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sdtv/app.dart';
 import 'package:sdtv/services/settings_store.dart';
@@ -53,9 +54,12 @@ void main() {
     expect(find.textContaining('DEMO'), findsOneWidget);
   });
 
-  testWidgets('live play asks which chrome to use', (tester) async {
+  testWidgets('A on a live channel plays on mpv without asking', (
+    tester,
+  ) async {
     await _useWideSurface(tester);
-    await _pumpDemo(tester);
+    final mpv = _RecordingMpv();
+    await _pumpDemo(tester, mpv: mpv);
     await _pumpUntil(tester, find.textContaining('Mock Entertainment 1'));
 
     // A on the category column enters the guide. A again plays. The second
@@ -68,85 +72,39 @@ void main() {
       find.textContaining('Mock Entertainment 1').first,
       const SdtvConfirmIntent(),
     );
-    await _pumpUntil(tester, find.text('Flutter chrome'));
+    await _pumpUntilIdle(tester, () => mpv.plays.isNotEmpty);
 
-    expect(find.text('Flutter chrome'), findsOneWidget);
-    expect(find.text('mpv overlay'), findsOneWidget);
-    expect(find.text('Mock Entertainment 1'), findsWidgets);
-    expect(
-      find.text('External mpv · Flutter HUD on the video'),
-      findsOneWidget,
-    );
-    expect(
-      find.text('Clean HUD on the embedded player (slow)'),
-      findsOneWidget,
-    );
-
-    _invoke(tester, find.text('mpv overlay'), const SdtvBackIntent());
-    await _pumpUntil(tester, find.text('Entertainment'));
+    expect(mpv.plays, hasLength(1));
+    expect(mpv.plays.single.vod, isFalse);
+    expect(find.text('Play'), findsNothing);
     expect(find.text('mpv overlay'), findsNothing);
-    expect(find.text('Flutter chrome'), findsNothing);
+    // Let the live path's "mini guide once mpv is up" wait run out.
+    await _pumpFor(tester, const Duration(seconds: 6));
   });
 
-  testWidgets('movie play asks, and Flutter chrome opens the HUD', (
-    tester,
-  ) async {
+  testWidgets('Play Now on a movie plays on mpv', (tester) async {
     await _useWideSurface(tester);
-    final session = await _pumpDemo(tester);
+    final mpv = _RecordingMpv();
+    final session = await _pumpDemo(tester, mpv: mpv);
     await session.setGuideSection(GuideSection.movies);
     await _pumpUntil(tester, find.text('Demo Feature'));
 
     await tester.tap(find.text('Demo Feature'));
     await _pumpUntil(tester, find.text('Play Now'));
     await tester.tap(find.text('Play Now'));
-    await _pumpUntil(tester, find.text('Flutter chrome'));
+    await _pumpUntilIdle(tester, () => mpv.plays.isNotEmpty);
 
-    expect(find.text('Flutter chrome'), findsOneWidget);
-    expect(find.text('mpv overlay'), findsOneWidget);
-    expect(find.text('Demo Feature'), findsWidgets);
-
-    await tester.tap(find.text('Flutter chrome'));
-    await _pumpUntil(tester, find.text('On-demand · Flutter chrome'));
-
-    expect(find.text('On-demand · Flutter chrome'), findsOneWidget);
+    expect(mpv.plays, hasLength(1));
+    expect(mpv.plays.single.vod, isTrue);
     expect(find.text('mpv overlay'), findsNothing);
-    expect(session.watchingVod, isTrue);
-
-    await tester.tap(find.text('Back'));
-    await _pumpUntil(tester, find.text('Play Now'));
-    await _pumpUntilIdle(tester, () => !session.watchingVod);
-
-    expect(find.text('Play Now'), findsOneWidget);
-    expect(session.watchingVod, isFalse);
-    expect(session.embeddedUri, isNull);
   });
 
-  testWidgets('menu Flutter chrome plays the highlighted movie', (
+  testWidgets('episode Play Now and a file trailer play on mpv', (
     tester,
   ) async {
     await _useWideSurface(tester);
-    final session = await _pumpDemo(tester);
-    await session.setGuideSection(GuideSection.movies);
-    await _pumpUntil(tester, find.text('Demo Feature'));
-
-    _invoke(tester, find.text('Demo Feature'), const SdtvMenuIntent());
-    await _pumpUntil(tester, find.text('Flutter chrome (slow)'));
-    await tester.tap(find.text('Flutter chrome (slow)'));
-    await _pumpUntil(tester, find.text('On-demand · Flutter chrome'));
-
-    expect(find.text('mpv overlay'), findsNothing);
-    expect(find.text('On-demand · Flutter chrome'), findsOneWidget);
-    expect(find.text('Demo Feature'), findsWidgets);
-    expect(session.isWatchingExternal, isFalse);
-
-    await tester.tap(find.text('Back'));
-    await _pumpUntil(tester, find.text('Demo Feature'));
-    await _pumpUntilIdle(tester, () => session.embeddedUri == null);
-  });
-
-  testWidgets('episode play asks, file trailer asks', (tester) async {
-    await _useWideSurface(tester);
-    final session = await _pumpDemo(tester);
+    final mpv = _RecordingMpv();
+    final session = await _pumpDemo(tester, mpv: mpv);
     await session.setGuideSection(GuideSection.series);
     await _pumpUntil(tester, find.text('Harbor Nights'));
 
@@ -157,19 +115,24 @@ void main() {
       () => session.seriesCatalog != null && !session.vodDetailLoading,
     );
     await tester.tap(find.text('Play Now'));
-    await _pumpUntil(tester, find.text('Flutter chrome'));
+    await _pumpUntilIdle(tester, () => mpv.plays.isNotEmpty);
+    expect(mpv.plays.single.vod, isTrue);
 
-    expect(find.text('Flutter chrome'), findsOneWidget);
-    expect(find.textContaining('Harbor Nights'), findsWidgets);
-
-    _invoke(tester, find.text('mpv overlay'), const SdtvBackIntent());
     await _pumpUntil(tester, find.text('Watch trailer'));
-
     await tester.tap(find.text('Watch trailer'));
-    await _pumpUntil(tester, find.text('Flutter chrome'));
-    expect(find.text('Flutter chrome'), findsOneWidget);
-    expect(find.textContaining('trailer'), findsWidgets);
-    expect(session.isWatchingExternal, isFalse);
+    await _pumpUntilIdle(tester, () => mpv.plays.length == 2);
+    expect(mpv.plays, hasLength(2));
+  });
+
+  testWidgets('menu has no Flutter chrome entry', (tester) async {
+    await _useWideSurface(tester);
+    final session = await _pumpDemo(tester, mpv: _RecordingMpv());
+    await session.setGuideSection(GuideSection.movies);
+    await _pumpUntil(tester, find.text('Demo Feature'));
+
+    _invoke(tester, find.text('Demo Feature'), const SdtvMenuIntent());
+    await _pumpUntil(tester, find.text('Switch playlist'));
+    expect(find.text('Flutter chrome (slow)'), findsNothing);
   });
 
   testWidgets('finished movie poster dims and a finished episode row checks', (
@@ -261,9 +224,36 @@ Future<void> _pumpUntil(WidgetTester tester, Finder finder) async {
   expect(finder, findsWidgets);
 }
 
-Future<SessionController> _pumpDemo(WidgetTester tester) async {
+/// Records plays instead of spawning mpv, and reports an immediate user quit.
+class _RecordingMpv extends ExternalMpvLauncher {
+  final plays = <({Uri url, bool vod})>[];
+
+  @override
+  Future<ExternalMpvResult> playFullscreen(
+    Uri url, {
+    List<({String title, Uri uri})>? playlist,
+    int startIndex = 0,
+    Uri? fallbackUrl,
+    String? fallbackTitle,
+    bool vod = false,
+    Duration? startAt,
+  }) async {
+    plays.add((url: url, vod: vod));
+    return const ExternalMpvResult(
+      started: true,
+      exitCode: 0,
+      durationMs: 60000,
+      userQuit: true,
+    );
+  }
+}
+
+Future<SessionController> _pumpDemo(
+  WidgetTester tester, {
+  ExternalMpvLauncher? mpv,
+}) async {
   final settings = await SettingsStore.open();
-  final session = SessionController(settings: settings);
+  final session = SessionController(settings: settings, externalMpv: mpv);
   await tester.pumpWidget(SdtvApp(session: session));
   // Let bootstrap land on login before connectDemo, or a late bootstrap
   // notify can send the session back to the login phase.

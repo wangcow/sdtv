@@ -61,7 +61,7 @@ Until Flatpak is published, run from source on Desktop Mode:
 ```bash
 cd ~/sdtv-src
 source tool/bazzite-flutter-env.sh   # Bazzite/Homebrew; skip on normal Fedora if dnf toolchain is installed
-# Needs: brew install mpv   (libmpv for media_kit)
+# Needs: brew install mpv   (the external player)
 cd apps/sdtv
 flutter pub get
 flutter run -d linux
@@ -80,7 +80,7 @@ Selecting a channel **starts fullscreen `mpv`**, then returns to the TV Guide wh
   - **↑ / ↓** while the HUD is hidden — volume · **X** / **M** — mute
   - **☰** — subs / audio / mute text menu
   - Keyboard (desktop / when mpv has focus): Esc quit, Space pause, PgUp/PgDn channel, arrows volume
-- If mpv fails to start, the error snack names the problem. Play again and choose **Flutter chrome** to try the embedded player.
+- If mpv fails to start, the error snack names the problem.
 - Override: create `~/sdtv/sdtv.env` with one of:
   ```bash
   SDTV_MPV_PATH=flatpak:io.mpv.Mpv
@@ -94,8 +94,6 @@ Selecting a channel **starts fullscreen `mpv`**, then returns to the TV Guide wh
 **A** on a channel starts **external mpv** (hardware decode, 60fps). The picture stays on mpv. The couch HUD is the Flutter chrome, rendered to an image and composited with mpv `overlay-add` (a bitmap, not ASS text). Gamescope still sees one fullscreen window. Focus stays in sdtv.
 
 Stock mpv OSC (the seek bar) stays **off**. On live IPTV it rewinds the cache. **☰** opens the subs / audio / mute text menu. If the bitmap overlay fails, sdtv falls back to styled `show-text`. Live sessions use `--keep-open=yes` so a stream hiccup does not quit mpv.
-
-**A** asks: **Flutter chrome** (embedded HUD, slow, one stream URL) or **mpv overlay** (daily bitmap HUD). The choice is not saved. ☰ → **Flutter chrome (slow)** skips the ask and plays the highlighted channel, movie, show, or episode in the embedded HUD. That texture path will not match mpv on Deck.
 
 A later use of the same bitmap is a clear corner so the guide can scroll over a live picture. That is not built yet. Do not put the video through a Flutter texture, and do not stack a second window under Gamescope.
 

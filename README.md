@@ -19,7 +19,7 @@ Import your Xtream Codes URL, username, and password → browse Live TV, Movies,
 
 1. **Controller-first UI** — D-pad / stick focus, A confirm, B back. Keyboard works for desktop dev.
 2. **Steam Game Mode** — Flatpak → non-Steam game → Gamepad Steam Input template.
-3. **Hardware decode** — libmpv via media_kit, VAAPI on Deck.
+3. **Hardware decode** — external mpv (`vo=gpu`), VAAPI on Deck.
 4. **Xtream Codes first** — URL + user + pass. M3U later.
 5. **Open source / Flathub-bound** — Apache-2.0 with Wangcow attribution in About.
 
@@ -60,7 +60,7 @@ sdtv/
   packages/
     sdtv_core/         # Xtream client, models, cache
     sdtv_input/        # Gamepad → Flutter intents (critical)
-    sdtv_player/       # media_kit / libmpv wrapper (stub)
+    sdtv_player/       # External mpv launcher, IPC, HUD bitmap overlay
   flatpak/             # org.wangcow.SDTV manifest stubs
   tool/mock_xtream/    # Fixture JSON for safe offline dev
   docs/                # Controller map, Steam Deck setup

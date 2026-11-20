@@ -1,10 +1,8 @@
-/// Playback for sdtv (external mpv agent + media_kit embed + test stub).
+/// Playback for sdtv: external mpv, its IPC, and the HUD bitmap overlay.
 library;
-
-export 'package:media_kit_video/media_kit_video.dart';
 
 export 'src/bitmap_overlay.dart';
 export 'src/external_mpv.dart';
 export 'src/osd_chrome.dart';
 export 'src/play_error.dart';
-export 'src/player_controller.dart';
+export 'src/player_state.dart';

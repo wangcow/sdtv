@@ -12,7 +12,7 @@ Guidance for humans and coding agents working in this repo.
 ## Stack
 
 - Flutter Linux desktop + packages monorepo
-- Playback: media_kit / libmpv (Phase 1+)
+- Playback: external mpv process over JSON IPC (`packages/sdtv_player`)
 - Xtream Codes API client in `packages/sdtv_core`
 
 ## Hard rules
@@ -45,7 +45,7 @@ cd packages/sdtv_core && dart test
 
 ## Phase focus
 
-Daily watch is **external mpv** (`vo=gpu`). Flutter is the guide. On-video chrome is the Flutter `PlayerChrome` rasterized onto that mpv with bitmap `overlay-add` (not ASS, not `show-text`). Do **not** chase Flutter-texture FPS for live TV — Deck embed is 7–15fps and cannot match mpv picture quality. Video must **never** go through `media_kit`’s `Video` for this HUD.
+Daily watch is **external mpv** (`vo=gpu`). Flutter is the guide. On-video chrome is the Flutter `PlayerChrome` rasterized onto that mpv with bitmap `overlay-add` (not ASS, not `show-text`). Do **not** chase Flutter-texture FPS for live TV — Deck embed is 7–15fps and cannot match mpv picture quality. Video must **never** go through a Flutter texture; the embedded media_kit player was removed.
 
 - **Now:** Live tab is the EPG grid · external mpv + Flutter HUD bitmap · Movies / TV Shows poster grid · title landing · seasons/episodes · provider art cache · Search covers live, movies, and TV shows · ★ Favorites on live, movies, and TV shows
 - **Next:** Flathub
