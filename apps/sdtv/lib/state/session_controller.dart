@@ -1207,7 +1207,6 @@ class SessionController extends ChangeNotifier {
     final ok = await externalMpv.ensureHealthyOrShowError(
       fallback,
       title: _nowPlayingLabel,
-      grace: const Duration(milliseconds: 1800),
     );
     if (ok) {
       unawaited(
@@ -1347,7 +1346,6 @@ class SessionController extends ChangeNotifier {
     return externalMpv.ensureHealthyOrShowError(
       fallback,
       title: label,
-      grace: const Duration(milliseconds: 1800),
     );
   }
 

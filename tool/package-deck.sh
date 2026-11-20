@@ -271,6 +271,9 @@ if [ -z "${LIBVA_DRIVER_NAME:-}" ]; then
   fi
 fi
 
+# Stream start diagnostics (health checks + mpv log, URLs reduced to host).
+export SDTV_PLAY_LOG="${SDTV_PLAY_LOG:-${DIR}/.sdtv-play.log}"
+
 # Fontconfig / XKB = Deck OS
 if [ -d /usr/share/X11/xkb ]; then
   export XKB_CONFIG_ROOT=/usr/share/X11/xkb

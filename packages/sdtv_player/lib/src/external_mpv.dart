@@ -173,6 +173,7 @@ class ExternalMpvLauncher {
   void _noteLog(String line) {
     final t = line.trim();
     if (t.isEmpty || _isNoiseLogLine(t)) return;
+    _playLog('mpv: $t');
     _recentLog.add(t);
     if (_recentLog.length > 40) {
       _recentLog.removeRange(0, _recentLog.length - 40);
@@ -192,6 +193,43 @@ class ExternalMpvLauncher {
       r'failed to open|failed to recognize|error opening|opening failed|'
       r'http error|ssl|certificate|no decoder',
     ).hasMatch(blob);
+  }
+
+  /// Failures that waiting will not fix: the server refused or mpv gave up
+  /// opening. Transient warnings (`timeout` while ffmpeg reconnects) are not
+  /// here; they used to fail streams that were only slow to start.
+  bool get hasHardStreamError {
+    final blob = _recentLog.join('\n').toLowerCase();
+    if (blob.isEmpty) return false;
+    return RegExp(
+      r'\b40[134]\b|forbidden|unauthorized|'
+      r'failed to open|failed to recognize|error opening|opening failed|'
+      r'no decoder|certificate',
+    ).hasMatch(blob);
+  }
+
+  /// Optional diagnostics file (`SDTV_PLAY_LOG`, set by run-sdtv.sh).
+  static final String? _playLogPath = () {
+    final p = Platform.environment['SDTV_PLAY_LOG'];
+    return (p == null || p.trim().isEmpty) ? null : p.trim();
+  }();
+
+  /// Stream URLs carry the account's username and password; keep the host.
+  static String redactUrls(String line) => line.replaceAllMapped(
+    RegExp(r'(https?://[^/\s]+)/\S*'),
+    (m) => '${m[1]}/…',
+  );
+
+  void _playLog(String message, {bool reset = false}) {
+    final path = _playLogPath;
+    if (path == null) return;
+    try {
+      final stamp = DateTime.now().toIso8601String().substring(11, 23);
+      File(path).writeAsStringSync(
+        '$stamp ${redactUrls(message)}\n',
+        mode: reset ? FileMode.write : FileMode.append,
+      );
+    } catch (_) {}
   }
 
   /// Classified error from mpv logs + optional stall probe (`cache`, `eof`, …).
@@ -1035,49 +1073,77 @@ class ExternalMpvLauncher {
     return false;
   }
 
-  /// Wait [grace], then either confirm healthy or try [fallback] (.m3u8).
-  ///
-  /// Returns **true** if playback looks healthy (primary or after fallback).
+  /// How long a stream may take to start before it counts as failed.
+  /// Live IPTV often needs several seconds (redirects, first segments).
+  static const startTimeout = Duration(seconds: 8);
+
+  /// Polls until mpv reports a play position (started), a hard error, or
+  /// [timeout]. True when playback started.
+  Future<bool> waitForPlayback({Duration timeout = startTimeout}) async {
+    final end = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(end)) {
+      if (!isRunning || _userQuit) return false;
+      final pos = await getProperty('time-pos');
+      if (pos is num) return true;
+      final pause = await getProperty('pause');
+      if (pause == true) return true; // user paused while it loaded
+      if (hasHardStreamError) return false;
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    return false;
+  }
+
+  /// Wait for the current load to start, else try [fallback] (.m3u8) once.
   Future<bool> waitUntilHealthyOrFallback(
     Uri? fallback, {
     String? title,
-    Duration grace = const Duration(milliseconds: 2000),
+    Duration timeout = startTimeout,
   }) async {
     if (_userQuit) return false;
-    await Future<void>.delayed(grace);
-    if (!isRunning || _userQuit) return false;
-    if (!await isPlaybackUnhealthy()) return true;
+    final t0 = DateTime.now();
+    if (await waitForPlayback(timeout: timeout)) {
+      _playLog('started in ${DateTime.now().difference(t0).inMilliseconds}ms');
+      return true;
+    }
+    if (_userQuit || !isRunning) return false;
+    _playLog(
+      'no start after ${DateTime.now().difference(t0).inMilliseconds}ms '
+      '(hard error: $hasHardStreamError)',
+    );
 
     if (fallback == null) {
-      debugPrint('sdtv_player: stream unhealthy, no fallback URL');
+      debugPrint('sdtv_player: stream did not start, no fallback URL');
       return false;
     }
 
-    debugPrint('sdtv_player: stream unhealthy — trying fallback $fallback');
-    await showText('Retrying stream (HLS)…', durationMs: 1500);
+    debugPrint('sdtv_player: stream did not start — trying fallback $fallback');
+    _playLog('trying fallback $fallback');
+    // Judge the fallback on its own log, not the first attempt's errors.
+    clearRecentLog();
+    if (!playbackBitmapHud) {
+      await showText('Retrying stream (HLS)…', durationMs: 1500);
+    }
     final ok = await loadFile(fallback, title: title);
     if (!ok) return false;
-    await Future<void>.delayed(grace);
-    if (_userQuit || !isRunning) return false;
-    final stillBad = await isPlaybackUnhealthy();
-    if (stillBad) {
-      debugPrint('sdtv_player: HLS fallback still unhealthy');
-      return false;
-    }
-    debugPrint('sdtv_player: HLS fallback looks OK');
-    return true;
+    final t1 = DateTime.now();
+    final started = await waitForPlayback(timeout: timeout);
+    _playLog(
+      'fallback ${started ? 'started' : 'failed'} after '
+      '${DateTime.now().difference(t1).inMilliseconds}ms',
+    );
+    return started;
   }
 
   /// Health-check after a load; on failure show a TiviMate-style error and stay.
   Future<bool> ensureHealthyOrShowError(
     Uri? fallback, {
     String? title,
-    Duration grace = const Duration(milliseconds: 2000),
+    Duration timeout = startTimeout,
   }) async {
     final ok = await waitUntilHealthyOrFallback(
       fallback,
       title: title,
-      grace: grace,
+      timeout: timeout,
     );
     if (ok || _userQuit || !isRunning) return ok;
     await showPlaybackError(channelName: title);
@@ -1088,9 +1154,8 @@ class ExternalMpvLauncher {
   Future<bool> tryFallbackIfUnhealthy(
     Uri? fallback, {
     String? title,
-    Duration grace = const Duration(milliseconds: 2000),
-  }) =>
-      waitUntilHealthyOrFallback(fallback, title: title, grace: grace);
+    Duration timeout = startTimeout,
+  }) => waitUntilHealthyOrFallback(fallback, title: title, timeout: timeout);
 
   /// Ask mpv to quit (falls back to [stop] kill).
   Future<void> quit() async {
@@ -1369,6 +1434,7 @@ class ExternalMpvLauncher {
     // Fresh watch — only set again if we detect dock letterboxing mid-session.
     needsAppRestartForFullDisplay = false;
     clearRecentLog();
+    _playLog('play $url${vod ? ' (vod)' : ''}', reset: true);
     final startedAt = DateTime.now();
 
     // Track active media for dock respawn (zap updates via [loadFile]).
