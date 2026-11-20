@@ -110,7 +110,7 @@ Video decodes in the Deck’s own mpv (system or Flatpak). sdtv bundles no mpv, 
 - `LIBVA_DRIVERS_PATH=/usr/lib64/dri`
 - `LIBVA_DRIVER_NAME=radeonsi` (Steam Deck APU)
 
-sdtv passes both to the mpv it launches.
+sdtv passes both to a system mpv. A Flatpak mpv (`io.mpv.Mpv`) gets neither: it finds the driver through its own runtime, and the host path breaks VA-API inside the sandbox.
 
 | HUD | Meaning |
 |-----|---------|

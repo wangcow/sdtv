@@ -258,7 +258,8 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 export LD_LIBRARY_PATH="/usr/lib64:/usr/lib:${DIR}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 # Critical: system VAAPI drivers (Steam Deck AMD = radeonsi). sdtv passes these
-# to the external mpv it launches; without them mpv falls back to cpu decode.
+# to a *system* mpv. A Flatpak mpv gets neither: its sandbox has its own /usr
+# and drivers, and these host paths would break VA-API there.
 if [ -d /usr/lib64/dri ]; then
   export LIBVA_DRIVERS_PATH="/usr/lib64/dri${LIBVA_DRIVERS_PATH:+:$LIBVA_DRIVERS_PATH}"
 elif [ -d /usr/lib/dri ]; then

@@ -352,9 +352,21 @@ class ExternalMpvLauncher {
   /// Also strip Steam Overlay [LD_PRELOAD] (gameoverlayrenderer) — Deck Game
   /// Mode injects it into Non-Steam games; the linker warning is harmless but
   /// was being parsed as a stream failure ("Playback failed … ld.so object…").
-  static Map<String, String> _childEnvironment() {
-    final env = Map<String, String>.from(Platform.environment);
-    env['LD_LIBRARY_PATH'] = '/usr/lib64:/usr/lib';
+  /// Environment for the mpv process, built from [parent] (sdtv's own).
+  ///
+  /// Launch with `includeParentEnvironment: false`: Dart otherwise merges the
+  /// parent back in and every key removed here would return.
+  ///
+  /// A Flatpak mpv has its own `/usr` (the Flatpak runtime) and finds VA-API
+  /// drivers through the runtime's GL extension. Host paths like
+  /// `LIBVA_DRIVERS_PATH=/usr/lib64/dri` point at nothing in the sandbox and
+  /// make VA-API fail, which drops mpv to software decode.
+  @visibleForTesting
+  static Map<String, String> childEnvironment(
+    Map<String, String> parent, {
+    required bool flatpak,
+  }) {
+    final env = Map<String, String>.from(parent);
 
     final preload = env['LD_PRELOAD'];
     if (preload != null && preload.isNotEmpty) {
@@ -375,15 +387,21 @@ class ExternalMpvLauncher {
       }
     }
 
-    if (Platform.environment['LIBVA_DRIVERS_PATH'] != null) {
-      env['LIBVA_DRIVERS_PATH'] = Platform.environment['LIBVA_DRIVERS_PATH']!;
-    } else if (Directory('/usr/lib64/dri').existsSync()) {
-      env['LIBVA_DRIVERS_PATH'] = '/usr/lib64/dri';
-    } else if (Directory('/usr/lib/dri').existsSync()) {
-      env['LIBVA_DRIVERS_PATH'] = '/usr/lib/dri';
+    if (flatpak) {
+      env
+        ..remove('LD_LIBRARY_PATH')
+        ..remove('LIBVA_DRIVERS_PATH')
+        ..remove('LIBVA_DRIVER_NAME');
+      return env;
     }
-    if (Platform.environment['LIBVA_DRIVER_NAME'] != null) {
-      env['LIBVA_DRIVER_NAME'] = Platform.environment['LIBVA_DRIVER_NAME']!;
+
+    env['LD_LIBRARY_PATH'] = '/usr/lib64:/usr/lib';
+    if (parent['LIBVA_DRIVERS_PATH'] == null) {
+      if (Directory('/usr/lib64/dri').existsSync()) {
+        env['LIBVA_DRIVERS_PATH'] = '/usr/lib64/dri';
+      } else if (Directory('/usr/lib/dri').existsSync()) {
+        env['LIBVA_DRIVERS_PATH'] = '/usr/lib/dri';
+      }
     }
     return env;
   }
@@ -1559,7 +1577,11 @@ GAMEPAD_GUIDE ignore
           finalExec,
           finalArgv,
           mode: ProcessStartMode.normal,
-          environment: _childEnvironment(),
+          environment: childEnvironment(
+            Platform.environment,
+            flatpak: inv.isFlatpak,
+          ),
+          includeParentEnvironment: false,
         );
         _process = proc;
         _launching = false;
