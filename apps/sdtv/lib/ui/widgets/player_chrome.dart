@@ -6,23 +6,51 @@ import 'package:sdtv_player/sdtv_player.dart';
 /// Rasterized onto external mpv (`overlay-add`) by `MpvFlutterHud`.
 /// Not mpv `show-text`.
 ///
-/// [liveMode] hides seek: live IPTV usually has no useful timeline.
+/// [liveMode] swaps seek for channel buttons and shows the programme guide
+/// line instead of a scrubber.
 enum PlayerChromeFocus {
+  prevChannel,
   seekBack,
   playPause,
   seekFwd,
+  nextChannel,
+  subtitles,
+  audio,
+  favorite,
 
-  /// Scrubber only when [canSeek].
+  /// Scrubber only when [canSeek]. Not part of [PlayerChrome.buttons].
   scrubber,
   back,
 }
 
-/// Bottom + top chrome: title, transport, optional scrubber, hints.
+/// Now / next programme for the live info panel.
+class ChromeProgramme {
+  const ChromeProgramme({
+    required this.title,
+    required this.timeRange,
+    required this.progress,
+    this.next,
+  });
+
+  final String title;
+
+  /// e.g. `8:00 PM–9:00 PM`
+  final String timeRange;
+
+  /// 0..1 through the programme.
+  final double progress;
+
+  /// e.g. `Next  9:00 PM  Evening News`
+  final String? next;
+}
+
+/// Top bar (title, info chips, clock) + bottom panel (programme or
+/// scrubber, button row, hint). Each is its own band so the HUD only sends
+/// those strips to mpv.
 class PlayerChrome extends StatelessWidget {
   const PlayerChrome({
     super.key,
     required this.title,
-    required this.subtitle,
     required this.playerState,
     required this.position,
     required this.duration,
@@ -30,12 +58,14 @@ class PlayerChrome extends StatelessWidget {
     required this.liveMode,
     required this.focus,
     required this.showChrome,
-    this.decodeLabel,
-    this.perfLabel,
-    this.onPlayPause,
-    this.onSeekBack,
-    this.onSeekFwd,
-    this.onBack,
+    required this.buttons,
+    this.favorite = false,
+    this.programme,
+    this.subtitleLabel,
+    this.audioLabel,
+    this.clock,
+    this.infoChips = const [],
+    this.onAction,
     this.onScrub,
     this.topBandKey,
     this.bottomBandKey,
@@ -43,7 +73,6 @@ class PlayerChrome extends StatelessWidget {
   });
 
   final String title;
-  final String subtitle;
   final SdtvPlayerState playerState;
   final Duration position;
   final Duration duration;
@@ -51,15 +80,26 @@ class PlayerChrome extends StatelessWidget {
   final bool liveMode;
   final PlayerChromeFocus focus;
   final bool showChrome;
-  final String? decodeLabel;
 
-  /// e.g. perf: mpv 60fps · vaapi-copy · src 1280x720
-  final String? perfLabel;
+  /// Button row, left to right. The HUD owns the order (it also drives
+  /// ←/→ focus), so both always agree.
+  final List<PlayerChromeFocus> buttons;
 
-  final VoidCallback? onPlayPause;
-  final VoidCallback? onSeekBack;
-  final VoidCallback? onSeekFwd;
-  final VoidCallback? onBack;
+  final bool favorite;
+  final ChromeProgramme? programme;
+  final String? subtitleLabel;
+  final String? audioLabel;
+
+  /// Wall clock for the top bar, e.g. `8:42 PM`.
+  final String? clock;
+
+  /// Small stream facts, e.g. `1080p`, `HW`.
+  final List<String> infoChips;
+
+  /// A tap (or A on the focused button). Pad input goes through the HUD.
+  final ValueChanged<PlayerChromeFocus>? onAction;
+
+  /// Seek to a 0..1 fraction (tap / drag on the scrubber).
   final ValueChanged<double>? onScrub;
 
   /// Keys for the top / bottom band [RepaintBoundary]s. The mpv HUD captures
@@ -101,42 +141,44 @@ class PlayerChrome extends StatelessWidget {
       child: Padding(
         padding: EdgeInsets.fromLTRB(28, pad.top + 20, 28, 44),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
+            if (favorite) ...[
+              Icon(Icons.star_rounded, color: Colors.amber.shade400, size: 28),
+              const SizedBox(width: 8),
+            ],
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.headlineSmall?.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w800,
-                      height: 1.15,
-                    ),
-                  ),
-                  if (subtitle.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      subtitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        color: Colors.white70,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ],
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w800,
+                  height: 1.15,
+                ),
               ),
             ),
             const SizedBox(width: 12),
+            for (final chip in infoChips) ...[
+              _InfoChip(label: chip),
+              const SizedBox(width: 8),
+            ],
             _Badge(
               label: liveMode ? 'LIVE' : playerState.name.toUpperCase(),
               emphasized: liveMode,
             ),
+            if (clock != null) ...[
+              const SizedBox(width: 16),
+              Text(
+                clock!,
+                style: theme.textTheme.titleLarge?.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -148,11 +190,11 @@ class PlayerChrome extends StatelessWidget {
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: [Color(0x00000000), Color(0xB3000000), Color(0xE6000000)],
-          stops: [0.0, 0.45, 1.0],
+          stops: [0.0, 0.35, 1.0],
         ),
       ),
       child: Padding(
-        padding: EdgeInsets.fromLTRB(24, 56, 24, pad.bottom + 18),
+        padding: EdgeInsets.fromLTRB(28, 48, 28, pad.bottom + 16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -165,101 +207,30 @@ class PlayerChrome extends StatelessWidget {
                 focused: focus == PlayerChromeFocus.scrubber,
                 onScrub: onScrub,
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 10),
             ] else if (liveMode) ...[
-              Row(
-                children: [
-                  Icon(Icons.circle, size: 10, color: Colors.red.shade400),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Live · no scrubber',
-                    style: theme.textTheme.labelLarge?.copyWith(
-                      color: Colors.white60,
-                      letterSpacing: 0.4,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
+              _ProgrammePanel(programme: programme),
+              const SizedBox(height: 16),
             ],
-
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                if (!liveMode && canSeek) ...[
-                  _ChromeIconButton(
-                    animate: animate,
-                    icon: Icons.replay_10_rounded,
-                    label: '−10s',
-                    focused: focus == PlayerChromeFocus.seekBack,
-                    onTap: onSeekBack,
-                  ),
-                  const SizedBox(width: 18),
+                for (var i = 0; i < buttons.length; i++) ...[
+                  if (i > 0) SizedBox(width: _gapBefore(buttons[i])),
+                  _button(buttons[i]),
                 ],
-                _ChromeIconButton(
-                  animate: animate,
-                  icon: _playing
-                      ? Icons.pause_rounded
-                      : Icons.play_arrow_rounded,
-                  label: _playing ? 'Pause' : 'Play',
-                  focused: focus == PlayerChromeFocus.playPause,
-                  large: true,
-                  onTap: onPlayPause,
-                ),
-                if (!liveMode && canSeek) ...[
-                  const SizedBox(width: 18),
-                  _ChromeIconButton(
-                    animate: animate,
-                    icon: Icons.forward_10_rounded,
-                    label: '+10s',
-                    focused: focus == PlayerChromeFocus.seekFwd,
-                    onTap: onSeekFwd,
-                  ),
-                ],
-                const SizedBox(width: 28),
-                _ChromeIconButton(
-                  animate: animate,
-                  icon: Icons.arrow_back_rounded,
-                  label: 'Back',
-                  focused: focus == PlayerChromeFocus.back,
-                  onTap: onBack,
-                ),
               ],
             ),
-
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Text(
               liveMode
-                  ? 'A play/pause · LB/RB channel · B back · ←→ move chrome'
+                  ? '←→ select  ·  A press  ·  LB/RB channel  ·  B back'
                   : canSeek
-                  ? '←→ buttons · ↑ scrubber · ←→ seek on bar · ↓ back · A · B'
-                  : 'A play/pause · B back · ←→ move chrome',
+                  ? '←→ select  ·  ↑ scrubber  ·  LB/RB ±10s  ·  B back'
+                  : '←→ select  ·  A press  ·  B back',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodySmall?.copyWith(color: Colors.white54),
             ),
-            if (perfLabel != null && perfLabel!.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text(
-                perfLabel!,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: Colors.lightGreenAccent.withValues(alpha: 0.85),
-                  fontFamily: 'monospace',
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-            if (decodeLabel != null && decodeLabel!.isNotEmpty) ...[
-              const SizedBox(height: 2),
-              Text(
-                decodeLabel!,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: Colors.white38,
-                  fontFamily: 'monospace',
-                ),
-              ),
-            ],
           ],
         ),
       ),
@@ -273,6 +244,160 @@ class PlayerChrome extends StatelessWidget {
           const Spacer(),
           RepaintBoundary(key: bottomBandKey, child: bottom),
         ],
+      ),
+    );
+  }
+
+  /// Transport buttons sit close together; settings and Back are grouped
+  /// apart from them.
+  static double _gapBefore(PlayerChromeFocus f) => switch (f) {
+    PlayerChromeFocus.subtitles || PlayerChromeFocus.back => 36,
+    _ => 16,
+  };
+
+  Widget _button(PlayerChromeFocus f) {
+    final (IconData icon, String label, bool large) = switch (f) {
+      PlayerChromeFocus.prevChannel => (
+        Icons.skip_previous_rounded,
+        'Prev ch',
+        false,
+      ),
+      PlayerChromeFocus.nextChannel => (
+        Icons.skip_next_rounded,
+        'Next ch',
+        false,
+      ),
+      PlayerChromeFocus.seekBack => (Icons.replay_10_rounded, '−10s', false),
+      PlayerChromeFocus.seekFwd => (Icons.forward_10_rounded, '+10s', false),
+      PlayerChromeFocus.playPause => (
+        _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+        _playing ? 'Pause' : 'Play',
+        true,
+      ),
+      PlayerChromeFocus.subtitles => (
+        (subtitleLabel ?? 'Off') == 'Off'
+            ? Icons.closed_caption_disabled_outlined
+            : Icons.closed_caption_rounded,
+        'CC · ${subtitleLabel ?? 'Off'}',
+        false,
+      ),
+      PlayerChromeFocus.audio => (
+        Icons.audiotrack_rounded,
+        audioLabel ?? 'Audio',
+        false,
+      ),
+      PlayerChromeFocus.favorite => (
+        favorite ? Icons.star_rounded : Icons.star_outline_rounded,
+        favorite ? 'Favourite' : 'Add fav',
+        false,
+      ),
+      PlayerChromeFocus.back => (
+        liveMode ? Icons.grid_view_rounded : Icons.arrow_back_rounded,
+        liveMode ? 'Guide' : 'Back',
+        false,
+      ),
+      PlayerChromeFocus.scrubber => (Icons.linear_scale, 'Seek', false),
+    };
+    return _ChromeIconButton(
+      animate: animate,
+      icon: icon,
+      label: label,
+      focused: focus == f,
+      large: large,
+      onTap: onAction == null ? null : () => onAction!(f),
+    );
+  }
+}
+
+/// Live programme: title, time range, progress, and what is next.
+class _ProgrammePanel extends StatelessWidget {
+  const _ProgrammePanel({required this.programme});
+
+  final ChromeProgramme? programme;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final p = programme;
+    if (p == null) {
+      return Text(
+        'No programme info',
+        style: theme.textTheme.titleMedium?.copyWith(color: Colors.white60),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            Expanded(
+              child: Text(
+                p.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.titleLarge?.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Text(
+              p.timeRange,
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: Colors.white70,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(3),
+          child: LinearProgressIndicator(
+            value: p.progress.clamp(0.0, 1.0),
+            minHeight: 5,
+            backgroundColor: Colors.white.withValues(alpha: 0.18),
+            valueColor: AlwaysStoppedAnimation(theme.colorScheme.primary),
+          ),
+        ),
+        if (p.next != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            p.next!,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodyLarge?.copyWith(color: Colors.white60),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _InfoChip extends StatelessWidget {
+  const _InfoChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.white38),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+          color: Colors.white70,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.6,
+        ),
       ),
     );
   }
@@ -411,46 +536,51 @@ class _ChromeIconButton extends StatelessWidget {
 
     return GestureDetector(
       onTap: onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          AnimatedContainer(
-            duration: animate
-                ? const Duration(milliseconds: 120)
-                : Duration.zero,
-            width: size,
-            height: size,
-            decoration: BoxDecoration(
-              color: bg,
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: focused
-                    ? theme.colorScheme.primaryContainer
-                    : Colors.white24,
-                width: focused ? 3 : 1.5,
-              ),
-              boxShadow: focused
-                  ? [
-                      BoxShadow(
-                        color: theme.colorScheme.primary.withValues(
-                          alpha: 0.45,
+      child: SizedBox(
+        width: 92,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AnimatedContainer(
+              duration: animate
+                  ? const Duration(milliseconds: 120)
+                  : Duration.zero,
+              width: size,
+              height: size,
+              decoration: BoxDecoration(
+                color: bg,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: focused
+                      ? theme.colorScheme.primaryContainer
+                      : Colors.white24,
+                  width: focused ? 3 : 1.5,
+                ),
+                boxShadow: focused
+                    ? [
+                        BoxShadow(
+                          color: theme.colorScheme.primary.withValues(
+                            alpha: 0.45,
+                          ),
+                          blurRadius: 16,
                         ),
-                        blurRadius: 16,
-                      ),
-                    ]
-                  : null,
+                      ]
+                    : null,
+              ),
+              child: Icon(icon, color: fg, size: iconSize),
             ),
-            child: Icon(icon, color: fg, size: iconSize),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            label,
-            style: theme.textTheme.labelMedium?.copyWith(
-              color: focused ? Colors.white : Colors.white60,
-              fontWeight: focused ? FontWeight.w700 : FontWeight.w500,
+            const SizedBox(height: 6),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: focused ? Colors.white : Colors.white60,
+                fontWeight: focused ? FontWeight.w700 : FontWeight.w500,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

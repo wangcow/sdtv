@@ -46,6 +46,36 @@ abstract class MpvBitmapOverlay {
   Future<Duration> length();
 
   Future<bool> paused();
+
+  /// Track labels and stream facts for the chrome (one round of IPC).
+  Future<HudStreamInfo> streamInfo();
+
+  Future<void> cycleSubtitles();
+
+  Future<void> cycleAudio();
+}
+
+/// What the chrome shows about the current stream.
+class HudStreamInfo {
+  const HudStreamInfo({
+    this.subtitles = 'Off',
+    this.audio = 'Audio',
+    this.height,
+    this.hardwareDecode = false,
+  });
+
+  final String subtitles;
+  final String audio;
+
+  /// Video height in pixels (e.g. 1080), if known.
+  final int? height;
+  final bool hardwareDecode;
+
+  /// e.g. `['1080p', 'HW']`
+  List<String> get chips => [
+    if (height != null && height! > 0) '${height}p',
+    if (hardwareDecode) 'HW',
+  ];
 }
 
 /// Talks to the running external mpv process.
@@ -111,6 +141,26 @@ class LauncherBitmapOverlay implements MpvBitmapOverlay {
 
   @override
   Future<bool> paused() => mpv.isPaused();
+
+  @override
+  Future<HudStreamInfo> streamInfo() async {
+    final sub = await mpv.subtitleLabel();
+    final aud = await mpv.audioLabel();
+    final h = await mpv.getProperty('height');
+    final hw = await mpv.getProperty('hwdec-current');
+    return HudStreamInfo(
+      subtitles: sub,
+      audio: aud,
+      height: h is num ? h.toInt() : null,
+      hardwareDecode: hw is String && hw.isNotEmpty && hw != 'no',
+    );
+  }
+
+  @override
+  Future<void> cycleSubtitles() => mpv.cycleSubtitleTrack();
+
+  @override
+  Future<void> cycleAudio() => mpv.cycleAudioTrack();
 }
 
 /// Rasterizes [PlayerChrome] and composites it on external mpv.
@@ -187,14 +237,126 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
         _duration < const Duration(hours: 12);
   }
 
+  /// Button row, left to right. Also the ←/→ focus order.
   List<PlayerChromeFocus> get _rowFocusOrder {
+    if (!_vod) {
+      return [
+        PlayerChromeFocus.prevChannel,
+        PlayerChromeFocus.playPause,
+        PlayerChromeFocus.nextChannel,
+        PlayerChromeFocus.subtitles,
+        PlayerChromeFocus.audio,
+        if (widget.session.nowPlaying != null) PlayerChromeFocus.favorite,
+        PlayerChromeFocus.back,
+      ];
+    }
     final seek = _canSeek;
     return [
       if (seek) PlayerChromeFocus.seekBack,
       PlayerChromeFocus.playPause,
       if (seek) PlayerChromeFocus.seekFwd,
+      PlayerChromeFocus.subtitles,
+      PlayerChromeFocus.audio,
       PlayerChromeFocus.back,
     ];
+  }
+
+  HudStreamInfo _info = const HudStreamInfo();
+  ChromeProgramme? _programme;
+
+  /// Channel the programme / info was fetched for (refetch after a zap).
+  String? _infoKey;
+  int _infoGen = 0;
+
+  String get _nowKey {
+    final s = widget.session;
+    return s.nowPlaying?.favoriteKey ??
+        s.nowPlayingEpisode?.progressKey ??
+        s.nowPlayingVod?.favoriteKey ??
+        '';
+  }
+
+  /// Track labels, resolution / HW chips, and the live programme.
+  Future<void> _refreshInfo() async {
+    final gen = ++_infoGen;
+    _infoKey = _nowKey;
+    final info = await _overlay.streamInfo();
+    final ch = widget.session.nowPlaying;
+    ChromeProgramme? programme;
+    if (!_vod && ch != null) {
+      final epg =
+          widget.session.cachedShortEpg(ch) ??
+          await widget.session.fetchShortEpg(ch);
+      final when = DateTime.now();
+      final now = epg?.nowAt(when);
+      final next = epg?.nextAt(when);
+      if (now != null) {
+        programme = ChromeProgramme(
+          title: now.title,
+          timeRange: now.timeRangeLabel(),
+          progress: now.progressAt(when),
+          next: next == null
+              ? null
+              : 'Next  ${next.startTimeLabel()}  ${next.title}',
+        );
+      }
+    }
+    if (!mounted || gen != _infoGen) return;
+    setState(() {
+      _info = info;
+      _programme = programme;
+    });
+    _scheduleCapture();
+  }
+
+  /// One press of a chrome button (A on the focused one, or a tap).
+  void _activate(PlayerChromeFocus f) {
+    switch (f) {
+      case PlayerChromeFocus.playPause:
+        unawaited(_toggle());
+      case PlayerChromeFocus.seekBack:
+        unawaited(widget.session.seekVodBy(const Duration(seconds: -10)));
+        unawaited(_refreshPosition());
+        _bumpHud();
+      case PlayerChromeFocus.seekFwd:
+        unawaited(widget.session.seekVodBy(const Duration(seconds: 10)));
+        unawaited(_refreshPosition());
+        _bumpHud();
+      case PlayerChromeFocus.prevChannel || PlayerChromeFocus.nextChannel:
+        _bumpHud();
+        unawaited(
+          widget.session.watchChannelAdjacent(
+            f == PlayerChromeFocus.nextChannel ? 1 : -1,
+          ),
+        );
+      case PlayerChromeFocus.subtitles:
+        _bumpHud();
+        unawaited(_overlay.cycleSubtitles().then((_) => _refreshInfo()));
+      case PlayerChromeFocus.audio:
+        _bumpHud();
+        unawaited(_overlay.cycleAudio().then((_) => _refreshInfo()));
+      case PlayerChromeFocus.favorite:
+        final ch = widget.session.nowPlaying;
+        if (ch != null) {
+          unawaited(
+            widget.session.toggleFavorite(ch).then((_) {
+              if (mounted) setState(() {});
+              _scheduleCapture();
+            }),
+          );
+        }
+        _bumpHud();
+      case PlayerChromeFocus.scrubber:
+        _bumpHud();
+      case PlayerChromeFocus.back:
+        unawaited(widget.session.watchQuit());
+    }
+  }
+
+  static String _clockLabel(DateTime t) {
+    final h = t.hour % 12 == 0 ? 12 : t.hour % 12;
+    final m = t.minute.toString().padLeft(2, '0');
+    return '$h:$m ${t.hour >= 12 ? 'PM' : 'AM'}';
   }
 
   @override
@@ -205,6 +367,7 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
     _props = _overlay.propertyChanges.listen(_onProperty);
     unawaited(_syncPause());
     if (_vod) unawaited(_refreshPosition());
+    unawaited(_refreshInfo());
     _bumpHud();
   }
 
@@ -271,6 +434,7 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
       _bumpHud();
       return;
     }
+    if (_nowKey != _infoKey) unawaited(_refreshInfo()); // zapped
     if (_showHud) {
       setState(() {});
       _scheduleCapture();
@@ -282,6 +446,7 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
     if (!_showHud) {
       _showHud = true;
       if (mounted) setState(() {});
+      unawaited(_refreshInfo());
     }
     if (!_paused) {
       _hideHudTimer = Timer(_hudHideAfter, () {
@@ -377,22 +542,7 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
       _bumpHud();
       return;
     }
-    switch (_focus) {
-      case PlayerChromeFocus.playPause:
-        unawaited(_toggle());
-      case PlayerChromeFocus.seekBack:
-        unawaited(widget.session.seekVodBy(const Duration(seconds: -10)));
-        unawaited(_refreshPosition());
-        _bumpHud();
-      case PlayerChromeFocus.seekFwd:
-        unawaited(widget.session.seekVodBy(const Duration(seconds: 10)));
-        unawaited(_refreshPosition());
-        _bumpHud();
-      case PlayerChromeFocus.scrubber:
-        _bumpHud();
-      case PlayerChromeFocus.back:
-        unawaited(widget.session.watchQuit());
-    }
+    _activate(_focus);
   }
 
   /// B while the HUD is up moves to Back. A second B (or B while hidden)
@@ -667,9 +817,6 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
     return _vod ? 'On-demand' : 'Live';
   }
 
-  String get _subtitle =>
-      _vod ? 'On-demand' : 'Live · LB/RB channel · ←→ chrome';
-
   SdtvPlayerState get _playerState =>
       _paused ? SdtvPlayerState.paused : SdtvPlayerState.playing;
 
@@ -693,6 +840,7 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
               ),
       );
     }
+    final ch = widget.session.nowPlaying;
     return SizedBox.expand(
       key: _rootKey,
       child: PlayerChrome(
@@ -700,7 +848,6 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
         bottomBandKey: _bottomBandKey,
         animate: false,
         title: _title,
-        subtitle: _subtitle,
         playerState: _playerState,
         position: _position,
         duration: _duration,
@@ -708,23 +855,14 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
         liveMode: !_vod,
         focus: _focus,
         showChrome: _showHud,
-        perfLabel: 'mpv · vo=gpu',
-        onPlayPause: () {
-          unawaited(_toggle());
-        },
-        onSeekBack: () {
-          unawaited(widget.session.seekVodBy(const Duration(seconds: -10)));
-          unawaited(_refreshPosition());
-          _bumpHud();
-        },
-        onSeekFwd: () {
-          unawaited(widget.session.seekVodBy(const Duration(seconds: 10)));
-          unawaited(_refreshPosition());
-          _bumpHud();
-        },
-        onBack: () {
-          unawaited(widget.session.watchQuit());
-        },
+        buttons: _rowFocusOrder,
+        favorite: ch != null && widget.session.isFavorite(ch),
+        programme: _programme,
+        subtitleLabel: _info.subtitles,
+        audioLabel: _info.audio,
+        infoChips: _info.chips,
+        clock: _clockLabel(DateTime.now()),
+        onAction: _activate,
         onScrub: _canSeek
             ? (v) {
                 final ms = (_duration.inMilliseconds * v).round();

@@ -73,6 +73,22 @@ class _FakeOverlay implements MpvBitmapOverlay {
 
   @override
   Future<bool> paused() async => false;
+
+  int subtitleCycles = 0;
+
+  @override
+  Future<HudStreamInfo> streamInfo() async => const HudStreamInfo(
+    subtitles: 'Off',
+    audio: 'English',
+    height: 1080,
+    hardwareDecode: true,
+  );
+
+  @override
+  Future<void> cycleSubtitles() async => subtitleCycles++;
+
+  @override
+  Future<void> cycleAudio() async {}
 }
 
 /// Reports a running mpv so watch menus open; every IPC call is a no-op.
@@ -131,8 +147,13 @@ void main() {
       await tester.pump();
     }
 
-    expect(find.text('Live · LB/RB channel · ←→ chrome'), findsOneWidget);
-    expect(find.text('mpv · vo=gpu'), findsOneWidget);
+    // TiviMate-style live row and stream facts.
+    for (final label in ['Prev ch', 'Pause', 'Next ch', 'CC · Off', 'Guide']) {
+      expect(find.text(label), findsOneWidget, reason: label);
+    }
+    expect(find.text('English'), findsOneWidget);
+    expect(find.text('1080p'), findsOneWidget);
+    expect(find.text('HW'), findsOneWidget);
     expect(fake.pushes, greaterThanOrEqualTo(2));
     final top = fake.bands[ExternalMpvLauncher.bitmapOverlayId]!;
     final bottom = fake.bands[ExternalMpvLauncher.bitmapOverlayIdBottom]!;
@@ -258,5 +279,44 @@ void main() {
     expect(menu.errorCode, isNotEmpty);
     expect([for (final r in menu.rows) r.id], ['retry', 'guide']);
     expect(menu.hint, contains('LB/RB'));
+  });
+
+  testWidgets('→ → from Play reaches Subtitles, and A cycles the track', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final settings = await SettingsStore.open();
+    final session = SessionController(settings: settings);
+    final fake = _FakeOverlay();
+    final key = GlobalKey<MpvFlutterHudState>();
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: sdtvDarkTheme,
+        home: Scaffold(
+          body: MpvFlutterHud(
+            key: key,
+            session: session,
+            overlay: fake,
+            capturePixelRatio: 1,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    key.currentState!
+      ..horizontal(1)
+      ..horizontal(1)
+      ..confirm();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    expect(fake.subtitleCycles, 1);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
   });
 }
