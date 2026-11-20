@@ -2,7 +2,6 @@
 library;
 
 const kEpgSlot = Duration(minutes: 30);
-const kEpgJump = Duration(hours: 2);
 const kEpgRowExtent = 60.0;
 
 /// Shared channel-name column. Header ticks and program cells must both

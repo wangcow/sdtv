@@ -909,8 +909,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
     if (!_acceptNav()) return;
+    // Guide grid: ← back to the categories, → does nothing. Time moves
+    // with LB/RB only, so ← never has to undo a → through the timeline.
     if (_isLive && _column == 1) {
-      _moveEpgProgram(delta);
+      if (delta < 0) _leaveEpgToCategories();
       return;
     }
     if (_isPosterGuide && _column == 1) {
@@ -982,7 +984,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     if (_isLive && _column == 1) {
       if (!_acceptNav()) return;
-      _shiftEpgWindow(delta < 0 ? -kEpgJump : kEpgJump);
+      _shiftEpgWindow(delta < 0 ? -kEpgSlot : kEpgSlot);
       return;
     }
     if (_column == 0) {
@@ -1448,56 +1450,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   DateTime get _epgFocusNow {
     final now = DateTime.now();
     return _epgFocusTime.isBefore(now) ? now : _epgFocusTime;
-  }
-
-  void _moveEpgProgram(int delta) {
-    final chans = session.channelsInCategory;
-    if (chans.isEmpty) {
-      if (delta < 0) _leaveEpgToCategories();
-      return;
-    }
-    final ch = chans[_chanIndex.clamp(0, chans.length - 1)];
-    final epg = session.cachedFullEpg(ch);
-    final listings = epg?.listings ?? const <EpgProgram>[];
-    if (listings.isEmpty) {
-      if (delta < 0) {
-        _leaveEpgToCategories();
-        return;
-      }
-      _shiftEpgWindow(kEpgSlot);
-      return;
-    }
-    final now = DateTime.now();
-    final i = epg!.indexForTime(_epgFocusNow);
-    // ← on what is airing now (or anything earlier) goes back to the
-    // categories instead of walking into the past.
-    if (delta < 0 && (i <= 0 || !listings[i].start.isAfter(now))) {
-      _leaveEpgToCategories();
-      return;
-    }
-    final next = (i + delta).clamp(0, listings.length - 1);
-    if (next == i) {
-      if (delta > 0) _shiftEpgWindow(kEpgSlot);
-      return;
-    }
-    final p = listings[next];
-    if (delta < 0 && !p.end.isAfter(now)) {
-      _leaveEpgToCategories();
-      return;
-    }
-    final t = p.isLiveAt(now) ? now : p.start.add(const Duration(minutes: 1));
-    setState(() {
-      _epgFocusTime = t;
-      _epgWindowStart = epgClampToNow(
-        epgEnsureVisible(
-          windowStart: _epgWindowNow,
-          windowLength: _epgWindowLength,
-          start: p.start,
-          end: p.end,
-        ),
-        now,
-      );
-    });
   }
 
   void _shiftEpgWindow(Duration delta) {
@@ -2707,9 +2659,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     if (_column == 1) {
       if (_epgAwayFromNow) {
-        return '↑↓ channels · ←→ programs · LB/RB time · A play · B now';
+        return '↑↓ channels · LB/RB ±30 min · A play · ← cats · B now';
       }
-      return '↑↓ channels · ←→ programs · LB/RB time · A play · B cats';
+      return '↑↓ channels · LB/RB ±30 min · A play · ← / B cats';
     }
     return '↑↓ cats · B top · → guide · X hide · ☰ Search';
   }

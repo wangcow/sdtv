@@ -8,7 +8,7 @@ Couch navigation is the core product requirement. Every screen must work with a 
 
 Top chips: **LIVE** · **MOVIES** · **TV SHOWS**. From the first category, **↑** focuses the chips · **←/→** switch · **↓** or **A** back to the list. Movies use Xtream `get_vod_*`; TV Shows use `get_series_*` (M3U has neither catalog). Demo uses a mock list + public HLS.
 
-**LIVE** right pane is the **TV Guide** (channel names + program timeline). It replaces the old channel list / now·next miniguide. **←** on the first program of a row returns to categories · **↑↓** channels · **→** next program · **A** plays the live channel. **B** jumps to now when the timeline is ahead of now; **B** again (already at now) returns to categories. **LB/RB** jump 2 hours · **G** also jumps the window to now.
+**LIVE** right pane is the **TV Guide** (channel names + program timeline). It replaces the old channel list / now·next miniguide. The guide shows now and later only. **↑↓** channels · **LB/RB** move the timeline 30 minutes (never before now) · **←** returns to categories · **→** does nothing · **A** plays the live channel. **B** jumps to now when the timeline is ahead of now; **B** again (already at now) returns to categories. **G** also jumps the window to now.
 
 Movies and TV Shows right panes are a **poster grid**. **←** on the first column of a row returns to categories · **↑↓** move by row · **→** stays in the row · **A** opens the **title landing page** (does not play) · **B** back to categories. A green check and a dimmed poster mean the movie (or every episode of the show) has been watched to the end. The poster under the cursor stays brighter. In-progress titles keep a resume bar and are not dimmed.
 
@@ -108,7 +108,7 @@ The Live tab **is** the EPG grid — not a separate overlay and not a channel li
 
 - Left: categories (including ★ Favorites). **→** / **A** enters the grid.
 - Right: channel column + program timeline. Bottom strip is the focused program (title, time, description).
-- **↑↓** channels · **←→** programs · **←** on the first program returns to categories · **LB/RB** jump 2 hours · **G** jump to now · **A** plays **live** · **B** now (if the timeline is ahead) then categories
+- **↑↓** channels · **LB/RB** ±30 minutes (never before now) · **←** returns to categories · **G** jump to now · **A** plays **live** · **B** now (if the timeline is ahead) then categories
 - A vertical line marks **now**. Demo/mock synthesizes a day’s listings. Real Xtream uses `get_simple_data_table` (falls back to `get_short_epg`). **M3U** has no panel EPG — channel names only.
 - Selecting a past or future program still plays **live** (no catch-up in this phase)
 
