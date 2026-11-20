@@ -191,6 +191,20 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
           k == LogicalKeyboardKey.select) {
         return KeyEventResult.handled;
       }
+      // Physical keyboard ↓ leaves the query for the result list (↑ on the
+      // first hit comes back). The pad's D-pad never arrives here as a key,
+      // so on-screen-keyboard letter picking is unaffected; a key Steam
+      // injects right after pad input is ignored too.
+      if (k == LogicalKeyboardKey.arrowDown) {
+        final pad = SdtvJoystickHub.instance.lastEdgeAt;
+        final fromPad =
+            pad != null &&
+            DateTime.now().difference(pad) < const Duration(milliseconds: 300);
+        if (!fromPad && _searchCtrl.text.trim().isNotEmpty) {
+          _enterSearchResults();
+          return KeyEventResult.handled;
+        }
+      }
       return KeyEventResult.ignored;
     };
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -3307,7 +3321,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             Expanded(
                               child: _searchCtrl.text.trim().isEmpty
                                   ? Text(
-                                      'Type with OSK · B to list · A jumps there · B close',
+                                      'Type · ↓ or B to the list · A jumps there · B close',
                                       style: theme.textTheme.bodyLarge,
                                     )
                                   : _searchHits.isEmpty
@@ -3357,7 +3371,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             Text(
                               _searchBrowseResults
                                   ? '↑ search box · A jump · B close'
-                                  : 'Steam+X OSK · B to list · A jump · B close',
+                                  : 'Steam+X OSK · ↓ or B to the list · A jump · B close',
                               style: theme.textTheme.bodySmall?.copyWith(
                                 color: theme.colorScheme.outline,
                               ),

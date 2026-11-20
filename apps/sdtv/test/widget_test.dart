@@ -145,6 +145,31 @@ void main() {
     await _pumpFor(tester, const Duration(seconds: 6));
   });
 
+  testWidgets('keyboard ↓ in the search box moves into the results', (
+    tester,
+  ) async {
+    await _useWideSurface(tester);
+    await _pumpDemo(tester);
+    await _pumpUntil(tester, find.text('Entertainment'));
+
+    _invoke(tester, find.text('CATEGORIES'), const SdtvSearchIntent());
+    await _pumpUntil(tester, find.byType(TextField));
+    await tester.enterText(find.byType(TextField), 'mock');
+    await _pumpFor(tester, const Duration(milliseconds: 600));
+    const listHint = '↑ search box · A jump · B close';
+    expect(find.text(listHint), findsNothing);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(find.text(listHint), findsOneWidget);
+
+    // Further ↓ moves through the list instead of bouncing back.
+    await _pastActivateCooldown(tester);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(find.text(listHint), findsOneWidget);
+  });
+
   testWidgets('menu has no Flutter chrome entry', (tester) async {
     await _useWideSurface(tester);
     final session = await _pumpDemo(tester, mpv: _RecordingMpv());
