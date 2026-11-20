@@ -10,6 +10,64 @@ import 'mpv_ipc.dart';
 import 'osd_chrome.dart';
 import 'play_error.dart';
 
+/// mpv key bindings while sdtv plays. Keys go back to sdtv as
+/// `script-message sdtv-key <action>` so the keyboard drives the same HUD,
+/// menus and channel list as the gamepad. mpv acts on none of them itself.
+///
+/// The gamepad is read by sdtv (`/dev/input/js*`), so mpv's own gamepad
+/// input is ignored. On the Deck, Steam also injects Esc for B; sdtv drops a
+/// forwarded key that lands right after a pad event.
+const mpvInputConf = '''
+# Navigation (same actions as the D-pad / A / B)
+LEFT script-message sdtv-key left
+RIGHT script-message sdtv-key right
+UP script-message sdtv-key up
+DOWN script-message sdtv-key down
+ENTER script-message sdtv-key confirm
+KP_ENTER script-message sdtv-key confirm
+ESC script-message sdtv-key back
+BS script-message sdtv-key back
+# Playback
+SPACE script-message sdtv-key playpause
+p script-message sdtv-key playpause
+PLAYPAUSE script-message sdtv-key playpause
+m script-message sdtv-key mute
+MUTE script-message sdtv-key mute
+f script-message sdtv-key favorite
+# Channel / seek (same as LB / RB)
+PGUP script-message sdtv-key page-up
+PGDWN script-message sdtv-key page-down
+PREV script-message sdtv-key page-up
+NEXT script-message sdtv-key page-down
+PLAYLIST_PREV script-message sdtv-key page-up
+PLAYLIST_NEXT script-message sdtv-key page-down
+< script-message sdtv-key page-up
+> script-message sdtv-key page-down
+n script-message sdtv-key page-down
+# Menu (subs / audio / mute) and quit to the guide
+TAB script-message sdtv-key menu
+MENU script-message sdtv-key menu
+q script-message sdtv-key quit
+Q script-message sdtv-key quit
+MOUSE_BTN2 script-message sdtv-key quit
+# Volume keys mpv can apply directly (no sdtv state behind them)
+VOLUME_UP add volume 5
+VOLUME_DOWN add volume -5
+# Gamepad is read by sdtv. Ignore mpv's copy so nothing fires twice.
+GAMEPAD_ACTION_DOWN ignore
+GAMEPAD_ACTION_RIGHT ignore
+GAMEPAD_ACTION_EAST ignore
+GAMEPAD_BACK ignore
+GAMEPAD_DPAD_UP ignore
+GAMEPAD_DPAD_DOWN ignore
+GAMEPAD_DPAD_LEFT ignore
+GAMEPAD_DPAD_RIGHT ignore
+GAMEPAD_SHOULDER_L ignore
+GAMEPAD_SHOULDER_R ignore
+GAMEPAD_START ignore
+GAMEPAD_GUIDE ignore
+''';
+
 /// Result of a fullscreen external [mpv] session.
 class ExternalMpvResult {
   const ExternalMpvResult({
@@ -126,6 +184,14 @@ class ExternalMpvLauncher {
   final Map<String, Object?> _observed = {};
   final StreamController<({String name, Object? value})> _propertyChanges =
       StreamController<({String name, Object? value})>.broadcast();
+
+  final StreamController<String> _keyPresses =
+      StreamController<String>.broadcast();
+
+  /// Keyboard actions pressed in the mpv window (see [mpvInputConf]):
+  /// `left`, `right`, `up`, `down`, `confirm`, `back`, `playpause`,
+  /// `page-up`, `page-down`, `menu`, `mute`, `favorite`, `quit`.
+  Stream<String> get keyPresses => _keyPresses.stream;
 
   /// Fires when an observed property changes (see [observedProperties]).
   Stream<({String name, Object? value})> get propertyChanges =>
@@ -517,14 +583,27 @@ class ExternalMpvLauncher {
     }
     _conn = c;
     _connPath = path;
-    c.events.listen(_onMpvEvent);
+    c.events.listen(handleMpvEvent);
     for (var i = 0; i < observedProperties.length; i++) {
       unawaited(c.request(['observe_property', i + 1, observedProperties[i]]));
     }
     return c;
   }
 
-  void _onMpvEvent(Map<String, dynamic> event) {
+  /// An event from mpv's IPC socket. Public for tests.
+  @visibleForTesting
+  void handleMpvEvent(Map<String, dynamic> event) {
+    if (event['event'] == 'client-message') {
+      final args = event['args'];
+      if (args is List &&
+          args.length >= 2 &&
+          args[0] == 'sdtv-key' &&
+          args[1] is String &&
+          !_keyPresses.isClosed) {
+        _keyPresses.add(args[1] as String);
+      }
+      return;
+    }
     if (event['event'] != 'property-change') return;
     final name = event['name'];
     if (name is! String) return;
@@ -1470,44 +1549,7 @@ class ExternalMpvLauncher {
 
       confDir = await Directory.systemTemp.createTemp('sdtv_mpv_');
       final confFile = File('${confDir.path}/input.conf');
-      await confFile.writeAsString('''
-# sdtv — Flutter owns B / Esc (js*). Steam injects Esc + gamepad East for B;
-# if those quit here, VOD dumps to the title before progress is saved.
-ESC ignore
-BS ignore
-GAMEPAD_ACTION_EAST ignore
-GAMEPAD_ACTION_RIGHT ignore
-GAMEPAD_BACK ignore
-q quit
-Q quit
-MOUSE_BTN2 quit
-# Pause (lua script also forces OSC on pause)
-SPACE cycle pause
-p cycle pause
-# Volume (keyboard / when mpv has focus) — bar OSD
-UP osd-msg-bar add volume 5
-DOWN osd-msg-bar add volume -5
-m osd-msg cycle mute
-# Channel zap within session playlist (force restarts live entries)
-PGUP playlist-prev force
-PGDWN playlist-next force
-PLAYLIST_PREV playlist-prev force
-PLAYLIST_NEXT playlist-next force
-< playlist-prev force
-> playlist-next force
-n playlist-next force
-# Gamepad is read by Flutter (js*). Ignore it here so A / d-pad are not
-# applied twice (pause + chrome confirm, or zap + focus move).
-GAMEPAD_ACTION_DOWN ignore
-GAMEPAD_DPAD_UP ignore
-GAMEPAD_DPAD_DOWN ignore
-GAMEPAD_DPAD_LEFT ignore
-GAMEPAD_DPAD_RIGHT ignore
-GAMEPAD_SHOULDER_L playlist-prev force
-GAMEPAD_SHOULDER_R playlist-next force
-GAMEPAD_START ignore
-GAMEPAD_GUIDE ignore
-''');
+      await confFile.writeAsString(mpvInputConf);
 
       // Intentionally no "force OSC on pause" script: OSC seek on live
       // rewinds the demuxer cache (old segment / wrong program audio).

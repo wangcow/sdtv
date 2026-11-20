@@ -79,7 +79,7 @@ Selecting a channel **starts fullscreen `mpv`**, then returns to the TV Guide wh
   - **LB / RB** — previous / next channel (same list / favorites), or ±10s on a movie or episode
   - **↑ / ↓** while the HUD is hidden — volume · **X** / **M** — mute
   - **☰** — subs / audio / mute text menu
-  - Keyboard (desktop / when mpv has focus): Esc quit, Space pause, PgUp/PgDn channel, arrows volume
+  - Keyboard (PC, mpv has focus): same as the pad — arrows, Enter = A, Esc = B, Space pause, PgUp/PgDn channel, Tab menu, Q quit. See [CONTROLLER.md](CONTROLLER.md#keyboard-while-playing-pc)
 - If mpv fails to start, the error snack names the problem.
 - Override: create `~/sdtv/sdtv.env` with one of:
   ```bash

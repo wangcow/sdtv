@@ -39,6 +39,24 @@ While a movie or episode is playing, the Flutter HUD is on the video. **←/→*
 
 On the **category column** (Live, Movies, and TV Shows): **B** jumps to the top of the list. **B** again (already at the top) opens the in-page menu (Search, Switch playlist, …). **☰ Start** still opens that menu immediately. From the Live guide, **B** snaps to now if you have moved forward in time, then **B** returns to categories. From the poster column, **B** returns to categories.
 
+### Keyboard while playing (PC)
+
+The mpv window has keyboard focus while a stream plays. Its keys are sent back to sdtv over IPC (`script-message sdtv-key …`), so they drive the same HUD, menus and channel list as the pad. mpv acts on none of them itself.
+
+| Key | Same as | Does |
+|-----|---------|------|
+| ← → ↑ ↓ | D-pad | Move HUD focus / menu rows / scrubber (↑↓ zap live when the HUD is hidden) |
+| Enter | A | Press the focused HUD button or menu row |
+| Esc / Backspace | B | Back (HUD → Back button → guide; closes menus) |
+| Space / P | — | Play / pause |
+| PgUp / PgDn, `<` `>`, `n` | LB / RB | Previous / next channel, or ±10 s on a movie |
+| Tab | ☰ | Subs / audio / mute menu |
+| M | X | Mute |
+| F | Y | Favourite the live channel |
+| Q | — | Quit to the guide (movie position is saved) |
+
+On the Deck, Steam can inject a key (Esc for B) alongside a pad press. sdtv ignores a forwarded key that arrives within 300 ms of pad input, so nothing fires twice.
+
 ### Favorites
 
 - **Live:** **Y** (or **F**) stars the focused channel. Y again asks **Keep / Remove**. While a *live* channel is playing, Y still stars that channel.

@@ -135,7 +135,13 @@ class SdtvJoystickHub {
     unawaited(_hotplugFallback());
   }
 
+  /// When the last pad event arrived. Lets keyboard input forwarded from mpv
+  /// skip keys Steam injects for the same press (B also sends Esc on Deck).
+  DateTime? get lastEdgeAt => _lastEdgeAt;
+  DateTime? _lastEdgeAt;
+
   void _deliver(GamepadEdge edge) {
+    _lastEdgeAt = DateTime.now();
     if (_listeners.isEmpty) return;
     // Touch priority — do not wait behind video raster work.
     SchedulerBinding.instance.scheduleTask(() {

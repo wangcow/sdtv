@@ -174,6 +174,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   void initState() {
     super.initState();
     session.addListener(_onSession);
+    _mpvKeys = session.externalMpv.keyPresses.listen(_onMpvKey);
     _searchCtrl.addListener(_onSearchQueryChanged);
     SdtvTextFocusRegistry.register(_searchFocus);
     _searchFocus.onKeyEvent = (node, event) {
@@ -285,6 +286,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   @override
   void dispose() {
+    unawaited(_mpvKeys?.cancel());
     session.removeListener(_onSession);
     _searchCtrl.removeListener(_onSearchQueryChanged);
     SdtvTextFocusRegistry.unregister(_searchFocus);
@@ -998,6 +1000,49 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   DateTime? _lastActivateAt;
+
+  StreamSubscription<String>? _mpvKeys;
+
+  /// A key pressed while the mpv window has focus (PC keyboard). Routed to
+  /// the same handlers as the gamepad, so HUD, menus and zapping match.
+  void _onMpvKey(String key) {
+    if (!mounted || !session.isWatchingExternal) return;
+    // Deck: Steam also injects a key (Esc for B, Enter for A) for a pad
+    // press the pad reader already handled. Skip keys right after pad input.
+    final pad = SdtvJoystickHub.instance.lastEdgeAt;
+    if (pad != null &&
+        DateTime.now().difference(pad) < const Duration(milliseconds: 300)) {
+      return;
+    }
+    switch (key) {
+      case 'left':
+        _moveHorizontal(-1);
+      case 'right':
+        _moveHorizontal(1);
+      case 'up':
+        _moveVertical(-1);
+      case 'down':
+        _moveVertical(1);
+      case 'confirm':
+        unawaited(_activate());
+      case 'back':
+        _onBack();
+      case 'page-up':
+        _onPage(-1);
+      case 'page-down':
+        _onPage(1);
+      case 'menu':
+        _openMenu();
+      case 'mute':
+        unawaited(session.watchCycleMute());
+      case 'favorite':
+        unawaited(_toggleFavorite());
+      case 'playpause':
+        _mpvHudKey.currentState?.togglePause();
+      case 'quit':
+        unawaited(session.watchQuit());
+    }
+  }
 
   Future<void> _activate() async {
     // Belt-and-suspenders vs dual js+Enter on Deck.

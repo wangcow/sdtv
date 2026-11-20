@@ -127,6 +127,24 @@ void main() {
     expect(mpv.plays, hasLength(2));
   });
 
+  testWidgets('keys pressed in the mpv window drive sdtv', (tester) async {
+    await _useWideSurface(tester);
+    final mpv = _WatchingMpv();
+    final session = await _pumpDemo(tester, mpv: mpv);
+    expect(session.isWatchingExternal, isTrue);
+
+    mpv.handleMpvEvent({
+      'event': 'client-message',
+      'args': ['sdtv-key', 'quit'],
+    });
+    await tester.pump();
+    await _pumpUntilIdle(tester, () => mpv.quits > 0);
+    expect(mpv.quits, 1);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await _pumpFor(tester, const Duration(seconds: 6));
+  });
+
   testWidgets('menu has no Flutter chrome entry', (tester) async {
     await _useWideSurface(tester);
     final session = await _pumpDemo(tester, mpv: _RecordingMpv());
@@ -225,6 +243,17 @@ Future<void> _pumpUntil(WidgetTester tester, Finder finder) async {
     if (finder.evaluate().isNotEmpty) return;
   }
   expect(finder, findsWidgets);
+}
+
+/// Reports a running mpv (so the page is in watch mode) without a process.
+class _WatchingMpv extends ExternalMpvLauncher {
+  int quits = 0;
+
+  @override
+  bool get isRunning => true;
+
+  @override
+  Future<void> quit() async => quits++;
 }
 
 /// Records plays instead of spawning mpv, and reports an immediate user quit.

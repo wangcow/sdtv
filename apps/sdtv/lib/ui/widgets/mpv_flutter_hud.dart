@@ -632,6 +632,12 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
     _scheduleCapture();
   }
 
+  /// Space / P on a keyboard: pause or resume, and show the HUD.
+  void togglePause() {
+    if (widget.session.isWatchMenuActive) return;
+    unawaited(_toggle());
+  }
+
   Future<void> _toggle() async {
     final nextPaused = !_paused;
     setState(() => _paused = nextPaused);
