@@ -11,6 +11,7 @@ enum GuideSearchSection { live, movies, series }
 enum GuideSearchKind {
   category,
   channel,
+
   /// Future: program title / description from EPG.
   epg,
   vod,
@@ -67,21 +68,37 @@ class GuideSearchHit {
 class GuideSearch {
   GuideSearch._();
 
+  static final _wordSplit = RegExp(r'[\s\-_/|]+');
+  static final _space = RegExp(r'\s+');
+
   /// Match score: 0 = no match; higher is better.
   static int scoreText(String query, String text) {
     final q = query.trim().toLowerCase();
     if (q.isEmpty) return 0;
     final t = text.toLowerCase();
+    return _score(q, _tokens(q), t, t.split(_wordSplit));
+  }
+
+  static List<String> _tokens(String q) =>
+      q.split(_space).where((s) => s.isNotEmpty).toList();
+
+  /// [scoreText] on prepared input: [q] and [t] lowercased, [words] = [t]
+  /// split on separators.
+  static int _score(
+    String q,
+    List<String> qTokens,
+    String t,
+    List<String> words,
+  ) {
     if (t == q) return 100;
     if (t.startsWith(q)) return 80;
     // Word-prefix (e.g. "espn" in "USA ESPN HD")
-    for (final part in t.split(RegExp(r'[\s\-_/|]+'))) {
+    for (final part in words) {
       if (part.startsWith(q)) return 60;
     }
     if (t.contains(q)) return 40;
-    // Loose: all query tokens present
-    final tokens = q.split(RegExp(r'\s+')).where((s) => s.isNotEmpty);
-    if (tokens.every(t.contains)) return 25;
+    // Loose: all query tokens present (one token = the contains above).
+    if (qTokens.length > 1 && qTokens.every(t.contains)) return 25;
     return 0;
   }
 
@@ -89,10 +106,10 @@ class GuideSearch {
   /// when given. Movie and TV show categories still match.
   ///
   /// Hidden groups still surface their titles (marked) so a favorited show in
-  /// a hidden list remains findable. [favoriteKeys] get a score boost (live
-  /// channels).
+  /// a hidden list remains findable. [favoriteKeys] get a score boost.
   ///
-  /// [maxResults] caps list length for huge catalogs.
+  /// [maxResults] caps list length for huge catalogs. For repeated searches
+  /// over one catalog, build a [GuideSearchIndex] once and reuse it.
   static List<GuideSearchHit> search({
     required String query,
     required List<({String id, String name})> categories,
@@ -105,153 +122,323 @@ class GuideSearch {
     Set<String> favoriteKeys = const {},
     int maxResults = 120,
   }) {
-    final q = query.trim();
+    if (query.trim().isEmpty) return const [];
+    return GuideSearchIndex(
+      categories: categories,
+      channels: channels,
+      vodCategories: vodCategories,
+      vodItems: vodItems,
+      seriesCategories: seriesCategories,
+      seriesItems: seriesItems,
+    ).search(
+      query,
+      hiddenCategoryIds: hiddenCategoryIds,
+      favoriteKeys: favoriteKeys,
+      maxResults: maxResults,
+    );
+  }
+}
+
+/// One searchable title, prepared once per catalog.
+class _Doc {
+  _Doc({
+    required this.kind,
+    required this.index,
+    required this.lower,
+    required this.words,
+    required this.categoryId,
+    required this.favoriteKey,
+    required this.sortTitle,
+  });
+
+  final GuideSearchKind kind;
+
+  /// Position in the source list for that kind.
+  final int index;
+  final String lower;
+  final List<String> words;
+  final String categoryId;
+  final String favoriteKey;
+
+  /// Lowercased display title, the final tie-breaker.
+  final String sortTitle;
+}
+
+/// A scored match before it is turned into a [GuideSearchHit].
+class _Match {
+  const _Match(this.score, this.doc);
+
+  final int score;
+  final _Doc doc;
+}
+
+/// [GuideSearch] over one catalog, with names lowercased and split once.
+///
+/// Searching 100k titles per keystroke used to redo that work (and a regex
+/// compile) for every title, then build a hit for every match and sort them
+/// all. This keeps per-keystroke work to string checks, and only the
+/// [maxResults] hits that are shown get built.
+class GuideSearchIndex {
+  GuideSearchIndex({
+    required this.categories,
+    required this.channels,
+    this.vodCategories = const [],
+    this.vodItems = const [],
+    this.seriesCategories = const [],
+    this.seriesItems = const [],
+  }) {
+    for (var i = 0; i < channels.length; i++) {
+      final ch = channels[i];
+      final numPrefix = ch.num > 0 ? '${ch.num}. ' : '';
+      _docs.add(
+        _doc(
+          GuideSearchKind.channel,
+          i,
+          ch.name,
+          ch.categoryId,
+          ch.favoriteKey,
+          '$numPrefix${ch.name}',
+        ),
+      );
+    }
+    for (var i = 0; i < vodItems.length; i++) {
+      final v = vodItems[i];
+      _docs.add(
+        _doc(
+          GuideSearchKind.vod,
+          i,
+          v.name,
+          v.categoryId,
+          v.favoriteKey,
+          v.name,
+        ),
+      );
+    }
+    for (var i = 0; i < seriesItems.length; i++) {
+      final s = seriesItems[i];
+      _docs.add(
+        _doc(
+          GuideSearchKind.series,
+          i,
+          s.name,
+          s.categoryId,
+          s.favoriteKey,
+          s.name,
+        ),
+      );
+    }
+  }
+
+  final List<({String id, String name})> categories;
+  final List<LiveChannel> channels;
+  final List<({String id, String name})> vodCategories;
+  final List<VodItem> vodItems;
+  final List<({String id, String name})> seriesCategories;
+  final List<SeriesItem> seriesItems;
+
+  final List<_Doc> _docs = [];
+
+  // Category id → name. A duplicate id keeps the last name, as before.
+  late final Map<String, String> _liveCatNames = {
+    for (final c in categories) c.id: c.name,
+  };
+  late final Map<String, String> _vodCatNames = {
+    for (final c in vodCategories) c.id: c.name,
+  };
+  late final Map<String, String> _seriesCatNames = {
+    for (final c in seriesCategories) c.id: c.name,
+  };
+
+  static _Doc _doc(
+    GuideSearchKind kind,
+    int index,
+    String name,
+    String categoryId,
+    String favoriteKey,
+    String title,
+  ) {
+    final lower = name.toLowerCase();
+    return _Doc(
+      kind: kind,
+      index: index,
+      lower: lower,
+      words: lower.split(GuideSearch._wordSplit),
+      categoryId: categoryId,
+      favoriteKey: favoriteKey,
+      sortTitle: title.toLowerCase(),
+    );
+  }
+
+  static int _scoreName(String q, List<String> qTokens, String name) {
+    if (name.isEmpty) return 0;
+    final t = name.toLowerCase();
+    return GuideSearch._score(q, qTokens, t, t.split(GuideSearch._wordSplit));
+  }
+
+  List<GuideSearchHit> search(
+    String query, {
+    Set<String> hiddenCategoryIds = const {},
+    Set<String> favoriteKeys = const {},
+    int maxResults = 120,
+  }) {
+    final q = query.trim().toLowerCase();
     if (q.isEmpty) return const [];
+    final qTokens = GuideSearch._tokens(q);
 
-    final catNameById = <String, String>{
-      for (final c in categories) c.id: c.name,
+    // Category names score once per query (half weight when an item only
+    // matches through its category).
+    Map<String, int> halfScores(Map<String, String> names) => {
+      for (final e in names.entries)
+        e.key: _scoreName(q, qTokens, e.value) ~/ 2,
     };
+    final liveCat = halfScores(_liveCatNames);
+    final vodCat = halfScores(_vodCatNames);
+    final seriesCat = halfScores(_seriesCatNames);
 
-    final hits = <GuideSearchHit>[];
-
-    for (final ch in channels) {
-      final hidden = hiddenCategoryIds.contains(ch.categoryId);
-      final sName = scoreText(q, ch.name);
-      final catName = catNameById[ch.categoryId] ?? '';
-      final sCat = catName.isEmpty ? 0 : (scoreText(q, catName) ~/ 2);
+    final matches = <_Match>[];
+    for (final d in _docs) {
+      final sName = GuideSearch._score(q, qTokens, d.lower, d.words);
+      final cats = switch (d.kind) {
+        GuideSearchKind.channel => liveCat,
+        GuideSearchKind.vod => vodCat,
+        _ => seriesCat,
+      };
+      final sCat = cats[d.categoryId] ?? 0;
       var s = sName >= sCat ? sName : sCat;
       if (s <= 0) continue;
-      if (favoriteKeys.contains(ch.favoriteKey)) {
-        s += 15; // boost ★ so favorited channels stay easy to re-find
+      if (favoriteKeys.contains(d.favoriteKey)) s += 15;
+      matches.add(_Match(s, d));
+    }
+
+    final categoryHits = <GuideSearchHit>[
+      for (final c in vodCategories)
+        if (_scoreName(q, qTokens, c.name) case final s when s > 0)
+          GuideSearchHit(
+            kind: GuideSearchKind.category,
+            section: GuideSearchSection.movies,
+            title: c.name,
+            subtitle: hiddenCategoryIds.contains(c.id)
+                ? 'Movies · hidden'
+                : 'Movies',
+            categoryId: c.id,
+            categoryName: c.name,
+            score: s + 5,
+          ),
+      for (final c in seriesCategories)
+        if (_scoreName(q, qTokens, c.name) case final s when s > 0)
+          GuideSearchHit(
+            kind: GuideSearchKind.category,
+            section: GuideSearchSection.series,
+            title: c.name,
+            subtitle: hiddenCategoryIds.contains(c.id)
+                ? 'TV Shows · hidden'
+                : 'TV Shows',
+            categoryId: c.id,
+            categoryName: c.name,
+            score: s + 5,
+          ),
+    ];
+
+    // Same order as before: score, then kind, then title. Scores take few
+    // values, so walk them from the top and sort only the buckets shown.
+    final byScore = <int, List<Object>>{};
+    for (final m in matches) {
+      (byScore[m.score] ??= []).add(m);
+    }
+    for (final h in categoryHits) {
+      (byScore[h.score] ??= []).add(h);
+    }
+    final scores = byScore.keys.toList()..sort((a, b) => b.compareTo(a));
+
+    final out = <GuideSearchHit>[];
+    for (final score in scores) {
+      if (out.length >= maxResults) break;
+      final bucket = byScore[score]!;
+      bucket.sort((a, b) {
+        final byKind = _kindOf(a).index.compareTo(_kindOf(b).index);
+        if (byKind != 0) return byKind;
+        return _sortTitleOf(a).compareTo(_sortTitleOf(b));
+      });
+      for (final e in bucket) {
+        if (out.length >= maxResults) break;
+        out.add(
+          e is GuideSearchHit
+              ? e
+              : _hit(e as _Match, hiddenCategoryIds, favoriteKeys),
+        );
       }
-      final numPrefix = ch.num > 0 ? '${ch.num}. ' : '';
-      final bits = <String>[
-        if (catName.isNotEmpty) catName else 'Channel',
-        if (hidden) 'hidden',
-        if (favoriteKeys.contains(ch.favoriteKey)) '★',
-      ];
-      hits.add(
-        GuideSearchHit(
+    }
+    return out;
+  }
+
+  static GuideSearchKind _kindOf(Object e) =>
+      e is GuideSearchHit ? e.kind : (e as _Match).doc.kind;
+
+  static String _sortTitleOf(Object e) =>
+      e is GuideSearchHit ? e.title.toLowerCase() : (e as _Match).doc.sortTitle;
+
+  GuideSearchHit _hit(
+    _Match m,
+    Set<String> hiddenCategoryIds,
+    Set<String> favoriteKeys,
+  ) {
+    final d = m.doc;
+    final hidden = hiddenCategoryIds.contains(d.categoryId);
+    final fav = favoriteKeys.contains(d.favoriteKey);
+    switch (d.kind) {
+      case GuideSearchKind.channel:
+        final ch = channels[d.index];
+        final catName = _liveCatNames[ch.categoryId] ?? '';
+        final numPrefix = ch.num > 0 ? '${ch.num}. ' : '';
+        return GuideSearchHit(
           kind: GuideSearchKind.channel,
           title: '$numPrefix${ch.name}',
-          subtitle: bits.join(' · '),
+          subtitle: [
+            if (catName.isNotEmpty) catName else 'Channel',
+            if (hidden) 'hidden',
+            if (fav) '★',
+          ].join(' · '),
           categoryId: ch.categoryId,
           categoryName: catName.isEmpty ? null : catName,
           channel: ch,
-          score: s,
-        ),
-      );
-    }
-
-    final vodNameById = <String, String>{
-      for (final c in vodCategories) c.id: c.name,
-    };
-    for (final c in vodCategories) {
-      final hidden = hiddenCategoryIds.contains(c.id);
-      final s = scoreText(q, c.name);
-      if (s <= 0) continue;
-      hits.add(
-        GuideSearchHit(
-          kind: GuideSearchKind.category,
-          section: GuideSearchSection.movies,
-          title: c.name,
-          subtitle: hidden ? 'Movies · hidden' : 'Movies',
-          categoryId: c.id,
-          categoryName: c.name,
-          score: s + 5,
-        ),
-      );
-    }
-    for (final v in vodItems) {
-      final hidden = hiddenCategoryIds.contains(v.categoryId);
-      final catName = vodNameById[v.categoryId] ?? '';
-      final sName = scoreText(q, v.name);
-      final sCat = catName.isEmpty ? 0 : (scoreText(q, catName) ~/ 2);
-      var s = sName >= sCat ? sName : sCat;
-      if (s <= 0) continue;
-      if (favoriteKeys.contains(v.favoriteKey)) {
-        s += 15;
-      }
-      final bits = <String>[
-        'Movie',
-        if (catName.isNotEmpty) catName,
-        if (hidden) 'hidden',
-        if (favoriteKeys.contains(v.favoriteKey)) '★',
-      ];
-      hits.add(
-        GuideSearchHit(
+          score: m.score,
+        );
+      case GuideSearchKind.vod:
+        final v = vodItems[d.index];
+        final catName = _vodCatNames[v.categoryId] ?? '';
+        return GuideSearchHit(
           kind: GuideSearchKind.vod,
           section: GuideSearchSection.movies,
           title: v.name,
-          subtitle: bits.join(' · '),
+          subtitle: [
+            'Movie',
+            if (catName.isNotEmpty) catName,
+            if (hidden) 'hidden',
+            if (fav) '★',
+          ].join(' · '),
           categoryId: v.categoryId,
           categoryName: catName.isEmpty ? null : catName,
           vod: v,
-          score: s,
-        ),
-      );
-    }
-
-    final seriesNameById = <String, String>{
-      for (final c in seriesCategories) c.id: c.name,
-    };
-    for (final c in seriesCategories) {
-      final hidden = hiddenCategoryIds.contains(c.id);
-      final s = scoreText(q, c.name);
-      if (s <= 0) continue;
-      hits.add(
-        GuideSearchHit(
-          kind: GuideSearchKind.category,
-          section: GuideSearchSection.series,
-          title: c.name,
-          subtitle: hidden ? 'TV Shows · hidden' : 'TV Shows',
-          categoryId: c.id,
-          categoryName: c.name,
-          score: s + 5,
-        ),
-      );
-    }
-    for (final show in seriesItems) {
-      final hidden = hiddenCategoryIds.contains(show.categoryId);
-      final catName = seriesNameById[show.categoryId] ?? '';
-      final sName = scoreText(q, show.name);
-      final sCat = catName.isEmpty ? 0 : (scoreText(q, catName) ~/ 2);
-      var s = sName >= sCat ? sName : sCat;
-      if (s <= 0) continue;
-      if (favoriteKeys.contains(show.favoriteKey)) {
-        s += 15;
-      }
-      final bits = <String>[
-        'TV Show',
-        if (catName.isNotEmpty) catName,
-        if (hidden) 'hidden',
-        if (favoriteKeys.contains(show.favoriteKey)) '★',
-      ];
-      hits.add(
-        GuideSearchHit(
+          score: m.score,
+        );
+      default:
+        final show = seriesItems[d.index];
+        final catName = _seriesCatNames[show.categoryId] ?? '';
+        return GuideSearchHit(
           kind: GuideSearchKind.series,
           section: GuideSearchSection.series,
           title: show.name,
-          subtitle: bits.join(' · '),
+          subtitle: [
+            'TV Show',
+            if (catName.isNotEmpty) catName,
+            if (hidden) 'hidden',
+            if (fav) '★',
+          ].join(' · '),
           categoryId: show.categoryId,
           categoryName: catName.isEmpty ? null : catName,
           series: show,
-          score: s,
-        ),
-      );
+          score: m.score,
+        );
     }
-
-    // Future: append EPG hits here with GuideSearchKind.epg
-
-    hits.sort((a, b) {
-      final byScore = b.score.compareTo(a.score);
-      if (byScore != 0) return byScore;
-      final byKind = a.kind.index.compareTo(b.kind.index);
-      if (byKind != 0) return byKind;
-      return a.title.toLowerCase().compareTo(b.title.toLowerCase());
-    });
-
-    if (hits.length <= maxResults) return hits;
-    return hits.sublist(0, maxResults);
   }
 }

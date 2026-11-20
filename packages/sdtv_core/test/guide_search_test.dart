@@ -81,40 +81,19 @@ void main() {
 
     test('empty query returns nothing', () {
       expect(
-        GuideSearch.search(
-          query: '  ',
-          categories: cats,
-          channels: channels,
-        ),
+        GuideSearch.search(query: '  ', categories: cats, channels: channels),
         isEmpty,
       );
     });
 
-    final vodCats = [
-      (id: 'm1', name: 'Action'),
-      (id: 'm2', name: 'Comedy'),
-    ];
+    final vodCats = [(id: 'm1', name: 'Action'), (id: 'm2', name: 'Comedy')];
     final vods = [
-      const VodItem(
-        streamId: 101,
-        name: 'The Batman',
-        categoryId: 'm1',
-      ),
-      const VodItem(
-        streamId: 102,
-        name: 'Superbad',
-        categoryId: 'm2',
-      ),
+      const VodItem(streamId: 101, name: 'The Batman', categoryId: 'm1'),
+      const VodItem(streamId: 102, name: 'Superbad', categoryId: 'm2'),
     ];
-    final seriesCats = [
-      (id: 's1', name: 'Sitcoms'),
-    ];
+    final seriesCats = [(id: 's1', name: 'Sitcoms')];
     final shows = [
-      const SeriesItem(
-        seriesId: 201,
-        name: 'Friends',
-        categoryId: 's1',
-      ),
+      const SeriesItem(seriesId: 201, name: 'Friends', categoryId: 's1'),
     ];
 
     test('marks favorited movies in subtitle and score', () {
@@ -153,7 +132,10 @@ void main() {
         seriesCategories: seriesCats,
         seriesItems: shows,
       );
-      expect(hits.any((h) => h.isSeries && h.series?.name == 'Friends'), isTrue);
+      expect(
+        hits.any((h) => h.isSeries && h.series?.name == 'Friends'),
+        isTrue,
+      );
       expect(
         hits.firstWhere((h) => h.isSeries).section,
         GuideSearchSection.series,
@@ -203,5 +185,46 @@ void main() {
       expect(hits.first.isChannel, isTrue);
       expect(hits.first.channel?.name, contains('Bloomberg'));
     });
+  });
+
+  test('a reused index gives the same hits as a one-off search', () {
+    final cats = [(id: '1', name: 'News'), (id: '2', name: 'Sports')];
+    const channels = [
+      LiveChannel(streamId: 1, name: 'BBC News HD', categoryId: '1', num: 1),
+      LiveChannel(
+        streamId: 2,
+        name: 'Sky Sports News',
+        categoryId: '2',
+        num: 2,
+      ),
+      LiveChannel(streamId: 3, name: 'ESPN', categoryId: '2', num: 3),
+    ];
+    const vod = [VodItem(streamId: 9, name: 'The News Hour', categoryId: '1')];
+    final index = GuideSearchIndex(
+      categories: cats,
+      channels: channels,
+      vodCategories: cats,
+      vodItems: vod,
+    );
+    for (final q in ['news', 'sp', 'espn', 'hour', 'nothing']) {
+      final once = GuideSearch.search(
+        query: q,
+        categories: cats,
+        channels: channels,
+        vodCategories: cats,
+        vodItems: vod,
+      );
+      final reused = index.search(q);
+      expect(
+        [for (final h in reused) '${h.score} ${h.title} ${h.subtitle}'],
+        [for (final h in once) '${h.score} ${h.title} ${h.subtitle}'],
+        reason: q,
+      );
+    }
+    // Exact category name first (Movies "News"), then the best channel.
+    final news = index.search('news');
+    expect(news.first.isCategory, isTrue);
+    expect(news.first.title, 'News');
+    expect(news[1].title, '1. BBC News HD');
   });
 }

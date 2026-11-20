@@ -1373,9 +1373,29 @@ class SessionController extends ChangeNotifier {
   }
 
   /// Guide search (live + movies + TV shows). EPG can append later via same hits.
-  List<GuideSearchHit> searchGuide(String query, {int maxResults = 120}) {
-    return GuideSearch.search(
-      query: query,
+  GuideSearchIndex? _searchIndex;
+  List<Object> _searchIndexOf = const [];
+
+  /// Search index for the current catalogs. Catalog lists are replaced,
+  /// never edited in place, so list identity tells when to rebuild.
+  GuideSearchIndex _searchIndexNow() {
+    final of = <Object>[
+      categories,
+      allChannels,
+      vodCategories,
+      allVod,
+      seriesCategories,
+      allSeries,
+    ];
+    final cached = _searchIndex;
+    if (cached != null &&
+        of.length == _searchIndexOf.length &&
+        [for (var i = 0; i < of.length; i++) identical(of[i], _searchIndexOf[i])]
+            .every((same) => same)) {
+      return cached;
+    }
+    _searchIndexOf = of;
+    return _searchIndex = GuideSearchIndex(
       categories: [
         for (final c in categories) (id: c.categoryId, name: c.categoryName),
       ],
@@ -1389,6 +1409,16 @@ class SessionController extends ChangeNotifier {
           (id: c.categoryId, name: c.categoryName),
       ],
       seriesItems: allSeries,
+    );
+  }
+
+  /// Build the search index ahead of the first keystroke.
+  void warmSearchIndex() => _searchIndexNow();
+
+  List<GuideSearchHit> searchGuide(String query, {int maxResults = 120}) {
+    if (query.trim().isEmpty) return const [];
+    return _searchIndexNow().search(
+      query,
       hiddenCategoryIds: _hiddenCategoryIds,
       favoriteKeys: _favoriteKeys.toSet(),
       maxResults: maxResults,

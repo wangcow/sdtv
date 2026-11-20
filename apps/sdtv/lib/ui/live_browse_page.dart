@@ -300,6 +300,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     unawaited(_mpvKeys?.cancel());
     session.removeListener(_onSession);
     _searchCtrl.removeListener(_onSearchQueryChanged);
@@ -318,14 +319,23 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     super.dispose();
   }
 
+  Timer? _searchDebounce;
+
   void _onSearchQueryChanged() {
     if (!_searchOpen) return;
-    final hits = session.searchGuide(_searchCtrl.text);
-    setState(() {
-      // New glyphs = still typing. Re-lock so OSK A cannot play a hit.
-      _searchBrowseResults = false;
-      _searchHits = hits;
-      _searchIndex = hits.isEmpty ? 0 : _searchIndex.clamp(0, hits.length - 1);
+    // New glyphs = still typing. Re-lock at once so OSK A cannot play a hit.
+    if (_searchBrowseResults) setState(() => _searchBrowseResults = false);
+    // Search once typing pauses, not on every glyph.
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 120), () {
+      if (!mounted || !_searchOpen) return;
+      final hits = session.searchGuide(_searchCtrl.text);
+      setState(() {
+        _searchHits = hits;
+        _searchIndex = hits.isEmpty
+            ? 0
+            : _searchIndex.clamp(0, hits.length - 1);
+      });
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_searchOpen || _searchBrowseResults) return;
@@ -1407,6 +1417,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _searchIndex = 0;
       _searchHits = session.searchGuide(_searchCtrl.text);
     });
+    // Build the index after the search box paints, before the first glyph.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _searchOpen) session.warmSearchIndex();
+    });
     unawaited(_ensureSearchCatalogs());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -1430,6 +1444,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       await session.loadSeriesCatalog();
     }
     if (!mounted || !_searchOpen) return;
+    // Movies / TV Shows just arrived: rebuild the index now, not on a key.
+    session.warmSearchIndex();
     setState(() {
       _searchHits = session.searchGuide(_searchCtrl.text);
       _searchIndex = _searchHits.isEmpty
