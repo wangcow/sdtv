@@ -3,7 +3,7 @@
 Flutter Linux entrypoint for the Steam Deck–first IPTV player.
 
 ```bash
-export PATH="$HOME/sdk/flutter/bin:$PATH"
+source ../../tool/bazzite-flutter-env.sh   # ~/.sdk/flutter, else ~/sdk/flutter
 flutter pub get
 flutter run -d linux
 ```

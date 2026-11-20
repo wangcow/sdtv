@@ -73,12 +73,14 @@ Selecting a channel **starts fullscreen `mpv`**, then returns to the TV Guide wh
 
 - Install **mpv** on the Deck (Desktop Mode → **Discover** → search **mpv** → install Flathub app `io.mpv.Mpv`).  
   Discover installs a **Flatpak**, not `/usr/bin/mpv` — that is normal; sdtv looks for Flatpak too.
-- While watching (OSD hint on open):
-  - **A** — pause · **B** — quit to guide
-  - **LB / RB** or **← / →** — previous / next channel (same list / favorites)
-  - **↑ / ↓** — volume · **X** / **M** — mute
+- While watching, the Flutter HUD is painted on the mpv picture (bitmap overlay). It hides after a few seconds.
+  - **← / →** or **A** — show the HUD · **← / →** while it is up moves the buttons
+  - **A** on Play — pause (live unpause reloads the live edge) · **B** — Back, then quit to the guide
+  - **LB / RB** — previous / next channel (same list / favorites), or ±10s on a movie or episode
+  - **↑ / ↓** while the HUD is hidden — volume · **X** / **M** — mute
+  - **☰** — subs / audio / mute text menu
   - Keyboard (desktop / when mpv has focus): Esc quit, Space pause, PgUp/PgDn channel, arrows volume
-- If mpv is missing, sdtv shows an error snack with optional **Embedded** fallback (old Flutter texture path).
+- If mpv fails to start, the error snack names the problem. Play again and choose **Flutter chrome** to try the embedded player.
 - Override: create `~/sdtv/sdtv.env` with one of:
   ```bash
   SDTV_MPV_PATH=flatpak:io.mpv.Mpv
@@ -89,19 +91,13 @@ Selecting a channel **starts fullscreen `mpv`**, then returns to the TV Guide wh
 
 ### Watch chrome (daily path)
 
-**A** on a channel starts **external mpv** (hardware decode, 60fps). Couch chrome is drawn **on the video plane** (styled mpv OSD: LIVE badge, now/next, VOD progress bar, pause menu) — not through Flutter.
+**A** on a channel starts **external mpv** (hardware decode, 60fps). The picture stays on mpv. The couch HUD is the Flutter chrome, rendered to an image and composited with mpv `overlay-add` (a bitmap, not ASS text). Gamescope still sees one fullscreen window. Focus stays in sdtv.
 
-Stock mpv OSC (the seek bar) stays **off**. On live IPTV it rewinds the cache. Pause (**A**) opens sdtv’s HUD menu instead. Seeking a movie/episode flashes a progress HUD.
+Stock mpv OSC (the seek bar) stays **off**. On live IPTV it rewinds the cache. **☰** opens the subs / audio / mute text menu. If the bitmap overlay fails, sdtv falls back to styled `show-text`. Live sessions use `--keep-open=yes` so a stream hiccup does not quit mpv.
 
-ASS `osd-overlay` IPC is **opt-in** (`SDTV_MPV_OVERLAY=1`). Some mpv builds exit on that call. Default HUD uses styled `show-text` (safer on Deck). Live sessions use `--keep-open=yes` so a stream hiccup does not quit mpv.
+**A** asks: **Flutter chrome** (embedded HUD, slow, one stream URL) or **mpv overlay** (daily bitmap HUD). The choice is not saved. ☰ → **Flutter chrome (slow)** skips the ask and plays the highlighted channel, movie, show, or episode in the embedded HUD. That texture path will not match mpv on Deck.
 
-☰ → **Embedded player (slow)** is a leftover Flutter-texture experiment. It will never match TiviMate smoothness on Deck (Flutter has no SurfaceView). Don’t use it for daily watching; it also used to probe two stream URLs per channel.
-
-Daily **A play** is the product path.
-
-### Future: Flutter HUD over mpv
-
-Keep **mpv painting the picture**. Chrome as real Flutter widgets is a later product, and **Gamescope Game Mode** is the constraint (one nest, not a desktop overlay). Until a Deck-native path exists, chrome stays on mpv’s OSD/ASS overlay.
+A later use of the same bitmap is a clear corner so the guide can scroll over a live picture. That is not built yet. Do not put the video through a Flutter texture, and do not stack a second window under Gamescope.
 
 ### Smooth video (VAAPI)
 

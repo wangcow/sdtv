@@ -6,14 +6,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 /// High-level player state.
-enum SdtvPlayerState {
-  idle,
-  opening,
-  playing,
-  paused,
-  buffering,
-  error,
-}
+enum SdtvPlayerState { idle, opening, playing, paused, buffering, error }
 
 /// Playback API shared by stub (tests) and media_kit (app).
 abstract class SdtvPlayerController extends Listenable {
@@ -42,15 +35,19 @@ abstract class SdtvPlayerController extends Listenable {
   /// True when a scrubber is meaningful (finite duration, not live).
   bool get canSeek {
     final d = duration;
-    return d > const Duration(seconds: 5) &&
-        d < const Duration(hours: 12);
+    return d > const Duration(seconds: 5) && d < const Duration(hours: 12);
   }
 
   /// Non-null when using media_kit (for [Video] widget).
   VideoController? get videoController => null;
 
   /// Open [url] for playback. Optional [httpHeaders] (User-Agent, etc.).
-  Future<void> open(Uri url, {Map<String, String>? httpHeaders});
+  /// [start] seeks once the file has a timeline (VOD resume).
+  Future<void> open(
+    Uri url, {
+    Map<String, String>? httpHeaders,
+    Duration? start,
+  });
   Future<void> play();
   Future<void> pause();
   Future<void> stop();
@@ -123,10 +120,14 @@ class StubSdtvPlayerController extends ChangeNotifier
   }
 
   @override
-  Future<void> open(Uri url, {Map<String, String>? httpHeaders}) async {
+  Future<void> open(
+    Uri url, {
+    Map<String, String>? httpHeaders,
+    Duration? start,
+  }) async {
     _url = url.toString();
     _error = null;
-    _position = Duration.zero;
+    _position = start ?? Duration.zero;
     // Demo-ish finite duration so scrubber can be exercised in tests.
     _duration = const Duration(minutes: 5);
     _state = SdtvPlayerState.opening;
@@ -216,50 +217,61 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
 
     unawaited(_applyLinuxPerfProps());
 
-    _subs.add(_player.stream.playing.listen((_) {
-      if (_disposed) return;
-      _resyncFromNative();
-    }));
+    _subs.add(
+      _player.stream.playing.listen((_) {
+        if (_disposed) return;
+        _resyncFromNative();
+      }),
+    );
 
-    _subs.add(_player.stream.buffering.listen((_) {
-      if (_disposed) return;
-      _resyncFromNative();
-    }));
+    _subs.add(
+      _player.stream.buffering.listen((_) {
+        if (_disposed) return;
+        _resyncFromNative();
+      }),
+    );
 
     // Position ticks — keep _position hot but rarely notify (HUD thrash kills FPS).
-    _subs.add(_player.stream.position.listen((pos) {
-      if (_disposed) return;
-      _position = pos;
-      if (_state == SdtvPlayerState.buffering ||
-          _state == SdtvPlayerState.opening) {
-        if (_player.state.playing) {
-          _setState(SdtvPlayerState.playing);
-          return;
+    _subs.add(
+      _player.stream.position.listen((pos) {
+        if (_disposed) return;
+        _position = pos;
+        if (_state == SdtvPlayerState.buffering ||
+            _state == SdtvPlayerState.opening) {
+          if (_player.state.playing) {
+            _setState(SdtvPlayerState.playing);
+            return;
+          }
         }
-      }
-      // ~1 Hz while playing: scrubber does not need 4+ rebuilds/sec.
-      final now = DateTime.now();
-      if (_lastPosNotify == null ||
-          now.difference(_lastPosNotify!) > const Duration(milliseconds: 900)) {
-        _lastPosNotify = now;
+        // ~1 Hz while playing: scrubber does not need 4+ rebuilds/sec.
+        final now = DateTime.now();
+        if (_lastPosNotify == null ||
+            now.difference(_lastPosNotify!) >
+                const Duration(milliseconds: 900)) {
+          _lastPosNotify = now;
+          notifyListeners();
+        }
+      }),
+    );
+
+    _subs.add(
+      _player.stream.duration.listen((d) {
+        if (_disposed) return;
+        if (_duration == d) return;
+        _duration = d;
         notifyListeners();
-      }
-    }));
+      }),
+    );
 
-    _subs.add(_player.stream.duration.listen((d) {
-      if (_disposed) return;
-      if (_duration == d) return;
-      _duration = d;
-      notifyListeners();
-    }));
-
-    _subs.add(_player.stream.error.listen((message) {
-      if (_disposed) return;
-      if (message.isEmpty) return;
-      _error = message;
-      _setState(SdtvPlayerState.error);
-      debugPrint('sdtv_player error: $message');
-    }));
+    _subs.add(
+      _player.stream.error.listen((message) {
+        if (_disposed) return;
+        if (message.isEmpty) return;
+        _error = message;
+        _setState(SdtvPlayerState.error);
+        debugPrint('sdtv_player error: $message');
+      }),
+    );
 
     // Sample mpv FPS / decode path while a stream is open.
     _perfTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -336,10 +348,8 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
         }
       }
       try {
-        await native.setProperty(
-          'hwdec',
-          'vaapi-copy,auto-copy,auto-safe,auto',
-        ) as Future?;
+        await native.setProperty('hwdec', 'vaapi-copy,auto-copy,auto-safe,auto')
+            as Future?;
       } catch (_) {}
       debugPrint('sdtv_player: texture perf props (no size cap)');
     } catch (e) {
@@ -379,7 +389,9 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
       final w = await prop('width');
       final h = await prop('height');
       final src = w.isNotEmpty && h.isNotEmpty ? '${w}x$h' : '?';
-      final fpsShow = _estimatedFps > 0 ? _estimatedFps.toStringAsFixed(0) : '—';
+      final fpsShow = _estimatedFps > 0
+          ? _estimatedFps.toStringAsFixed(0)
+          : '—';
       final hwShow = (hw.isEmpty || hw == 'no')
           ? (hw == 'no' ? 'cpu' : '?')
           : hw;
@@ -533,7 +545,11 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
   void resyncState() => _resyncFromNative();
 
   @override
-  Future<void> open(Uri url, {Map<String, String>? httpHeaders}) async {
+  Future<void> open(
+    Uri url, {
+    Map<String, String>? httpHeaders,
+    Duration? start,
+  }) async {
     if (_disposed) return;
     _url = url.toString();
     _error = null;
@@ -548,9 +564,11 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
       } catch (_) {}
 
       final headers = httpHeaders ?? const <String, String>{};
-      final media = headers.isEmpty
-          ? Media(url.toString())
-          : Media(url.toString(), httpHeaders: headers);
+      final media = Media(
+        url.toString(),
+        httpHeaders: headers.isEmpty ? null : headers,
+        start: start,
+      );
       debugPrint(
         'sdtv_player: open $url'
         '${headers.isEmpty ? '' : ' (headers=${headers.keys.join(",")})'}',
@@ -572,9 +590,11 @@ class MediaKitSdtvPlayerController extends ChangeNotifier
         }
       }
 
-      unawaited(Future<void>.delayed(const Duration(milliseconds: 800), () {
-        if (!_disposed) unawaited(_refreshDecodeLabel());
-      }));
+      unawaited(
+        Future<void>.delayed(const Duration(milliseconds: 800), () {
+          if (!_disposed) unawaited(_refreshDecodeLabel());
+        }),
+      );
       await _refreshDecodeLabel();
       if (_state != SdtvPlayerState.error) {
         _resyncFromNative();

@@ -10,6 +10,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Link this release against Homebrew mpv. ./tool/run.sh must not set this.
+export SDTV_BREW_DEPS=1
 # shellcheck disable=SC1091
 source "${ROOT}/tool/bazzite-flutter-env.sh"
 

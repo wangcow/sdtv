@@ -256,6 +256,10 @@ class _Poster extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             Positioned.fill(child: art),
+            if (watched)
+              const Positioned.fill(
+                child: WatchedArtScrim(),
+              ),
             if (favorited)
               const Positioned(
                 top: 8,

@@ -10,7 +10,7 @@ Top chips: **LIVE** · **MOVIES** · **TV SHOWS**. From the first category, **�
 
 **LIVE** right pane is the **TV Guide** (channel names + program timeline). It replaces the old channel list / now·next miniguide. **←** on the first program of a row returns to categories · **↑↓** channels · **→** next program · **A** plays the live channel. **B** jumps to now when the timeline is ahead of now; **B** again (already at now) returns to categories. **LB/RB** jump 2 hours · **G** also jumps the window to now.
 
-Movies and TV Shows right panes are a **poster grid**. **←** on the first column of a row returns to categories · **↑↓** move by row · **→** stays in the row · **A** opens the **title landing page** (does not play) · **B** back to categories. A green check on the poster means the movie (or every episode of the show) has been watched to the end.
+Movies and TV Shows right panes are a **poster grid**. **←** on the first column of a row returns to categories · **↑↓** move by row · **→** stays in the row · **A** opens the **title landing page** (does not play) · **B** back to categories. A green check and a dimmed poster mean the movie (or every episode of the show) has been watched to the end. The poster under the cursor stays brighter. In-progress titles keep a resume bar and are not dimmed.
 
 **Title landing:** poster, title, description, director, cast, provider rating. **↑↓** actions · **A** select · **B** / **←** back to the same poster. **LB/RB** do not change actions (those bumpers are for seasons / EPG time).
 
@@ -19,9 +19,9 @@ Movies and TV Shows right panes are a **poster grid**. **←** on the first colu
 
 YouTube trailers open in the system/YouTube client (TiviMate-style), not mpv.
 
-**Seasons & episodes (TV Shows):** **↑↓** pick an episode · **LB/RB** change season · **A** plays that episode · **B** / **←** back to the title. **☰** still opens Search (do not use RB for Search here). Resume progress is per episode. Finished episodes show a check.
+**Seasons & episodes (TV Shows):** **↑↓** pick an episode · **LB/RB** change season · **A** plays that episode · **B** / **←** back to the title. **☰** still opens Search (do not use RB for Search here). Resume progress is per episode. A finished episode shows a green check, a dimmed row, and the word **Watched** at the start of the subtitle. The highlighted row stays bright.
 
-While a movie or episode is playing: **A** menu (Resume, ±10s, subs, audio, mute, back) · **←/→** or **LB/RB** seek 10s · **B** on the menu closes it and keeps playing · **B** while playing returns to the title (position is saved). Position is also saved every 10s. No live-edge reload. When an episode ends, the **next episode starts automatically** (OSD shows SxEy). The last episode holds on the final frame — **B** back to the title.
+While a movie or episode is playing, the Flutter HUD is on the video. **←/→** moves the buttons · **↑** the scrubber · **LB/RB** seek 10s · **A** confirms the focused button (Play pauses) · **B** moves to Back, then returns to the title (position is saved). **☰** opens subs, audio, and mute. Position is also saved every 10s. No live-edge reload. When an episode ends, the **next episode starts automatically**. The last episode holds on the final frame — **B** back to the title.
 
 ## Guide (browse)
 
@@ -43,8 +43,8 @@ On the **category column** (Live, Movies, and TV Shows): **B** jumps to the top 
 
 - **Live:** **Y** (or **F**) stars the focused channel. Y again asks **Keep / Remove**. While a *live* channel is playing, Y still stars that channel.
 - **Movies / TV Shows:** star only from the **title landing** — **Add to Favorites** / **Remove from Favorites** (or **Y** on that page). Y while a movie or episode is playing does nothing.
-- **★ Favorites** is pinned at the top of Live, Movies, and TV Shows category lists. A gold star on the poster marks a favorite; a green check is watched.
-- Stars, resume positions, and watched flags are one local `UserLibrary` document per playlist/panel. A future paid Wangcow Continuity service could host that same JSON across devices — not in this phase. See [LIBRARY.md](LIBRARY.md).
+- **★ Favorites** is pinned at the top of Live, Movies, and TV Shows category lists. A gold star on the poster marks a favorite; a green check and a dimmed poster mean watched.
+- Stars, resume positions, and watched movies, episodes, and shows are one local `UserLibrary` document per playlist/panel. Each spot and watched flag has a timestamp so a future paid Wangcow Continuity host can merge them across signed-in devices (phone, TV, Deck). That sync is not built yet. See [LIBRARY.md](LIBRARY.md).
 
 ### Hidden categories
 
@@ -63,7 +63,7 @@ On the **category column** (Live, Movies, and TV Shows): **B** jumps to the top 
 - Successful **Demo / M3U / Xtream** connect is stored on-device (no retyping).
 - Login home lists **SAVED PLAYLISTS** — **A** opens one.
 - Guide **☰ → Switch playlist** swaps sources without signing out.
-- Favorites / hidden cats / last-played stay **per source** (scoped). The watch library (favorites, progress, watched) is the same `UserLibrary` JSON a future Continuity service would sync.
+- Favorites / hidden cats / last-played stay **per source** (scoped). The watch library (favorites, progress, watched movies / episodes / shows) is the same timestamped `UserLibrary` JSON a future Continuity service would host.
 
 ### Search
 
@@ -74,23 +74,33 @@ On the **category column** (Live, Movies, and TV Shows): **B** jumps to the top 
 
 ## Player chrome (external mpv — daily)
 
-Video is **mpv**, not a Flutter texture. Banner + pause menu are a **bottom HUD** on mpv’s OSD (styled `show-text` / optional ASS overlay): LIVE badge, now/next, VOD progress bar, pause list. That is the TiviMate-like path that can stay at 60fps. The Flutter embed HUD is the look we copy — it cannot sit over Game Mode mpv.
+Video is **mpv** (`vo=gpu`), not a Flutter texture. The couch HUD is the same Flutter chrome as the slow player, painted onto the video as a bitmap (`overlay-add`). The picture stays on mpv. D-pad focus stays in the app. The bitmap updates when you press a button, and a few times a second while a VOD scrubber is on screen. It hides after a few seconds so the middle of the picture stays clear.
 
-Stock mpv OSC (seek bar) is **disabled** — on live it rewinds the cache.
+Stock mpv OSC (seek bar) is **disabled** — on live it rewinds the cache. Styled `show-text` is only the fallback if the bitmap overlay fails, plus short readouts (volume) while the HUD is hidden. The pause list (subs / audio / mute) is still that text menu.
 
-☰ → **Embedded player (slow)** is an experiment only. Do not use it for daily live TV.
+**A** on a channel, program, movie, episode, or file trailer asks which picture to use. **Flutter chrome** is the embedded HUD (slow). **mpv overlay** is external mpv with this Flutter HUD on the video (daily). The ask is not remembered; the highlight starts on mpv. YouTube trailers still open outside the app.
+
+☰ → **Flutter chrome (slow)** skips the ask and opens the embedded HUD on the highlighted channel, movie, show, or episode.
 
 ## Watching (external mpv — daily default)
 
-Flutter keeps reading the pad (Deck); mpv also has keyboard maps when it has focus (desktop).
+Flutter keeps reading the pad (Deck). Keyboard maps apply when mpv has focus (desktop): Space / P pause, Esc / Q quit, PageUp / PageDown channel, arrows volume.
 
-| Action | Deck / Xbox | Keyboard |
-|--------|-------------|----------|
-| Pause | A | Space / P |
-| Quit to guide | B | Esc / Q |
-| Channel − / + | LB / RB or D-pad ←/→ | PageUp / PageDown, `<` / `>`, N next |
-| Volume − / + | D-pad ↓ / ↑ | Arrow ↓ / ↑ |
-| Mute | X | M |
+The Flutter HUD starts visible, then hides. **← / →** or **A** brings it back.
+
+| Action | When | Deck / Xbox |
+|--------|------|-------------|
+| Show HUD | Hidden | ← / → or A |
+| Move chrome | HUD visible | ← / → (play, ±10s on VOD, Back) |
+| Scrubber | VOD HUD | ↑ focuses the bar · ← / → seeks · ↓ leaves it |
+| Channel − / + | Live | LB / RB, or ↑ / ↓ while the HUD is visible |
+| Seek ±10s | Movie / episode | LB / RB |
+| Volume − / + | HUD hidden | ↑ / ↓ |
+| Play / pause | HUD visible, Play focused | A (live unpause reloads the live edge) |
+| Focus Back | HUD visible | B |
+| Quit to guide | HUD hidden, or Back focused | B |
+| Subs / audio / mute | Any time | ☰ opens the text menu (pauses). B or ☰ closes it and keeps playing |
+| Mute | Any time | X |
 
 Zap walks the **current list** (★ Favorites or the category you played from).
 
@@ -104,7 +114,7 @@ The Live tab **is** the EPG grid — not a separate overlay and not a channel li
 - A vertical line marks **now**. Demo/mock synthesizes a day’s listings. Real Xtream uses `get_simple_data_table` (falls back to `get_short_epg`). **M3U** has no panel EPG — channel names only.
 - Selecting a past or future program still plays **live** (no catch-up in this phase)
 
-While **watching**, mpv still gets a compact NOW/NEXT OSD banner on zap (Flutter is covered). That is not the browse miniguide.
+While **watching**, a zap updates the Flutter HUD title on the video. That is not the browse guide, and it does not yet list now/next.
 
 Program search in the Search overlay is later.
 
@@ -115,8 +125,8 @@ sdtv uses a **text menu** instead:
 
 | Mode | How you enter | D-pad / shoulders | A | B |
 |------|----------------|-------------------|---|---|
-| **Playing** | Start channel / Resume | Volume ↑↓ · Channel ←→ / LB RB | Open menu (pauses) | Quit to guide / title |
-| **Watch menu** | A while playing | Move selection · ←→ change subs/audio | Activate row | Close menu and keep playing |
+| **Playing** | Start channel / Resume | HUD focus, or volume while the HUD is hidden · LB/RB channel or seek | HUD confirm (play/pause on Play) | Back, then quit |
+| **Watch menu** | ☰ while playing | Move selection · ←→ change subs/audio | Activate row | Close menu and keep playing |
 
 Menu rows (OSD list with ▶ cursor):
 

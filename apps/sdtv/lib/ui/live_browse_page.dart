@@ -14,6 +14,7 @@ import 'epg_grid.dart';
 import 'player_page.dart';
 import 'vod_grid.dart';
 import 'widgets/epg_guide_pane.dart';
+import 'widgets/mpv_flutter_hud.dart';
 import 'widgets/vod_poster_tile.dart';
 import 'widgets/vod_title_pane.dart';
 
@@ -28,8 +29,11 @@ class LiveBrowsePage extends StatefulWidget {
 }
 
 class _LiveBrowsePageState extends State<LiveBrowsePage> {
+  final GlobalKey<MpvFlutterHudState> _mpvHudKey = GlobalKey<MpvFlutterHudState>();
+
   /// 0 = categories, 1 = channels / posters
   int _column = 0;
+
   /// Header LIVE | MOVIES has pad focus.
   bool _sectionFocus = false;
   int _catIndex = 0;
@@ -47,9 +51,17 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   /// In-page menu (no showDialog — avoids stuck modal barriers on Deck).
   bool _menuOpen = false;
+
+  /// Debug chooser: Flutter chrome vs mpv overlay. Asked on every play.
+  bool _surfaceOpen = false;
+  int _surfaceIndex = 0;
+  String _surfaceTitle = '';
+  Future<String?> Function()? _pendingMpv;
+  Future<String?> Function()? _pendingFlutter;
   bool _aboutOpen = false;
   bool _manageCatsOpen = false;
   bool _searchOpen = false;
+
   /// False while the query field should own the pad (Deck OSK). A/D-pad
   /// must not play or unfocus until the user leaves the field (B / RB).
   bool _searchBrowseResults = false;
@@ -89,8 +101,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   DateTime? _lastMenuAt;
   // Allow accelerated hold-scroll from the joystick reader (~40ms + bursts).
   static const _navCooldown = Duration(milliseconds: 28);
+
   /// Steam injects PageDown with Y; ignore the page jump that follows a star.
   static const _ignorePageAfterFavorite = Duration(milliseconds: 450);
+
   /// Deck often double-fires RB as pageDown + ☰/Start (menu first row is Search).
   static const _ignoreMenuAfterPage = Duration(milliseconds: 450);
 
@@ -105,41 +119,41 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   /// Sign out is red, between Cancel and Exit, so destructive actions sit at the bottom.
   static const _menuItems =
       <({String id, String label, IconData icon, bool danger})>[
-    (id: 'search', label: 'Search', icon: Icons.search, danger: false),
-    (
-      id: 'switch_source',
-      label: 'Switch playlist',
-      icon: Icons.swap_horiz,
-      danger: false
-    ),
-    (
-      id: 'chrome_spike',
-      label: 'Embedded player (slow)',
-      icon: Icons.smart_display_outlined,
-      danger: false
-    ),
-    (
-      id: 'hide_cat',
-      label: 'Hide category',
-      icon: Icons.visibility_off_outlined,
-      danger: false
-    ),
-    (
-      id: 'manage_cats',
-      label: 'Manage categories',
-      icon: Icons.category_outlined,
-      danger: false
-    ),
-    (id: 'about', label: 'About', icon: Icons.info_outline, danger: false),
-    (id: 'cancel', label: 'Cancel', icon: Icons.close, danger: false),
-    (id: 'signout', label: 'Sign out', icon: Icons.logout, danger: true),
-    (
-      id: 'exit',
-      label: 'Exit sdtv',
-      icon: Icons.power_settings_new,
-      danger: false
-    ),
-  ];
+        (id: 'search', label: 'Search', icon: Icons.search, danger: false),
+        (
+          id: 'switch_source',
+          label: 'Switch playlist',
+          icon: Icons.swap_horiz,
+          danger: false,
+        ),
+        (
+          id: 'chrome_spike',
+          label: 'Flutter chrome (slow)',
+          icon: Icons.smart_display_outlined,
+          danger: false,
+        ),
+        (
+          id: 'hide_cat',
+          label: 'Hide category',
+          icon: Icons.visibility_off_outlined,
+          danger: false,
+        ),
+        (
+          id: 'manage_cats',
+          label: 'Manage categories',
+          icon: Icons.category_outlined,
+          danger: false,
+        ),
+        (id: 'about', label: 'About', icon: Icons.info_outline, danger: false),
+        (id: 'cancel', label: 'Cancel', icon: Icons.close, danger: false),
+        (id: 'signout', label: 'Sign out', icon: Icons.logout, danger: true),
+        (
+          id: 'exit',
+          label: 'Exit sdtv',
+          icon: Icons.power_settings_new,
+          danger: false,
+        ),
+      ];
 
   SessionController get session => widget.session;
 
@@ -154,7 +168,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _manageCatsOpen ||
       _searchOpen ||
       _switchSourceOpen ||
-      _unfavOpen;
+      _unfavOpen ||
+      _surfaceOpen;
 
   bool _acceptNav() {
     final now = DateTime.now();
@@ -230,13 +245,13 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     final cats = movies
         ? session.browseVodCategories
         : series
-            ? session.browseSeriesCategories
-            : session.browseCategories;
+        ? session.browseSeriesCategories
+        : session.browseCategories;
     final sel = movies
         ? session.selectedVodCategoryId
         : series
-            ? session.selectedSeriesCategoryId
-            : session.selectedCategoryId;
+        ? session.selectedSeriesCategoryId
+        : session.selectedCategoryId;
     var catIdx = 0;
     if (sel != null) {
       final i = cats.indexWhere((c) => c.categoryId == sel);
@@ -334,19 +349,19 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     final catList = movies
         ? session.browseVodCategories
         : series
-            ? session.browseSeriesCategories
-            : session.browseCategories;
+        ? session.browseSeriesCategories
+        : session.browseCategories;
     final catCount = catList.length;
     final chanCount = movies
         ? session.vodInCategory.length
         : series
-            ? session.seriesInCategory.length
-            : session.channelsInCategory.length;
+        ? session.seriesInCategory.length
+        : session.channelsInCategory.length;
     final sel = movies
         ? session.selectedVodCategoryId
         : series
-            ? session.selectedSeriesCategoryId
-            : session.selectedCategoryId;
+        ? session.selectedSeriesCategoryId
+        : session.selectedCategoryId;
 
     if (catCount > 0) {
       _catIndex = _catIndex.clamp(0, catCount - 1);
@@ -365,10 +380,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _indexCategoryId = sel;
       _chanIndex = chanCount > 0
           ? (movies
-              ? _vodIndexFor(sel, chanCount)
-              : series
-                  ? _seriesIndexFor(sel, chanCount)
-                  : _chanIndexFor(sel, chanCount))
+                ? _vodIndexFor(sel, chanCount)
+                : series
+                ? _seriesIndexFor(sel, chanCount)
+                : _chanIndexFor(sel, chanCount))
           : 0;
     } else if (chanCount > 0) {
       _chanIndex = _chanIndex.clamp(0, chanCount - 1);
@@ -388,8 +403,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       } else {
         _seasonIndex = _seasonIndex.clamp(0, seasons.length - 1);
         final eps = seasons[_seasonIndex].episodes;
-        _episodeIndex =
-            eps.isEmpty ? 0 : _episodeIndex.clamp(0, eps.length - 1);
+        _episodeIndex = eps.isEmpty
+            ? 0
+            : _episodeIndex.clamp(0, eps.length - 1);
       }
     }
     if (_searchOpen) {
@@ -412,8 +428,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     double headerExtent = 0,
   }) {
     if (!c.hasClients) return;
-    final offset =
-        (headerExtent + index * itemExtent).clamp(0.0, c.position.maxScrollExtent);
+    final offset = (headerExtent + index * itemExtent).clamp(
+      0.0,
+      c.position.maxScrollExtent,
+    );
     c.animateTo(
       offset,
       duration: const Duration(milliseconds: 100),
@@ -546,7 +564,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (_isSeries) {
       final cats = session.browseSeriesCategories;
       if (cats.isEmpty) return;
-      final id = session.selectedSeriesCategoryId ??
+      final id =
+          session.selectedSeriesCategoryId ??
           cats[_catIndex.clamp(0, cats.length - 1)].categoryId;
       session.selectSeriesCategory(id);
       final n = session.seriesInCategory.length;
@@ -564,7 +583,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     final cats = session.browseVodCategories;
     if (cats.isEmpty) return;
-    final id = session.selectedVodCategoryId ??
+    final id =
+        session.selectedVodCategoryId ??
         cats[_catIndex.clamp(0, cats.length - 1)].categoryId;
     session.selectVodCategory(id);
     final n = session.vodInCategory.length;
@@ -662,11 +682,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   void _scrollToEpgIndex(int index) {
-    _ensureIndexVisible(
-      _epgScroll,
-      index,
-      itemExtent: kEpgRowExtent,
-    );
+    _ensureIndexVisible(_epgScroll, index, itemExtent: kEpgRowExtent);
   }
 
   void _moveVertical(int delta) {
@@ -675,10 +691,15 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       unawaited(session.watchMenuMove(delta));
       return;
     }
-    // Watching, menu closed: ↑↓ = volume.
-    // delta < 0 = up → louder; delta > 0 = down → quieter.
+    // Watching, menu closed: the Flutter HUD owns the d-pad. While it is
+    // hidden, ↑↓ is still volume (the bitmap is off, so the text OSD shows).
     if (session.isWatchingExternal && !_overlayOpen) {
-      unawaited(session.watchVolumeDelta(delta < 0 ? 5 : -5));
+      final hud = _mpvHudKey.currentState;
+      if (hud != null) {
+        hud.vertical(delta);
+      } else {
+        unawaited(session.watchVolumeDelta(delta < 0 ? 5 : -5));
+      }
       return;
     }
 
@@ -704,8 +725,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         return;
       }
       setState(() {
-        _searchIndex =
-            (_searchIndex + delta).clamp(0, _searchHits.length - 1);
+        _searchIndex = (_searchIndex + delta).clamp(0, _searchHits.length - 1);
       });
       _scrollToSearchIndex(_searchIndex);
       return;
@@ -729,6 +749,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       setState(() {
         _menuIndex = (_menuIndex + delta).clamp(0, _menuItems.length - 1);
       });
+      return;
+    }
+    if (_surfaceOpen) {
+      if (!_acceptNav()) return;
+      setState(() => _surfaceIndex = (_surfaceIndex + delta).clamp(0, 1));
       return;
     }
     if (_seriesEpisodesOpen) {
@@ -765,8 +790,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     final cats = movies
         ? session.browseVodCategories
         : series
-            ? session.browseSeriesCategories
-            : session.browseCategories;
+        ? session.browseSeriesCategories
+        : session.browseCategories;
 
     if (_column == 0) {
       if (cats.isEmpty) return;
@@ -850,8 +875,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _indexCategoryId = section == GuideSection.movies
           ? session.selectedVodCategoryId
           : section == GuideSection.series
-              ? session.selectedSeriesCategoryId
-              : session.selectedCategoryId;
+          ? session.selectedSeriesCategoryId
+          : session.selectedCategoryId;
     });
     _syncEpgClock();
     if (section == GuideSection.live) {
@@ -870,9 +895,14 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
 
-    // Watching, menu closed: ←/→ = previous / next channel (or VOD seek).
+    // Watching, menu closed: ←/→ moves the Flutter HUD (or reveals it).
     if (session.isWatchingExternal && !_overlayOpen) {
-      unawaited(session.watchChannelAdjacent(delta));
+      final hud = _mpvHudKey.currentState;
+      if (hud != null) {
+        hud.horizontal(delta);
+      } else {
+        unawaited(session.watchChannelAdjacent(delta));
+      }
       return;
     }
 
@@ -935,7 +965,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
     if (session.isWatchingExternal) {
-      unawaited(session.watchChannelAdjacent(delta));
+      final hud = _mpvHudKey.currentState;
+      if (hud != null) {
+        hud.shoulder(delta);
+      } else {
+        unawaited(session.watchChannelAdjacent(delta));
+      }
       return;
     }
     _lastPageAt = DateTime.now();
@@ -981,12 +1016,14 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     _lastActivateAt = now;
 
-    // While mpv is up: A opens/activates the watch menu (not the guide menu).
+    // While mpv is up: A drives the Flutter HUD. ☰ opens the subs/audio menu.
     if (session.isWatchingExternal) {
       if (_overlayOpen) {
         await session.watchQuit();
-      } else {
+      } else if (session.isWatchMenuActive) {
         await session.watchActivate();
+      } else {
+        _mpvHudKey.currentState?.confirm();
       }
       return;
     }
@@ -1020,6 +1057,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
     if (_menuOpen) {
       await _runMenuAction(_menuItems[_menuIndex].id);
+      return;
+    }
+
+    if (_surfaceOpen) {
+      await _confirmSurface();
       return;
     }
 
@@ -1071,84 +1113,316 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     await _playFocusedLive();
   }
 
+  void _snack(String text, {Duration duration = const Duration(seconds: 6)}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(text), duration: duration));
+  }
+
+  /// Ask every time. Index 0 is Flutter chrome; 1 is the mpv overlay.
+  /// The highlight starts on mpv so a second A keeps the daily player.
+  void _offerPlay({
+    required String title,
+    required Future<String?> Function() mpv,
+    required Future<String?> Function() flutter,
+  }) {
+    setState(() {
+      _surfaceOpen = true;
+      _surfaceIndex = 1;
+      _surfaceTitle = title;
+      _pendingMpv = mpv;
+      _pendingFlutter = flutter;
+    });
+  }
+
+  void _closeSurface() {
+    setState(() {
+      _surfaceOpen = false;
+      _surfaceIndex = 0;
+      _surfaceTitle = '';
+      _pendingMpv = null;
+      _pendingFlutter = null;
+    });
+  }
+
+  Future<void> _confirmSurface({int? index}) async {
+    final useFlutter = (index ?? _surfaceIndex) == 0;
+    final flutterPlay = _pendingFlutter;
+    final mpvPlay = _pendingMpv;
+    _closeSurface();
+    if (flutterPlay == null || mpvPlay == null) return;
+    if (useFlutter) {
+      await flutterPlay();
+      return;
+    }
+    final err = await mpvPlay();
+    if (!mounted) return;
+    if (err != null) {
+      _snack(err);
+      return;
+    }
+    if (session.needsAppRestartForFullDisplay) {
+      session.clearDisplayRestartHint();
+      _snack(
+        'Docked at handheld resolution — STEAM → Exit sdtv → open again '
+        'for full TV (Native applies on launch only)',
+        duration: const Duration(seconds: 8),
+      );
+    }
+  }
+
   Future<void> _playFocusedLive() async {
     final chans = session.channelsInCategory;
     if (chans.isEmpty) return;
     final ch = chans[_chanIndex.clamp(0, chans.length - 1)];
     _rememberChanIndex();
-
-    final err = await session.watchChannel(ch);
-    if (!mounted) return;
-
-    if (err != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(err),
-          duration: const Duration(seconds: 6),
-          action: SnackBarAction(
-            label: 'Embedded',
-            onPressed: () {
-              unawaited(_playEmbedded(ch));
-            },
-          ),
-        ),
-      );
-    } else if (session.needsAppRestartForFullDisplay) {
-      session.clearDisplayRestartHint();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Docked at handheld resolution — STEAM → Exit sdtv → open again '
-            'for full TV (Native applies on launch only)',
-          ),
-          duration: Duration(seconds: 8),
-        ),
-      );
-    }
-
-    if (mounted) {
-      setState(() => _column = 1);
-      if (_isLive) {
-        _scrollToEpgIndex(_chanIndex);
-      } else {
-        _scrollToChannelIndex(_chanIndex);
-      }
-    }
+    _offerPlay(
+      title: ch.name,
+      mpv: () => session.watchChannel(ch),
+      flutter: () => _playEmbedded(ch),
+    );
   }
 
-  /// Chrome spike / fallback: Flutter texture player + [PlayerPage] HUD.
-  Future<void> _playEmbedded(LiveChannel ch) async {
+  Future<String?> _playEmbedded(LiveChannel ch) async {
+    if (session.isWatchingExternal) {
+      _snack('Quit playback first, then open Flutter chrome.');
+      return null;
+    }
     final err = await session.playChannel(ch);
+    if (!mounted) {
+      await session.finishEmbeddedWatch();
+      return null;
+    }
+    await _pushPlayerPage(err);
+    if (mounted) setState(() => _column = 1);
+    return null;
+  }
+
+  Future<String?> _playEmbeddedVod(
+    VodItem item, {
+    bool fromBeginning = false,
+  }) async {
+    if (session.isWatchingExternal) {
+      _snack('Quit playback first, then open Flutter chrome.');
+      return null;
+    }
+    final err = await session.openEmbeddedVod(
+      item,
+      fromBeginning: fromBeginning,
+    );
+    if (!mounted) {
+      await session.finishEmbeddedWatch();
+      return null;
+    }
+    await _pushPlayerPage(err);
+    return null;
+  }
+
+  Future<String?> _playEmbeddedEpisode(
+    SeriesItem show,
+    SeriesEpisode episode, {
+    bool fromBeginning = false,
+  }) async {
+    if (session.isWatchingExternal) {
+      _snack('Quit playback first, then open Flutter chrome.');
+      return null;
+    }
+    final err = await session.openEmbeddedEpisode(
+      show,
+      episode,
+      fromBeginning: fromBeginning,
+    );
+    if (!mounted) {
+      await session.finishEmbeddedWatch();
+      return null;
+    }
+    await _pushPlayerPage(err);
+    return null;
+  }
+
+  Future<String?> _playEmbeddedTrailer(Uri uri, {required String title}) async {
+    if (session.isWatchingExternal) {
+      _snack('Quit playback first, then open Flutter chrome.');
+      return null;
+    }
+    final err = await session.openEmbeddedTrailer(uri, title: title);
+    if (!mounted) {
+      await session.finishEmbeddedWatch();
+      return null;
+    }
+    await _pushPlayerPage(err);
+    return null;
+  }
+
+  /// Opens the Flutter HUD. A playback error still opens the page so A can
+  /// retry. A missing URL does not. Progress is saved when the page pops.
+  Future<void> _pushPlayerPage(String? err) async {
     if (!mounted) return;
-    if (err != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Chrome spike: $err'),
-          duration: const Duration(seconds: 6),
-        ),
-      );
-      // Still open the page so the user can read on-screen error + A retry.
+    if (err != null && session.embeddedUri == null) {
+      _snack(err);
+      await session.finishEmbeddedWatch();
+      return;
+    }
+    if (err != null) _snack(err);
+    if (!mounted) {
+      await session.finishEmbeddedWatch();
+      return;
     }
     await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => PlayerPage(session: session),
-      ),
+      MaterialPageRoute<void>(builder: (_) => PlayerPage(session: session)),
     );
-    if (!mounted) return;
     try {
-      await session.stopPlayback(notify: false).timeout(
-            const Duration(seconds: 2),
-          );
+      await session.finishEmbeddedWatch().timeout(const Duration(seconds: 4));
     } catch (e) {
       debugPrint('sdtv: stop after embedded player: $e');
     }
-    if (mounted) setState(() => _column = 1);
+  }
+
+  Future<void> _offerTrailer(VodInfo info) async {
+    if (info.isYoutubeTrailer) {
+      final err = await session.watchTrailer(info);
+      if (!mounted) return;
+      if (err != null) _snack(err);
+      return;
+    }
+    final uri = info.trailerUri;
+    if (uri == null) {
+      _snack('No trailer for this title.');
+      return;
+    }
+    final title = info.title.trim().isEmpty
+        ? 'Trailer'
+        : '${info.title} trailer';
+    _offerPlay(
+      title: title,
+      mpv: () => session.watchTrailer(info),
+      flutter: () => _playEmbeddedTrailer(uri, title: title),
+    );
+  }
+
+  /// ☰ → Flutter chrome (slow). No second ask. Uses the current selection:
+  /// open episode, title landing, highlighted poster, or live channel.
+  Future<void> _playSelectionWithFlutter() async {
+    if (!mounted) return;
+    if (session.isWatchingExternal) {
+      _snack('Quit playback first, then open Flutter chrome.');
+      return;
+    }
+    if (_seriesEpisodesOpen) {
+      final show = session.seriesDetailItem;
+      final eps = _currentEpisodes;
+      if (show == null || eps.isEmpty) {
+        _snack('Highlight a title or channel first.');
+        return;
+      }
+      final ep = eps[_episodeIndex.clamp(0, eps.length - 1)];
+      await _playEmbeddedEpisode(show, ep);
+      return;
+    }
+    if (_vodDetailOpen) {
+      final show = session.seriesDetailItem;
+      if (show != null) {
+        await _playSeriesFlutter(show);
+        return;
+      }
+      final item = session.vodDetailItem;
+      if (item == null) {
+        _snack('Highlight a title or channel first.');
+        return;
+      }
+      await _playEmbeddedVod(
+        item,
+        fromBeginning: session.vodResumeSeconds(item) <= 15,
+      );
+      return;
+    }
+    if (_isMovies) {
+      final list = session.vodInCategory;
+      if (list.isEmpty) {
+        _snack('Highlight a title or channel first.');
+        return;
+      }
+      final item = list[_chanIndex.clamp(0, list.length - 1)];
+      await _playEmbeddedVod(
+        item,
+        fromBeginning: session.vodResumeSeconds(item) <= 15,
+      );
+      return;
+    }
+    if (_isSeries) {
+      final list = session.seriesInCategory;
+      if (list.isEmpty) {
+        _snack('Highlight a title or channel first.');
+        return;
+      }
+      final show = list[_chanIndex.clamp(0, list.length - 1)];
+      await _playSeriesFlutter(show);
+      return;
+    }
+    final chans = session.channelsInCategory;
+    if (chans.isEmpty) {
+      _snack('Highlight a title or channel first.');
+      return;
+    }
+    final ch = chans[_chanIndex.clamp(0, chans.length - 1)];
+    setState(() => _column = 1);
+    _rememberChanIndex();
+    await _playEmbedded(ch);
+  }
+
+  /// Resume when progress is past 15s. Otherwise the first episode.
+  Future<void> _playSeriesFlutter(SeriesItem show) async {
+    final cat = await _seriesCatalogFor(show);
+    if (!mounted) return;
+    if (cat == null) {
+      _snack(
+        session.vodDetailLoading
+            ? 'Loading episodes…'
+            : 'No episodes for this show.',
+      );
+      return;
+    }
+    final epId = session.seriesResume(show)['episodeId'] ?? '';
+    final resumeEp = epId.isEmpty ? null : cat.episodeById(epId);
+    final saved = resumeEp == null
+        ? 0
+        : session.episodeProgressSeconds(resumeEp);
+    final SeriesEpisode? picked;
+    final bool fromBeginning;
+    if (resumeEp != null && saved > 15) {
+      picked = resumeEp;
+      fromBeginning = false;
+    } else {
+      picked = cat.firstEpisode;
+      fromBeginning = true;
+    }
+    if (picked == null) {
+      _snack('No episodes for this show.');
+      return;
+    }
+    await _playEmbeddedEpisode(show, picked, fromBeginning: fromBeginning);
+  }
+
+  Future<SeriesCatalog?> _seriesCatalogFor(SeriesItem show) async {
+    if (session.seriesDetailItem?.seriesId == show.seriesId &&
+        session.seriesCatalog != null) {
+      return session.seriesCatalog;
+    }
+    return session.ensureSeriesInfo(show);
   }
 
   /// Hierarchical back: about → manage → menu → categories ← channels.
-  /// While watching: B closes watch menu first, else quits to guide.
+  /// While watching: B closes the watch menu, or moves HUD focus to Back,
+  /// or quits when the HUD is hidden or Back is already focused.
   void _onBack() {
     if (session.isWatchingExternal) {
+      if (session.watchStallOpen || session.isWatchMenuActive) {
+        unawaited(session.watchBack());
+        return;
+      }
+      final hud = _mpvHudKey.currentState;
+      if (hud != null && hud.handleBack()) return;
       unawaited(session.watchBack());
       return;
     }
@@ -1178,6 +1452,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     if (_menuOpen) {
       setState(() => _menuOpen = false);
+      return;
+    }
+    if (_surfaceOpen) {
+      _closeSurface();
       return;
     }
     if (_seriesEpisodesOpen) {
@@ -1232,8 +1510,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     final cats = movies
         ? session.browseVodCategories
         : series
-            ? session.browseSeriesCategories
-            : session.browseCategories;
+        ? session.browseSeriesCategories
+        : session.browseCategories;
     setState(() {
       _sectionFocus = false;
       _column = 0;
@@ -1296,6 +1574,18 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     if (_menuOpen) {
       setState(() => _menuOpen = false);
+      return;
+    }
+    if (_surfaceOpen) {
+      _closeSurface();
+      return;
+    }
+    if (session.isWatchingExternal) {
+      if (session.isWatchMenuActive) {
+        unawaited(session.watchCloseMenu(resume: true));
+      } else {
+        unawaited(session.watchOpenMenu());
+      }
       return;
     }
     setState(() {
@@ -1552,8 +1842,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       session.selectCategory(catId);
     } else if (catIdx >= 0) {
       _selectCategoryKeepingChanPos(catId);
-      catIdx = session.browseCategories
-          .indexWhere((c) => c.categoryId == catId);
+      catIdx = session.browseCategories.indexWhere(
+        (c) => c.categoryId == catId,
+      );
     } else if (catId == kFavoritesCategoryId) {
       _selectCategoryKeepingChanPos(kFavoritesCategoryId);
       catIdx = 0;
@@ -1714,32 +2005,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
     if (id == 'chrome_spike') {
-      // Experimental Flutter-texture path. Daily watch is A → external mpv.
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Embedded is experimental and janky. '
-            'A play uses smooth mpv (OSD chrome on the video).',
-          ),
-          duration: Duration(seconds: 5),
-        ),
-      );
-      final chans = session.channelsInCategory;
-      if (chans.isEmpty) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Highlight a channel first, then open Chrome spike'),
-            duration: Duration(seconds: 3),
-          ),
-        );
-        return;
-      }
-      final ch = chans[_chanIndex.clamp(0, chans.length - 1)];
-      setState(() => _column = 1);
-      _rememberChanIndex();
-      await _playEmbedded(ch);
+      await _playSelectionWithFlutter();
       return;
     }
     if (id == 'hide_cat') {
@@ -1940,8 +2206,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (series != null) return _seriesDetailActions(series);
 
     final item = session.vodDetailItem;
-    final info = session.vodDetail ??
-        (item != null ? VodInfo.fromVodItem(item) : null);
+    final info =
+        session.vodDetail ?? (item != null ? VodInfo.fromVodItem(item) : null);
     final saved = item == null ? 0 : session.vodResumeSeconds(item);
     final out = <({String id, String label, IconData icon})>[];
     if (saved > 15) {
@@ -1956,15 +2222,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         icon: Icons.replay_rounded,
       ));
     } else {
-      out.add((
-        id: 'start',
-        label: 'Play Now',
-        icon: Icons.play_arrow_rounded,
-      ));
+      out.add((id: 'start', label: 'Play Now', icon: Icons.play_arrow_rounded));
     }
-    out.add(_favoriteAction(
-      favorited: item != null && session.isVodFavorite(item),
-    ));
+    out.add(
+      _favoriteAction(favorited: item != null && session.isVodFavorite(item)),
+    );
     if (info != null && info.hasTrailer) {
       out.add((
         id: 'trailer',
@@ -1993,8 +2255,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     final resume = session.seriesResume(series);
     final epId = resume['episodeId'] ?? '';
     final resumeEp = epId.isEmpty ? null : cat?.episodeById(epId);
-    final saved =
-        resumeEp == null ? 0 : session.episodeProgressSeconds(resumeEp);
+    final saved = resumeEp == null
+        ? 0
+        : session.episodeProgressSeconds(resumeEp);
     final out = <({String id, String label, IconData icon})>[];
     if (resumeEp != null && saved > 15) {
       out.add((
@@ -2008,11 +2271,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         icon: Icons.replay_rounded,
       ));
     } else {
-      out.add((
-        id: 'start',
-        label: 'Play Now',
-        icon: Icons.play_arrow_rounded,
-      ));
+      out.add((id: 'start', label: 'Play Now', icon: Icons.play_arrow_rounded));
     }
     out.add(_favoriteAction(favorited: session.isSeriesFavorite(series)));
     out.add((
@@ -2163,17 +2422,17 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     final eps = _currentEpisodes;
     if (show == null || eps.isEmpty) return;
     final ep = eps[_episodeIndex.clamp(0, eps.length - 1)];
-    final err = await session.watchSeriesEpisode(
-      show,
-      ep,
-      fromBeginning: fromBeginning,
+    final loc = 'S${ep.season}E${ep.episodeNum}';
+    final epTitle = ep.title.trim();
+    _offerPlay(
+      title: epTitle.isEmpty
+          ? '${show.name} · $loc'
+          : '${show.name} · $loc  $epTitle',
+      mpv: () =>
+          session.watchSeriesEpisode(show, ep, fromBeginning: fromBeginning),
+      flutter: () =>
+          _playEmbeddedEpisode(show, ep, fromBeginning: fromBeginning),
     );
-    if (!mounted) return;
-    if (err != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(err), duration: const Duration(seconds: 6)),
-      );
-    }
   }
 
   Future<void> _runVodDetailAction() async {
@@ -2190,24 +2449,22 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     final item = session.vodDetailItem;
     if (item == null) return;
-    String? err;
-    if (id == 'resume') {
-      err = await session.watchVod(item);
-    } else if (id == 'start') {
-      err = await session.watchVod(item, fromBeginning: true);
-    } else if (id == 'favorite') {
+    if (id == 'favorite') {
       await _toggleFavorite();
       return;
-    } else if (id == 'trailer') {
+    }
+    if (id == 'trailer') {
       final info = session.vodDetail ?? VodInfo.fromVodItem(item);
-      err = await session.watchTrailer(info);
+      await _offerTrailer(info);
+      return;
     }
-    if (!mounted) return;
-    if (err != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(err), duration: const Duration(seconds: 6)),
-      );
-    }
+    if (id != 'resume' && id != 'start') return;
+    final fromBeginning = id == 'start';
+    _offerPlay(
+      title: item.name,
+      mpv: () => session.watchVod(item, fromBeginning: fromBeginning),
+      flutter: () => _playEmbeddedVod(item, fromBeginning: fromBeginning),
+    );
   }
 
   Future<void> _runSeriesDetailActionId(String id) async {
@@ -2221,53 +2478,51 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       await _toggleFavorite();
       return;
     }
-    String? err;
     if (id == 'trailer') {
       final info = session.vodDetail ?? VodInfo.fromVodItem(show.asVodItem);
-      err = await session.watchTrailer(info);
-    } else if (id == 'resume') {
-      final cat = session.seriesCatalog;
+      await _offerTrailer(info);
+      return;
+    }
+    if (id != 'resume' && id != 'start') return;
+    final cat = session.seriesCatalog;
+    final SeriesEpisode? ep;
+    if (id == 'resume') {
       final epId = session.seriesResume(show)['episodeId'] ?? '';
-      final ep = cat?.episodeById(epId) ?? cat?.firstEpisode;
-      if (ep == null) {
-        err = session.vodDetailLoading
-            ? 'Loading episodes…'
-            : 'No episodes for this show.';
-      } else {
-        err = await session.watchSeriesEpisode(show, ep);
-      }
-    } else if (id == 'start') {
-      final ep = session.seriesCatalog?.firstEpisode;
-      if (ep == null) {
-        err = session.vodDetailLoading
-            ? 'Loading episodes…'
-            : 'No episodes for this show.';
-      } else {
-        err = await session.watchSeriesEpisode(
-          show,
-          ep,
-          fromBeginning: true,
-        );
-      }
+      ep = cat?.episodeById(epId) ?? cat?.firstEpisode;
+    } else {
+      ep = cat?.firstEpisode;
     }
-    if (!mounted) return;
-    if (err != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(err), duration: const Duration(seconds: 6)),
+    if (ep == null) {
+      _snack(
+        session.vodDetailLoading
+            ? 'Loading episodes…'
+            : 'No episodes for this show.',
       );
+      return;
     }
+    final episode = ep;
+    final fromBeginning = id == 'start';
+    final loc = 'S${episode.season}E${episode.episodeNum}';
+    final epTitle = episode.title.trim();
+    _offerPlay(
+      title: epTitle.isEmpty
+          ? '${show.name} · $loc'
+          : '${show.name} · $loc  $epTitle',
+      mpv: () => session.watchSeriesEpisode(
+        show,
+        episode,
+        fromBeginning: fromBeginning,
+      ),
+      flutter: () =>
+          _playEmbeddedEpisode(show, episode, fromBeginning: fromBeginning),
+    );
   }
 
-  Widget _moviesPane(
-    ThemeData theme,
-    String catTitle,
-    List<VodItem> vods,
-  ) {
+  Widget _moviesPane(ThemeData theme, String catTitle, List<VodItem> vods) {
     if (_vodDetailOpen) {
-      final item = session.vodDetailItem ??
-          (vods.isEmpty
-              ? null
-              : vods[_chanIndex.clamp(0, vods.length - 1)]);
+      final item =
+          session.vodDetailItem ??
+          (vods.isEmpty ? null : vods[_chanIndex.clamp(0, vods.length - 1)]);
       if (item == null) {
         return const SizedBox.shrink();
       }
@@ -2316,10 +2571,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                     session.vodError ??
                         (session.vodCatalogReady
                             ? (session.selectedVodCategoryId ==
-                                    kFavoritesCategoryId
-                                ? 'No favorite movies yet.\n'
-                                    'Open a title · Add to Favorites'
-                                : 'No movies in this category.')
+                                      kFavoritesCategoryId
+                                  ? 'No favorite movies yet.\n'
+                                        'Open a title · Add to Favorites'
+                                  : 'No movies in this category.')
                             : 'Loading movies…'),
                     style: theme.textTheme.bodyLarge,
                   ),
@@ -2410,16 +2665,13 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     return 'Resume $loc';
   }
 
-  Widget _seriesPane(
-    ThemeData theme,
-    String catTitle,
-    List<SeriesItem> shows,
-  ) {
+  Widget _seriesPane(ThemeData theme, String catTitle, List<SeriesItem> shows) {
     if (_seriesEpisodesOpen) {
       return _seriesEpisodesPane(theme);
     }
     if (_vodDetailOpen) {
-      final item = session.seriesDetailItem?.asVodItem ??
+      final item =
+          session.seriesDetailItem?.asVodItem ??
           session.vodDetailItem ??
           (shows.isEmpty
               ? null
@@ -2473,10 +2725,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                     session.seriesError ??
                         (session.seriesCatalogReady
                             ? (session.selectedSeriesCategoryId ==
-                                    kFavoritesCategoryId
-                                ? 'No favorite TV shows yet.\n'
-                                    'Open a title · Add to Favorites'
-                                : 'No shows in this category.')
+                                      kFavoritesCategoryId
+                                  ? 'No favorite TV shows yet.\n'
+                                        'Open a title · Add to Favorites'
+                                  : 'No shows in this category.')
                             : 'Loading TV shows…'),
                     style: theme.textTheme.bodyLarge,
                   ),
@@ -2562,8 +2814,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     final seasonLine = season == null
         ? (loading ? 'Loading seasons…' : 'No episodes from this panel.')
         : seasons.length > 1
-            ? '${season.name}  ·  ${_seasonIndex + 1}/${seasons.length}'
-            : season.name;
+        ? '${season.name}  ·  ${_seasonIndex + 1}/${seasons.length}'
+        : season.name;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 20, 12),
@@ -2595,8 +2847,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: seasons.length,
-                separatorBuilder: (context, index) =>
-                    const SizedBox(width: 8),
+                separatorBuilder: (context, index) => const SizedBox(width: 8),
                 itemBuilder: (context, i) {
                   final selected = i == _seasonIndex;
                   return GestureDetector(
@@ -2622,8 +2873,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                         border: Border.all(
                           color: selected
                               ? theme.colorScheme.primary
-                              : theme.colorScheme.outline
-                                  .withValues(alpha: 0.4),
+                              : theme.colorScheme.outline.withValues(
+                                  alpha: 0.4,
+                                ),
                         ),
                       ),
                       child: Text(
@@ -2652,37 +2904,38 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                     ),
                   )
                 : eps.isEmpty
-                    ? Align(
-                        alignment: Alignment.topLeft,
-                        child: Text(
-                          'No episodes in this season.',
-                          style: theme.textTheme.bodyLarge,
+                ? Align(
+                    alignment: Alignment.topLeft,
+                    child: Text(
+                      'No episodes in this season.',
+                      style: theme.textTheme.bodyLarge,
+                    ),
+                  )
+                : ListView.builder(
+                    controller: _episodeScroll,
+                    itemExtent: _rowExtent,
+                    itemCount: eps.length,
+                    itemBuilder: (context, i) {
+                      final ep = eps[i];
+                      final selected = _episodeIndex == i;
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: _BrowseTile(
+                          label: ep.label,
+                          subtitle: _episodeSubtitle(ep),
+                          icon: session.isEpisodeWatched(ep)
+                              ? null
+                              : Icons.play_circle_outline,
+                          watched: session.isEpisodeWatched(ep),
+                          selected: selected,
+                          onTap: () async {
+                            setState(() => _episodeIndex = i);
+                            await _playSelectedEpisode();
+                          },
                         ),
-                      )
-                    : ListView.builder(
-                        controller: _episodeScroll,
-                        itemExtent: _rowExtent,
-                        itemCount: eps.length,
-                        itemBuilder: (context, i) {
-                          final ep = eps[i];
-                          final selected = _episodeIndex == i;
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 6),
-                            child: _BrowseTile(
-                              label: ep.label,
-                              subtitle: _episodeSubtitle(ep),
-                              icon: session.isEpisodeWatched(ep)
-                                  ? Icons.check_circle
-                                  : Icons.play_circle_outline,
-                              selected: selected,
-                              onTap: () async {
-                                setState(() => _episodeIndex = i);
-                                await _playSelectedEpisode();
-                              },
-                            ),
-                          );
-                        },
-                      ),
+                      );
+                    },
+                  ),
           ),
           const SizedBox(height: 8),
           Text(
@@ -2700,14 +2953,17 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   String? _episodeSubtitle(SeriesEpisode ep) {
     final bits = <String>[];
+    final saved = session.episodeProgressSeconds(ep);
+    final watched = session.isEpisodeWatched(ep);
+    // Lead with Watched so a long plot cannot ellipsize it off the row.
+    if (watched && saved <= 15) {
+      bits.add('Watched');
+    }
     if (ep.durationSecs > 0) {
       bits.add('${ep.durationSecs ~/ 60}m');
     }
-    final saved = session.episodeProgressSeconds(ep);
     if (saved > 15) {
       bits.add('Resume ${saved ~/ 60}m');
-    } else if (session.isEpisodeWatched(ep)) {
-      bits.add('Watched');
     }
     if (ep.plot.isNotEmpty) bits.add(ep.plot);
     if (bits.isEmpty) return null;
@@ -2742,9 +2998,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   /// Quit the process so Game Mode returns to Steam (no STEAM → Exit game).
   Future<void> _exitApp() async {
     try {
-      await session.stopPlayback(notify: false).timeout(
-            const Duration(seconds: 1),
-          );
+      await session
+          .stopPlayback(notify: false)
+          .timeout(const Duration(seconds: 1));
     } catch (e) {
       debugPrint('sdtv: stop before exit: $e');
     }
@@ -2765,8 +3021,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     final cats = movies
         ? session.browseVodCategories
         : series
-            ? session.browseSeriesCategories
-            : session.browseCategories;
+        ? session.browseSeriesCategories
+        : session.browseCategories;
     final channels = session.channelsInCategory;
     final vods = session.vodInCategory;
     final shows = session.seriesInCategory;
@@ -2890,18 +3146,19 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                             vertical: 4,
                           ),
                           decoration: BoxDecoration(
-                            color: theme.colorScheme.primary
-                                .withValues(alpha: 0.2),
+                            color: theme.colorScheme.primary.withValues(
+                              alpha: 0.2,
+                            ),
                             borderRadius: BorderRadius.circular(999),
                           ),
                           child: Text(
                             session.useDemo
                                 ? 'DEMO'
                                 : session.useM3u
-                                    ? 'M3U'
-                                    : session.mockCatalog
-                                        ? 'MOCK'
-                                        : 'LIVE',
+                                ? 'M3U'
+                                : session.mockCatalog
+                                ? 'MOCK'
+                                : 'LIVE',
                             style: theme.textTheme.labelSmall?.copyWith(
                               color: theme.colorScheme.primary,
                               fontWeight: FontWeight.w700,
@@ -2947,22 +3204,22 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                     child: Text(
                                       movies
                                           ? (session.vodError ??
-                                              (hiddenN > 0
-                                                  ? 'MOVIES · $hiddenN hidden'
-                                                  : 'MOVIES'))
+                                                (hiddenN > 0
+                                                    ? 'MOVIES · $hiddenN hidden'
+                                                    : 'MOVIES'))
                                           : series
-                                              ? (session.seriesError ??
-                                                  (hiddenN > 0
-                                                      ? 'TV SHOWS · $hiddenN hidden'
-                                                      : 'TV SHOWS'))
-                                              : (hiddenN > 0
-                                                  ? 'CATEGORIES · $hiddenN hidden'
-                                                  : 'CATEGORIES'),
-                                      style:
-                                          theme.textTheme.labelSmall?.copyWith(
-                                        color: theme.colorScheme.outline,
-                                        letterSpacing: 1.1,
-                                      ),
+                                          ? (session.seriesError ??
+                                                (hiddenN > 0
+                                                    ? 'TV SHOWS · $hiddenN hidden'
+                                                    : 'TV SHOWS'))
+                                          : (hiddenN > 0
+                                                ? 'CATEGORIES · $hiddenN hidden'
+                                                : 'CATEGORIES'),
+                                      style: theme.textTheme.labelSmall
+                                          ?.copyWith(
+                                            color: theme.colorScheme.outline,
+                                            letterSpacing: 1.1,
+                                          ),
                                     ),
                                   ),
                                 );
@@ -2977,8 +3234,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                               final favN = movies
                                   ? session.vodFavoriteCount
                                   : series
-                                      ? session.seriesFavoriteCount
-                                      : session.favoriteCount;
+                                  ? session.seriesFavoriteCount
+                                  : session.favoriteCount;
                               return SizedBox(
                                 height: _rowExtent,
                                 child: Padding(
@@ -2986,7 +3243,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                   child: _BrowseTile(
                                     label: isFavCat
                                         ? '${cats[i].categoryName}'
-                                            '${favN > 0 ? ' ($favN)' : ''}'
+                                              '${favN > 0 ? ' ($favN)' : ''}'
                                         : cats[i].categoryName,
                                     icon: isFavCat
                                         ? Icons.star_rounded
@@ -3021,75 +3278,71 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                         ),
                         VerticalDivider(
                           width: 1,
-                          color: theme.colorScheme.outline
-                              .withValues(alpha: 0.3),
+                          color: theme.colorScheme.outline.withValues(
+                            alpha: 0.3,
+                          ),
                         ),
                         Expanded(
                           child: movies
                               ? _moviesPane(theme, catTitle, vods)
                               : series
-                                  ? _seriesPane(theme, catTitle, shows)
-                                  : EpgGuidePane(
-                                      channels: channels,
-                                      channelIndex: _chanIndex,
-                                      categoryTitle: catTitle,
-                                      windowStart: _epgWindowStart,
-                                      focusTime: _epgFocusTime,
-                                      now: DateTime.now(),
-                                      epgFor: session.cachedFullEpg,
-                                      scrollController: _epgScroll,
-                                      gridFocused:
-                                          !_sectionFocus && _column == 1,
-                                      m3u: session.useM3u &&
-                                          !session.mockCatalog &&
-                                          !session.useDemo,
-                                      emptyMessage: session.isFavoritesCategory
-                                          ? 'No favorites yet.\n'
-                                              'Open any category · highlight a channel · Y to star'
-                                          : 'No channels in this category.',
-                                      onProgramWidth: (w) {
-                                        if ((w - _epgProgramWidth).abs() < 1) {
-                                          return;
-                                        }
-                                        _epgProgramWidth = w;
-                                      },
-                                      onTapChannel: (i) {
-                                        setState(() {
-                                          _chanIndex = i;
-                                          _column = 1;
-                                          _sectionFocus = false;
-                                        });
-                                        _rememberChanIndex();
-                                        session.prefetchFullEpgAround(
-                                          channels,
-                                          i,
-                                        );
-                                      },
-                                      onLongPressChannel: (i) {
-                                        setState(() {
-                                          _chanIndex = i;
-                                          _column = 1;
-                                          _sectionFocus = false;
-                                        });
-                                        _rememberChanIndex();
-                                        unawaited(_toggleFavorite());
-                                      },
-                                      onTapProgram: (i, p) {
-                                        setState(() {
-                                          _chanIndex = i;
-                                          _column = 1;
-                                          _sectionFocus = false;
-                                          _epgFocusTime = p.isLiveAt(
-                                            DateTime.now(),
-                                          )
-                                              ? DateTime.now()
-                                              : p.start.add(
-                                                  const Duration(minutes: 1),
-                                                );
-                                        });
-                                        unawaited(_playFocusedLive());
-                                      },
-                                    ),
+                              ? _seriesPane(theme, catTitle, shows)
+                              : EpgGuidePane(
+                                  channels: channels,
+                                  channelIndex: _chanIndex,
+                                  categoryTitle: catTitle,
+                                  windowStart: _epgWindowStart,
+                                  focusTime: _epgFocusTime,
+                                  now: DateTime.now(),
+                                  epgFor: session.cachedFullEpg,
+                                  scrollController: _epgScroll,
+                                  gridFocused: !_sectionFocus && _column == 1,
+                                  m3u:
+                                      session.useM3u &&
+                                      !session.mockCatalog &&
+                                      !session.useDemo,
+                                  emptyMessage: session.isFavoritesCategory
+                                      ? 'No favorites yet.\n'
+                                            'Open any category · highlight a channel · Y to star'
+                                      : 'No channels in this category.',
+                                  onProgramWidth: (w) {
+                                    if ((w - _epgProgramWidth).abs() < 1) {
+                                      return;
+                                    }
+                                    _epgProgramWidth = w;
+                                  },
+                                  onTapChannel: (i) {
+                                    setState(() {
+                                      _chanIndex = i;
+                                      _column = 1;
+                                      _sectionFocus = false;
+                                    });
+                                    _rememberChanIndex();
+                                    session.prefetchFullEpgAround(channels, i);
+                                  },
+                                  onLongPressChannel: (i) {
+                                    setState(() {
+                                      _chanIndex = i;
+                                      _column = 1;
+                                      _sectionFocus = false;
+                                    });
+                                    _rememberChanIndex();
+                                    unawaited(_toggleFavorite());
+                                  },
+                                  onTapProgram: (i, p) {
+                                    setState(() {
+                                      _chanIndex = i;
+                                      _column = 1;
+                                      _sectionFocus = false;
+                                      _epgFocusTime = p.isLiveAt(DateTime.now())
+                                          ? DateTime.now()
+                                          : p.start.add(
+                                              const Duration(minutes: 1),
+                                            );
+                                    });
+                                    unawaited(_playFocusedLive());
+                                  },
+                                ),
                         ),
                       ],
                     ),
@@ -3099,15 +3352,13 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                     decoration: BoxDecoration(
                       border: Border(
                         top: BorderSide(
-                          color: theme.colorScheme.outline
-                              .withValues(alpha: 0.25),
+                          color: theme.colorScheme.outline.withValues(
+                            alpha: 0.25,
+                          ),
                         ),
                       ),
                     ),
-                    child: Text(
-                      _footerHint,
-                      style: theme.textTheme.bodySmall,
-                    ),
+                    child: Text(_footerHint, style: theme.textTheme.bodySmall),
                   ),
                 ],
               ),
@@ -3155,10 +3406,91 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                 icon: _menuItems[i].icon,
                                 selected: _menuIndex == i,
                                 danger: _menuItems[i].danger,
-                                onTap: () =>
-                                    _runMenuAction(_menuItems[i].id),
+                                onTap: () => _runMenuAction(_menuItems[i].id),
                               ),
                             ],
+                            const SizedBox(height: 12),
+                            Text(
+                              '↑↓ move · A select · B close',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.outline,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+
+              if (session.isWatchingExternal)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    // Nearly invisible here. The sharp copy is the mpv bitmap.
+                    // Opacity stays above 0 so the child is still painted.
+                    child: Opacity(
+                      opacity: 0.012,
+                      child: MpvFlutterHud(
+                        key: _mpvHudKey,
+                        session: session,
+                      ),
+                    ),
+                  ),
+                ),
+
+              if (_surfaceOpen) ...[
+                Positioned.fill(
+                  child: GestureDetector(
+                    onTap: _closeSurface,
+                    child: ColoredBox(
+                      color: Colors.black.withValues(alpha: 0.55),
+                    ),
+                  ),
+                ),
+                Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 480),
+                    child: Material(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(16),
+                      elevation: 12,
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text(
+                              'Play',
+                              style: theme.textTheme.headlineSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              _surfaceTitle,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodyMedium,
+                            ),
+                            const SizedBox(height: 20),
+                            _BrowseTile(
+                              label: 'Flutter chrome',
+                              subtitle:
+                                  'Clean HUD on the embedded player (slow)',
+                              icon: Icons.smart_display_outlined,
+                              selected: _surfaceIndex == 0,
+                              onTap: () => unawaited(_confirmSurface(index: 0)),
+                            ),
+                            const SizedBox(height: 8),
+                            _BrowseTile(
+                              label: 'mpv overlay',
+                              subtitle: 'External mpv · Flutter HUD on the video',
+                              icon: Icons.ondemand_video_outlined,
+                              selected: _surfaceIndex == 1,
+                              onTap: () => unawaited(_confirmSurface(index: 1)),
+                            ),
                             const SizedBox(height: 12),
                             Text(
                               '↑↓ move · A select · B close',
@@ -3218,8 +3550,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                 itemBuilder: (context, i) {
                                   final s = session.savedSources[i];
                                   final selected = _switchSourceIndex == i;
-                                  final active =
-                                      session.activeSourceId == s.id;
+                                  final active = session.activeSourceId == s.id;
                                   return Padding(
                                     padding: const EdgeInsets.only(bottom: 8),
                                     child: _BrowseTile(
@@ -3229,8 +3560,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                       icon: s.kind == SavedSourceKind.m3u
                                           ? Icons.playlist_play
                                           : s.kind == SavedSourceKind.xtream
-                                              ? Icons.cloud_outlined
-                                              : Icons.play_circle_outline,
+                                          ? Icons.cloud_outlined
+                                          : Icons.play_circle_outline,
                                       selected: selected,
                                       onTap: () async {
                                         setState(() => _switchSourceIndex = i);
@@ -3323,48 +3654,47 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                       style: theme.textTheme.bodyLarge,
                                     )
                                   : _searchHits.isEmpty
-                                      ? Text(
-                                          'No matches for “${_searchCtrl.text.trim()}”',
-                                          style: theme.textTheme.bodyLarge,
-                                        )
-                                      : ListView.builder(
-                                          controller: _searchScroll,
-                                          itemExtent: _rowExtent,
-                                          itemCount: _searchHits.length,
-                                          itemBuilder: (context, i) {
-                                            final hit = _searchHits[i];
-                                            final selected = _searchBrowseResults &&
-                                                _searchIndex == i;
-                                            final icon = hit.isVod
-                                                ? Icons.movie_outlined
-                                                : hit.isSeries
-                                                    ? Icons.tv_outlined
-                                                    : hit.isCategory
-                                                        ? Icons.folder_outlined
-                                                        : hit.isEpg
-                                                            ? Icons.event_outlined
-                                                            : Icons.live_tv_outlined;
-                                            final label = hit.subtitle.isEmpty
-                                                ? hit.title
-                                                : '${hit.title}  ·  ${hit.subtitle}';
-                                            return Padding(
-                                              padding: const EdgeInsets.only(
-                                                bottom: 6,
-                                              ),
-                                              child: _BrowseTile(
-                                                label: label,
-                                                icon: icon,
-                                                selected: selected,
-                                                onTap: () async {
-                                                  setState(
-                                                    () => _searchIndex = i,
-                                                  );
-                                                  await _applySearchHit(hit);
-                                                },
-                                              ),
-                                            );
-                                          },
-                                        ),
+                                  ? Text(
+                                      'No matches for “${_searchCtrl.text.trim()}”',
+                                      style: theme.textTheme.bodyLarge,
+                                    )
+                                  : ListView.builder(
+                                      controller: _searchScroll,
+                                      itemExtent: _rowExtent,
+                                      itemCount: _searchHits.length,
+                                      itemBuilder: (context, i) {
+                                        final hit = _searchHits[i];
+                                        final selected =
+                                            _searchBrowseResults &&
+                                            _searchIndex == i;
+                                        final icon = hit.isVod
+                                            ? Icons.movie_outlined
+                                            : hit.isSeries
+                                            ? Icons.tv_outlined
+                                            : hit.isCategory
+                                            ? Icons.folder_outlined
+                                            : hit.isEpg
+                                            ? Icons.event_outlined
+                                            : Icons.live_tv_outlined;
+                                        final label = hit.subtitle.isEmpty
+                                            ? hit.title
+                                            : '${hit.title}  ·  ${hit.subtitle}';
+                                        return Padding(
+                                          padding: const EdgeInsets.only(
+                                            bottom: 6,
+                                          ),
+                                          child: _BrowseTile(
+                                            label: label,
+                                            icon: icon,
+                                            selected: selected,
+                                            onTap: () async {
+                                              setState(() => _searchIndex = i);
+                                              await _applySearchHit(hit);
+                                            },
+                                          ),
+                                        );
+                                      },
+                                    ),
                             ),
                             const SizedBox(height: 8),
                             Text(
@@ -3436,8 +3766,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                                       itemCount: session.categories.length,
                                       itemBuilder: (context, i) {
                                         final cat = session.categories[i];
-                                        final hidden =
-                                            session.isCategoryHidden(
+                                        final hidden = session.isCategoryHidden(
                                           cat.categoryId,
                                         );
                                         final selected = _manageIndex == i;
@@ -3514,7 +3843,13 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                               'Connect = Xtream panel.\n'
                               'You supply legal playlists/credentials only.\n\n'
                               'Signed in as $user'
-                              '${session.useDemo ? ' (demo)' : session.useM3u ? ' (m3u)' : session.mockCatalog ? ' (mock)' : ' (live)'}\n'
+                              '${session.useDemo
+                                  ? ' (demo)'
+                                  : session.useM3u
+                                  ? ' (m3u)'
+                                  : session.mockCatalog
+                                  ? ' (mock)'
+                                  : ' (live)'}\n'
                               'Channels: ${session.allChannels.length}\n'
                               'Last played: ${session.lastPlayedName ?? '—'}'
                               '${session.lastPlayedCategoryId != null ? ' · ${session.lastPlayedCategoryId}' : ''}\n\n'
@@ -3527,8 +3862,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                               label: 'Close',
                               icon: Icons.close,
                               selected: true,
-                              onTap: () =>
-                                  setState(() => _aboutOpen = false),
+                              onTap: () => setState(() => _aboutOpen = false),
                             ),
                             const SizedBox(height: 8),
                             Text(
@@ -3575,10 +3909,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                               ),
                             ),
                             const SizedBox(height: 8),
-                            Text(
-                              _unfavName,
-                              style: theme.textTheme.bodyLarge,
-                            ),
+                            Text(_unfavName, style: theme.textTheme.bodyLarge),
                             const SizedBox(height: 20),
                             _BrowseTile(
                               label: 'Keep',
@@ -3639,9 +3970,11 @@ class _SectionChip extends StatelessWidget {
     final bg = focused
         ? theme.colorScheme.primary
         : selected
-            ? theme.colorScheme.primary.withValues(alpha: 0.35)
-            : theme.colorScheme.surfaceContainerHighest;
-    final fg = focused ? theme.colorScheme.onPrimary : theme.colorScheme.onSurface;
+        ? theme.colorScheme.primary.withValues(alpha: 0.35)
+        : theme.colorScheme.surfaceContainerHighest;
+    final fg = focused
+        ? theme.colorScheme.onPrimary
+        : theme.colorScheme.onSurface;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
@@ -3674,6 +4007,7 @@ class _BrowseTile extends StatelessWidget {
     this.subtitle,
     this.dimSelected = false,
     this.danger = false,
+    this.watched = false,
   });
 
   final String label;
@@ -3681,6 +4015,10 @@ class _BrowseTile extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
   final IconData? icon;
+
+  /// Finished episode (or other played row). Green check, muted label
+  /// unless this row is the cursor.
+  final bool watched;
 
   /// Soft highlight when this row is the cursor but the other column is focused.
   final bool dimSelected;
@@ -3707,6 +4045,9 @@ class _BrowseTile extends StatelessWidget {
     } else if (dimSelected) {
       bg = theme.colorScheme.primary.withValues(alpha: 0.28);
       fg = theme.colorScheme.onSurface;
+    } else if (watched) {
+      bg = theme.colorScheme.surfaceContainerHighest;
+      fg = theme.colorScheme.onSurface.withValues(alpha: 0.5);
     } else {
       bg = theme.colorScheme.surfaceContainerHighest;
       fg = theme.colorScheme.onSurface;
@@ -3714,12 +4055,12 @@ class _BrowseTile extends StatelessWidget {
 
     final borderColor = danger
         ? (selected ? dangerColor : dangerColor.withValues(alpha: 0.7))
-        : (active
-            ? theme.colorScheme.primaryContainer
-            : Colors.transparent);
+        : (active ? theme.colorScheme.primaryContainer : Colors.transparent);
 
     final subColor = selected
         ? fg.withValues(alpha: 0.88)
+        : watched
+        ? theme.colorScheme.onSurface.withValues(alpha: 0.42)
         : theme.colorScheme.onSurface.withValues(alpha: 0.65);
 
     return GestureDetector(
@@ -3730,10 +4071,7 @@ class _BrowseTile extends StatelessWidget {
         decoration: BoxDecoration(
           color: bg,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: borderColor,
-            width: 3,
-          ),
+          border: Border.all(color: borderColor, width: 3),
           boxShadow: selected
               ? [
                   BoxShadow(
@@ -3746,7 +4084,10 @@ class _BrowseTile extends StatelessWidget {
         ),
         child: Row(
           children: [
-            if (icon != null) ...[
+            if (watched) ...[
+              const WatchedCheckMark(size: 28),
+              const SizedBox(width: 10),
+            ] else if (icon != null) ...[
               Icon(icon, color: fg, size: 26),
               const SizedBox(width: 10),
             ],

@@ -78,8 +78,9 @@ Host packages are locked; use **Homebrew** for the Flutter Linux toolchain (alre
 
 ```bash
 brew install cmake ninja llvm gtk+3 xorgproto mpv
-# Flutter SDK (if needed):
-# git clone https://github.com/flutter/flutter.git -b stable ~/sdk/flutter
+# Flutter SDK (if needed). ./tool/run.sh uses the first one that exists:
+#   ~/.sdk/flutter   ~/sdk/flutter   ~/sdk/flutter
+# git clone https://github.com/flutter/flutter.git -b stable ~/.sdk/flutter
 ```
 
 Then **always** load the env (or use `./tool/run.sh`, which does it for you):
@@ -90,10 +91,10 @@ source tool/bazzite-flutter-env.sh
 
 You do **not** need a separate laptop just because Bazzite is immutable.
 
-If Flutter was installed under `~/sdk/flutter`:
+`./tool/run.sh` adds that SDK to `PATH`. For a manual shell:
 
 ```bash
-export PATH="$HOME/sdk/flutter/bin:$PATH"
+export PATH="$HOME/.sdk/flutter/bin:$PATH"
 ```
 
 ## Develop

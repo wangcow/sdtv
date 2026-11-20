@@ -9,9 +9,8 @@ import 'widgets/player_chrome.dart';
 
 /// Fullscreen **embedded** player: media_kit [Video] + [PlayerChrome] HUD.
 ///
-/// This is the **player chrome spike** path (TiviMate-like controls on top of
-/// video). Daily live TV still defaults to external mpv; open this via
-/// ☰ → **Chrome spike (embedded)** or the Embedded snack action.
+/// Clean Flutter chrome over the texture. Slower than external mpv. Opened
+/// from the play chooser (“Flutter chrome”) or ☰ → Flutter chrome (slow).
 class PlayerPage extends StatefulWidget {
   const PlayerPage({super.key, required this.session});
 
@@ -63,12 +62,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     _bumpHud();
   }
 
-  bool get _liveMode {
-    // Finite demo HLS can seek; treat provider live as live when !canSeek.
-    final p = widget.session.player;
-    if (p.canSeek) return false;
-    return true;
-  }
+  bool get _liveMode => widget.session.embeddedLive;
 
   /// Horizontal chrome only: −10s · Play · +10s · Back.
   /// Scrubber is a separate row: ↑ focus it, ↓ leave, ←/→ seek while on it.
@@ -83,8 +77,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     ];
   }
 
-  bool get _canUseScrubber =>
-      widget.session.player.canSeek && !_liveMode;
+  bool get _canUseScrubber => widget.session.player.canSeek && !_liveMode;
 
   void _bumpHud() {
     if (!_showHud && mounted) setState(() => _showHud = true);
@@ -155,8 +148,8 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   }
 
   void _syncBufferChrome(SdtvPlayerState state) {
-    final want = state == SdtvPlayerState.opening ||
-        state == SdtvPlayerState.buffering;
+    final want =
+        state == SdtvPlayerState.opening || state == SdtvPlayerState.buffering;
     if (!want) {
       _bufferChromeTimer?.cancel();
       _bufferChromeTimer = null;
@@ -197,11 +190,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     final player = widget.session.player;
     final state = player.state;
     if (state == SdtvPlayerState.error) {
-      // A on error: retry current channel (embed path).
-      final ch = widget.session.nowPlaying;
-      if (ch != null) {
-        unawaited(widget.session.playChannel(ch));
-      }
+      unawaited(widget.session.retryEmbedded());
       _bumpHud();
       return;
     }
@@ -216,7 +205,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   }
 
   void _channel(int delta) {
-    if (!mounted) return;
+    if (!_liveMode || !mounted) return;
     final now = DateTime.now();
     if (_lastZapAt != null && now.difference(_lastZapAt!) < _zapCooldown) {
       return;
@@ -267,14 +256,10 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       case PlayerChromeFocus.playPause:
         _togglePlay();
       case PlayerChromeFocus.seekBack:
-        unawaited(
-          widget.session.player.seekBy(const Duration(seconds: -10)),
-        );
+        unawaited(widget.session.player.seekBy(const Duration(seconds: -10)));
         _bumpHud();
       case PlayerChromeFocus.seekFwd:
-        unawaited(
-          widget.session.player.seekBy(const Duration(seconds: 10)),
-        );
+        unawaited(widget.session.player.seekBy(const Duration(seconds: 10)));
         _bumpHud();
       case PlayerChromeFocus.scrubber:
         // Up/down adjust scrub; A is no-op beyond showing HUD.
@@ -290,31 +275,28 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     if (d.inMilliseconds <= 0) return;
     // 5% steps with D-pad up/down on scrubber.
     final step = Duration(milliseconds: (d.inMilliseconds * 0.05).round());
-    unawaited(
-      widget.session.player.seekBy(dir < 0 ? -step : step),
-    );
+    unawaited(widget.session.player.seekBy(dir < 0 ? -step : step));
     _bumpHud();
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final ch = widget.session.nowPlaying;
-    final player = widget.session.player;
+    final session = widget.session;
+    final ch = session.nowPlaying;
+    final player = session.player;
     final state = player.state;
     final err = player.lastError;
-    final inCat = widget.session.channelsInCategory;
+    final inCat = session.channelsInCategory;
     final canZap = inCat.length > 1;
     final live = _liveMode;
 
-    final title = ch == null
-        ? 'No channel'
-        : (ch.num > 0 ? '${ch.num}. ${ch.name}' : ch.name);
+    final title = live && ch != null
+        ? (ch.num > 0 ? '${ch.num}. ${ch.name}' : ch.name)
+        : (session.embeddedTitle ?? 'Playback');
     final subtitle = live
-        ? (canZap
-            ? 'Live · LB/RB or ↑↓ zap channel'
-            : 'Live · single channel in list')
-        : (player.canSeek ? 'On-demand · scrubber active' : 'Stream');
+        ? (canZap ? 'Live · LB/RB or ↑↓ zap channel' : 'Live · Flutter chrome')
+        : (player.canSeek ? 'On-demand · Flutter chrome' : 'Flutter chrome');
 
     return SdtvInputScope(
       onBack: () {
@@ -368,8 +350,22 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
           }
         }
       },
-      onPageUp: () => _channel(-1),
-      onPageDown: () => _channel(1),
+      onPageUp: () {
+        if (_liveMode) {
+          _channel(-1);
+        } else {
+          unawaited(widget.session.player.seekBy(const Duration(seconds: -10)));
+          _bumpHud();
+        }
+      },
+      onPageDown: () {
+        if (_liveMode) {
+          _channel(1);
+        } else {
+          unawaited(widget.session.player.seekBy(const Duration(seconds: 10)));
+          _bumpHud();
+        }
+      },
       child: Scaffold(
         backgroundColor: Colors.black,
         body: Stack(
@@ -396,28 +392,34 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.error_outline,
-                          color: Colors.white70, size: 48),
+                      const Icon(
+                        Icons.error_outline,
+                        color: Colors.white70,
+                        size: 48,
+                      ),
                       const SizedBox(height: 12),
                       Text(
                         'Playback error',
-                        style: theme.textTheme.titleLarge
-                            ?.copyWith(color: Colors.white),
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          color: Colors.white,
+                        ),
                       ),
                       if (err != null) ...[
                         const SizedBox(height: 8),
                         Text(
                           err,
                           textAlign: TextAlign.center,
-                          style: theme.textTheme.bodyMedium
-                              ?.copyWith(color: Colors.white54),
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: Colors.white54,
+                          ),
                         ),
                       ],
                       const SizedBox(height: 16),
                       Text(
                         'A retry · B back',
-                        style: theme.textTheme.bodySmall
-                            ?.copyWith(color: Colors.white38),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: Colors.white38,
+                        ),
                       ),
                     ],
                   ),
@@ -438,15 +440,11 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
               perfLabel: player.perfLabel.isEmpty ? null : player.perfLabel,
               onPlayPause: _togglePlay,
               onSeekBack: () {
-                unawaited(
-                  player.seekBy(const Duration(seconds: -10)),
-                );
+                unawaited(player.seekBy(const Duration(seconds: -10)));
                 _bumpHud();
               },
               onSeekFwd: () {
-                unawaited(
-                  player.seekBy(const Duration(seconds: 10)),
-                );
+                unawaited(player.seekBy(const Duration(seconds: 10)));
                 _bumpHud();
               },
               onBack: _exit,
@@ -456,8 +454,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                       unawaited(
                         player.seek(
                           Duration(
-                            milliseconds:
-                                (d.inMilliseconds * v).round(),
+                            milliseconds: (d.inMilliseconds * v).round(),
                           ),
                         ),
                       );

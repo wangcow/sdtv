@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:sdtv_player/sdtv_player.dart';
 
-/// Couch-first playback HUD drawn **on top of** an embedded video surface.
+/// Couch-first playback HUD.
 ///
-/// Spike for TiviMate-like controls (not external-mpv `show-text` OSD).
+/// Drawn over the slow embedded player, and rasterized onto external mpv
+/// (`overlay-add`) for the daily picture. Not mpv `show-text`.
 ///
 /// [liveMode] hides seek: live IPTV usually has no useful timeline.
 enum PlayerChromeFocus {

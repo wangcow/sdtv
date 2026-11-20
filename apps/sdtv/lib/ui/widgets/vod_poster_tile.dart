@@ -125,6 +125,12 @@ class VodPosterTile extends StatelessWidget {
                           placeholder: const SizedBox.expand(),
                         ),
                       ),
+                    if (watched)
+                      Positioned.fill(
+                        child: WatchedArtScrim(
+                          lifted: focused || selected,
+                        ),
+                      ),
                     if (progress > 0.02)
                       Align(
                         alignment: Alignment.bottomCenter,
@@ -160,7 +166,9 @@ class VodPosterTile extends StatelessWidget {
                 height: 1.15,
                 color: focused
                     ? theme.colorScheme.primary
-                    : theme.colorScheme.onSurface,
+                    : (watched && !selected)
+                        ? theme.colorScheme.onSurface.withValues(alpha: 0.55)
+                        : theme.colorScheme.onSurface,
               ),
             ),
             if (subtitle != null && subtitle!.isNotEmpty)
@@ -210,6 +218,31 @@ class FavoriteStarMark extends StatelessWidget {
             color: const Color(0xFFFBBF24),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Dark veil over finished artwork.
+///
+/// Idle tiles are dimmed so unwatched posters stay the bright ones. The
+/// cursor ([lifted]) keeps the art readable and the check stays on top.
+class WatchedArtScrim extends StatelessWidget {
+  const WatchedArtScrim({super.key, this.lifted = false});
+
+  final bool lifted;
+
+  static const idleAlpha = 0.48;
+  static const liftedAlpha = 0.16;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: ColoredBox(
+        color: Colors.black.withValues(
+          alpha: lifted ? liftedAlpha : idleAlpha,
+        ),
+        child: const SizedBox.expand(),
       ),
     );
   }

@@ -12,13 +12,7 @@ import '../services/saved_source.dart';
 import '../services/settings_store.dart';
 import '../services/vod_progress.dart';
 
-enum SessionPhase {
-  boot,
-  login,
-  loading,
-  browse,
-  error,
-}
+enum SessionPhase { boot, login, loading, browse, error }
 
 /// Public HLS used in demo / forced-mock mode.
 const kDemoPlaybackUri = String.fromEnvironment(
@@ -38,9 +32,9 @@ class SessionController extends ChangeNotifier {
     required SettingsStore settings,
     SdtvPlayerController? player,
     ArtworkCache? artwork,
-  })  : _settings = settings,
-        player = player ?? StubSdtvPlayerController(),
-        artwork = artwork ?? ArtworkCache();
+  }) : _settings = settings,
+       player = player ?? StubSdtvPlayerController(),
+       artwork = artwork ?? ArtworkCache();
 
   final SettingsStore _settings;
   final SdtvPlayerController player;
@@ -87,6 +81,16 @@ class SessionController extends ChangeNotifier {
   SeriesCatalog? seriesCatalog;
   SeriesEpisode? nowPlayingEpisode;
   SeriesItem? nowPlayingSeries;
+
+  /// Title shown on the Flutter chrome player (VOD / trailer).
+  String? embeddedTitle;
+
+  /// True only for the embedded live path. VOD must not zap channels.
+  bool embeddedLive = false;
+
+  /// Last URL opened in the Flutter player, so A can retry.
+  Uri? embeddedUri;
+  Duration? embeddedStart;
   final Map<int, SeriesCatalog> _seriesInfoCache = {};
 
   /// Ordered favorite keys for the current [favoritesScope].
@@ -202,14 +206,12 @@ class SessionController extends ChangeNotifier {
     return [fav, resumeCat, ...visible];
   }
 
-  bool get isFavoritesCategory =>
-      selectedCategoryId == kFavoritesCategoryId;
+  bool get isFavoritesCategory => selectedCategoryId == kFavoritesCategoryId;
 
   bool isFavorite(LiveChannel channel) =>
       _favoriteKeys.contains(channel.favoriteKey);
 
-  bool isVodFavorite(VodItem item) =>
-      _favoriteKeys.contains(item.favoriteKey);
+  bool isVodFavorite(VodItem item) => _favoriteKeys.contains(item.favoriteKey);
 
   bool isSeriesFavorite(SeriesItem item) =>
       _favoriteKeys.contains(item.favoriteKey);
@@ -233,8 +235,7 @@ class SessionController extends ChangeNotifier {
   }
 
   void _reloadHiddenCategories() {
-    _hiddenCategoryIds =
-        _settings.hiddenCategoryIds(prefsScope).toSet();
+    _hiddenCategoryIds = _settings.hiddenCategoryIds(prefsScope).toSet();
   }
 
   /// Last played (restored on connect for this [prefsScope]).
@@ -255,6 +256,15 @@ class SessionController extends ChangeNotifier {
       ..addAll(_settings.watchedKeys(prefsScope));
   }
 
+  /// Reload stars, watched flags, and resume from the local library document.
+  ///
+  /// A future Continuity pull calls this after [SettingsStore.mergeLibrary]
+  /// or [SettingsStore.replaceLibrary].
+  void reloadUserLibrary() {
+    _reloadGuidePrefs();
+    notifyListeners();
+  }
+
   bool isVodWatched(VodItem item) => _watchedKeys.contains(item.favoriteKey);
 
   bool isSeriesWatched(SeriesItem item) =>
@@ -271,9 +281,7 @@ class SessionController extends ChangeNotifier {
     lastPlayedFavoriteKey = m['favoriteKey'];
     lastPlayedName = m['name'];
     lastPlayedStreamId = int.tryParse(m['streamId'] ?? '');
-    debugPrint(
-      'sdtv: lastPlayed reload scope=$prefsScope → $m',
-    );
+    debugPrint('sdtv: lastPlayed reload scope=$prefsScope → $m');
   }
 
   /// Persist last played for relaunch (guide category + channel key).
@@ -354,7 +362,9 @@ class SessionController extends ChangeNotifier {
     final list = channelsInCategory;
     final byKey = list.indexWhere((c) => c.favoriteKey == ch.favoriteKey);
     if (byKey >= 0) return byKey;
-    return list.indexWhere((c) => c.streamId == ch.streamId && c.name == ch.name);
+    return list.indexWhere(
+      (c) => c.streamId == ch.streamId && c.name == ch.name,
+    );
   }
 
   /// Align [selectedCategoryId] so last-played channel is in the current list.
@@ -445,8 +455,7 @@ class SessionController extends ChangeNotifier {
   /// Show a previously hidden category again.
   Future<void> unhideCategory(String categoryId) async {
     if (!_hiddenCategoryIds.contains(categoryId)) return;
-    final list = _settings.hiddenCategoryIds(prefsScope)
-      ..remove(categoryId);
+    final list = _settings.hiddenCategoryIds(prefsScope)..remove(categoryId);
     await _settings.setHiddenCategoryIds(prefsScope, list);
     _reloadHiddenCategories();
     notifyListeners();
@@ -457,8 +466,10 @@ class SessionController extends ChangeNotifier {
     if (categoryId.isEmpty || categoryId == kFavoritesCategoryId) {
       return false;
     }
-    final nowHidden =
-        await _settings.toggleHiddenCategoryId(prefsScope, categoryId);
+    final nowHidden = await _settings.toggleHiddenCategoryId(
+      prefsScope,
+      categoryId,
+    );
     _reloadHiddenCategories();
     if (nowHidden) {
       _ensureSelectedCategoryVisible();
@@ -520,10 +531,7 @@ class SessionController extends ChangeNotifier {
     'guide',
   ];
 
-  static const _stallMenuItems = <String>[
-    'retry',
-    'guide',
-  ];
+  static const _stallMenuItems = <String>['retry', 'guide'];
 
   static const _vodMenuItems = <String>[
     'resume',
@@ -566,8 +574,9 @@ class SessionController extends ChangeNotifier {
 
   List<MediaCategory> get browseVodCategories {
     final hidden = _hiddenCategoryIds;
-    final visible =
-        vodCategories.where((c) => !hidden.contains(c.categoryId)).toList();
+    final visible = vodCategories
+        .where((c) => !hidden.contains(c.categoryId))
+        .toList();
     const fav = MediaCategory(
       categoryId: kFavoritesCategoryId,
       categoryName: '★ Favorites',
@@ -613,9 +622,7 @@ class SessionController extends ChangeNotifier {
   List<VodItem> get vodInCategory {
     final id = selectedVodCategoryId;
     if (id == kFavoritesCategoryId) {
-      final byKey = <String, VodItem>{
-        for (final v in allVod) v.favoriteKey: v,
-      };
+      final byKey = <String, VodItem>{for (final v in allVod) v.favoriteKey: v};
       final out = <VodItem>[];
       final seen = <String>{};
       for (final k in _favoriteKeys) {
@@ -663,6 +670,9 @@ class SessionController extends ChangeNotifier {
     _miniGuideGen++;
     watchMenuOpen = true;
     watchMenuIndex = 0;
+    // Drop the bitmap before the text menu, or the bitmap stays on top.
+    notifyListeners();
+    await externalMpv.hideBitmapOverlay();
     // Live IPTV: do **not** enable mpv OSC — its seek bar rewinds the live
     // cache (old segment / wrong audio). Text menu only.
     await externalMpv.setOscVisible(false);
@@ -748,7 +758,8 @@ class SessionController extends ChangeNotifier {
   Future<void> watchMenuConfirm() async {
     if (!isWatchMenuActive) return;
     if (watchStallOpen) {
-      final id = _stallMenuItems[watchMenuIndex.clamp(0, _stallMenuItems.length - 1)];
+      final id =
+          _stallMenuItems[watchMenuIndex.clamp(0, _stallMenuItems.length - 1)];
       if (id == 'retry') {
         await watchRetryStream();
       } else {
@@ -796,8 +807,7 @@ class SessionController extends ChangeNotifier {
     final sub = await externalMpv.subtitleLabel();
     final aud = await externalMpv.audioLabel();
     final muted = await externalMpv.getProperty('mute');
-    final muteLabel =
-        (muted == true || muted == 'yes') ? 'On' : 'Off';
+    final muteLabel = (muted == true || muted == 'yes') ? 'On' : 'Off';
 
     final rows = <String>[
       'Resume',
@@ -860,8 +870,7 @@ class SessionController extends ChangeNotifier {
     final sub = await externalMpv.subtitleLabel();
     final aud = await externalMpv.audioLabel();
     final muted = await externalMpv.getProperty('mute');
-    final muteLabel =
-        (muted == true || muted == 'yes') ? 'On' : 'Off';
+    final muteLabel = (muted == true || muted == 'yes') ? 'On' : 'Off';
     final timeLine = dur.inSeconds > 0
         ? '${_fmtDur(pos)} / ${_fmtDur(dur)}'
         : _fmtDur(pos);
@@ -898,11 +907,12 @@ class SessionController extends ChangeNotifier {
 
   Timer? _vodHudKick;
 
-  void _startVodProgressWatch() {
+  void _startVodProgressWatch({bool hud = true}) {
     _stopVodProgressWatch();
     _vodProgressWatch = Timer.periodic(const Duration(seconds: 10), (_) {
       unawaited(_saveVodProgress());
     });
+    if (!hud) return;
     _vodHudKick?.cancel();
     _vodHudKick = Timer(const Duration(milliseconds: 1400), () {
       unawaited(_showVodPlayingHud());
@@ -933,11 +943,29 @@ class SessionController extends ChangeNotifier {
   Future<void> _saveVodProgress() async {
     if (!watchingVod) return;
     // After mpv exits, IPC reads 0 and used to *erase* a real resume.
-    if (!externalMpv.isRunning) return;
+    late final Duration pos;
+    late final Duration reportedDur;
+    if (externalMpv.isRunning) {
+      try {
+        pos = await externalMpv.timePos();
+        reportedDur = await externalMpv.duration();
+      } catch (e) {
+        debugPrint('sdtv: vod progress save: $e');
+        return;
+      }
+    } else {
+      final st = player.state;
+      if (st != SdtvPlayerState.playing &&
+          st != SdtvPlayerState.paused &&
+          st != SdtvPlayerState.buffering) {
+        return;
+      }
+      pos = player.position;
+      reportedDur = player.duration;
+    }
+    if (pos.inSeconds <= kVodResumeMinSeconds) return;
     try {
-      final pos = await externalMpv.timePos();
-      if (pos.inSeconds <= kVodResumeMinSeconds) return;
-      final mpvDur = await externalMpv.duration();
+      final mpvDur = reportedDur;
       final ep = nowPlayingEpisode;
       final show = nowPlayingSeries;
       if (ep != null) {
@@ -947,28 +975,28 @@ class SessionController extends ChangeNotifier {
           catalogDurationSecs: ep.durationSecs,
         );
         final finished = vodReachedEnd(pos.inSeconds, dur);
-        await _settings.setVodProgressSeconds(
+        final showKey = (finished && show != null && _seriesCompleteAfter(ep))
+            ? show.favoriteKey
+            : '';
+        await _settings.saveWatchProgress(
           prefsScope,
-          ep.progressKey,
-          finished ? 0 : pos.inSeconds,
+          progressKey: ep.progressKey,
+          positionSeconds: pos.inSeconds,
+          finished: finished,
+          alsoWatched: showKey.isEmpty ? const [] : [showKey],
+          seriesId: show == null ? '' : '${show.seriesId}',
+          episodeId: ep.id,
+          season: ep.season,
+          episodeNum: ep.episodeNum,
         );
+        if (finished) {
+          _watchedKeys.add(ep.progressKey);
+          if (showKey.isNotEmpty) _watchedKeys.add(showKey);
+        }
         debugPrint(
           'sdtv: vod progress ep=${ep.progressKey} '
           '${pos.inSeconds}s dur=$dur finished=$finished',
         );
-        if (finished) {
-          await _addWatchedKey(ep.progressKey);
-          await _maybeMarkSeriesWatched();
-        }
-        if (show != null) {
-          await _settings.setSeriesResume(
-            prefsScope,
-            seriesId: '${show.seriesId}',
-            episodeId: ep.id,
-            season: ep.season,
-            episodeNum: ep.episodeNum,
-          );
-        }
         return;
       }
       final item = nowPlayingVod;
@@ -980,41 +1008,36 @@ class SessionController extends ChangeNotifier {
         catalogDurationSecs: catalogDur,
       );
       final finished = vodReachedEnd(pos.inSeconds, dur);
-      await _settings.setVodProgressSeconds(
+      await _settings.saveWatchProgress(
         prefsScope,
-        item.favoriteKey,
-        finished ? 0 : pos.inSeconds,
+        progressKey: item.favoriteKey,
+        positionSeconds: pos.inSeconds,
+        finished: finished,
       );
+      if (finished) _watchedKeys.add(item.favoriteKey);
       debugPrint(
         'sdtv: vod progress ${item.favoriteKey} '
         '${pos.inSeconds}s dur=$dur finished=$finished',
       );
-      if (finished) await _addWatchedKey(item.favoriteKey);
     } catch (e) {
       debugPrint('sdtv: vod progress save: $e');
     }
   }
 
-  Future<void> _addWatchedKey(String key) async {
-    if (key.isEmpty || _watchedKeys.contains(key)) return;
-    _watchedKeys.add(key);
-    await _settings.addWatchedKey(prefsScope, key);
-  }
-
-  /// Series poster check = every episode in the loaded catalog is watched.
-  Future<void> _maybeMarkSeriesWatched() async {
-    final show = nowPlayingSeries;
+  /// True when every loaded episode is watched, treating [justFinished]
+  /// as watched even before the set is updated.
+  bool _seriesCompleteAfter(SeriesEpisode justFinished) {
     final cat = seriesCatalog;
-    if (show == null || cat == null) return;
+    if (cat == null) return false;
     var any = false;
     for (final season in cat.seasons) {
       for (final ep in season.episodes) {
         any = true;
-        if (!_watchedKeys.contains(ep.progressKey)) return;
+        if (ep.progressKey == justFinished.progressKey) continue;
+        if (!_watchedKeys.contains(ep.progressKey)) return false;
       }
     }
-    if (!any) return;
-    await _addWatchedKey(show.favoriteKey);
+    return any;
   }
 
   Future<void> seekVodBy(Duration delta) async {
@@ -1135,6 +1158,8 @@ class SessionController extends ChangeNotifier {
     watchMenuOpen = true;
     watchStallOpen = true;
     watchMenuIndex = 0;
+    notifyListeners();
+    await externalMpv.hideBitmapOverlay();
     await externalMpv.setOscVisible(false);
     await _paintStallMenu();
     notifyListeners();
@@ -1231,11 +1256,7 @@ class SessionController extends ChangeNotifier {
       final healthy = await _zapLoadChannel(only, announce: '→');
       if (healthy) {
         unawaited(
-          showMiniGuide(
-            channel: only,
-            prefix: '→',
-            channelLineFirst: false,
-          ),
+          showMiniGuide(channel: only, prefix: '→', channelLineFirst: false),
         );
       }
       return;
@@ -1257,11 +1278,7 @@ class SessionController extends ChangeNotifier {
         unawaited(rememberLastPlayed(ch));
         // Mini guide (now/next) — channel name already shown during load.
         unawaited(
-          showMiniGuide(
-            channel: ch,
-            prefix: '→',
-            channelLineFirst: false,
-          ),
+          showMiniGuide(channel: ch, prefix: '→', channelLineFirst: false),
         );
       }
       // If not healthy, we already showed an error OSD and stay on this channel.
@@ -1287,8 +1304,11 @@ class SessionController extends ChangeNotifier {
 
     final fallback = resolvePlayUriFallback(ch);
     externalMpv.clearRecentLog();
-    // Brief channel name while stream loads; full mini guide paints after healthy.
-    await externalMpv.showText('$announce $label', durationMs: 1600);
+    // Brief channel name while stream loads. The bitmap HUD shows the title
+    // itself, so a text flash would sit in the transparent middle.
+    if (!externalMpv.playbackBitmapHud) {
+      await externalMpv.showText('$announce $label', durationMs: 1600);
+    }
     final ok = await externalMpv.loadFile(uri, title: label);
     if (!ok) {
       debugPrint('sdtv: zap loadfile failed for ${ch.name}');
@@ -1530,16 +1550,16 @@ class SessionController extends ChangeNotifier {
     final ch = channel ?? nowPlaying;
     if (ch == null || !isWatchingExternal) return;
     if (watchMenuOpen) return;
+    // The Flutter bitmap already shows the title. Skip the text banner so it
+    // does not show through the transparent middle of the HUD.
+    if (externalMpv.playbackBitmapHud) return;
 
     final gen = ++_miniGuideGen;
     final label = ch.num > 0 ? '${ch.num}. ${ch.name}' : ch.name;
 
     final heading = prefix != null ? '$prefix $label' : label;
     if (channelLineFirst) {
-      await externalMpv.showLiveBanner(
-        title: heading,
-        durationMs: 1400,
-      );
+      await externalMpv.showLiveBanner(title: heading, durationMs: 1400);
     }
 
     final epg = await fetchShortEpg(ch);
@@ -1551,10 +1571,7 @@ class SessionController extends ChangeNotifier {
       // M3U has no Xtream short EPG — keep the simple channel banner only.
       // Never flash "No EPG" as a scary error (looked like pause/menu broke).
       if (!channelLineFirst) {
-        await externalMpv.showLiveBanner(
-          title: heading,
-          durationMs: 2200,
-        );
+        await externalMpv.showLiveBanner(title: heading, durationMs: 2200);
       }
       return;
     }
@@ -1626,10 +1643,7 @@ class SessionController extends ChangeNotifier {
   }
 
   /// Jump guide selection to a category (and optional channel).
-  void focusGuideTarget({
-    required String categoryId,
-    LiveChannel? channel,
-  }) {
+  void focusGuideTarget({required String categoryId, LiveChannel? channel}) {
     if (categoryId == kFavoritesCategoryId ||
         categories.any((c) => c.categoryId == categoryId)) {
       selectedCategoryId = categoryId;
@@ -1737,10 +1751,7 @@ class SessionController extends ChangeNotifier {
       useM3u = true;
       m3uPlaylistUrl = playlistUrl.trim();
       _clearShortEpgCache();
-      userInfo = UserInfo(
-        username: 'm3u',
-        status: 'Active',
-      );
+      userInfo = UserInfo(username: 'm3u', status: 'Active');
       categories = pl.categories;
       allChannels = pl.channels;
       // Scope depends on m3uPlaylistUrl — already set above.
@@ -1804,8 +1815,8 @@ class SessionController extends ChangeNotifier {
 
       // Product default: Connect = real Xtream.
       // CI / safe offline: SDTV_FORCE_MOCK=1 (or legacy SDTV_ALLOW_LIVE=0).
-      final forceMock = _envFlag('SDTV_FORCE_MOCK') ||
-          _envIsFalse('SDTV_ALLOW_LIVE');
+      final forceMock =
+          _envFlag('SDTV_FORCE_MOCK') || _envIsFalse('SDTV_ALLOW_LIVE');
 
       if (!forceMock) {
         final left = liveConnectCooldownRemaining;
@@ -1845,9 +1856,7 @@ class SessionController extends ChangeNotifier {
       phase = SessionPhase.login;
       notifyListeners();
     } catch (e) {
-      errorMessage = _noteLiveConnectFailure(
-        XtreamException(e.toString()),
-      );
+      errorMessage = _noteLiveConnectFailure(XtreamException(e.toString()));
       phase = SessionPhase.login;
       notifyListeners();
     }
@@ -1918,9 +1927,7 @@ class SessionController extends ChangeNotifier {
     applyGuideLanding();
 
     if (save && credentials != null && !useDemo && !mockCatalog) {
-      await _rememberSavedSource(
-        SavedSource.xtream(credentials: credentials),
-      );
+      await _rememberSavedSource(SavedSource.xtream(credentials: credentials));
     }
 
     phase = SessionPhase.browse;
@@ -1975,11 +1982,9 @@ class SessionController extends ChangeNotifier {
       return;
     }
     final ok = vodCategories.any(
-      (c) =>
-          c.categoryId == vodId && !_hiddenCategoryIds.contains(vodId),
+      (c) => c.categoryId == vodId && !_hiddenCategoryIds.contains(vodId),
     );
-    selectedVodCategoryId =
-        ok ? vodId : vodCategories.first.categoryId;
+    selectedVodCategoryId = ok ? vodId : vodCategories.first.categoryId;
   }
 
   void _applySavedSeriesCategory(String? seriesId) {
@@ -1994,11 +1999,11 @@ class SessionController extends ChangeNotifier {
       return;
     }
     final ok = seriesCategories.any(
-      (c) =>
-          c.categoryId == seriesId && !_hiddenCategoryIds.contains(seriesId),
+      (c) => c.categoryId == seriesId && !_hiddenCategoryIds.contains(seriesId),
     );
-    selectedSeriesCategoryId =
-        ok ? seriesId : seriesCategories.first.categoryId;
+    selectedSeriesCategoryId = ok
+        ? seriesId
+        : seriesCategories.first.categoryId;
   }
 
   Future<void> rememberGuideLanding() async {
@@ -2147,6 +2152,23 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Episode list for [item], from cache or `get_series_info`.
+  /// Does not open the title landing.
+  Future<SeriesCatalog?> ensureSeriesInfo(SeriesItem item) async {
+    final cached = _seriesInfoCache[item.seriesId];
+    if (cached != null) return cached;
+    final client = _client;
+    if (client == null) return null;
+    try {
+      final cat = await client.getSeriesInfo(item.seriesId);
+      _seriesInfoCache[item.seriesId] = cat;
+      return cat;
+    } catch (e) {
+      debugPrint('sdtv: getSeriesInfo failed: $e');
+      return null;
+    }
+  }
+
   Map<String, String> seriesResume(SeriesItem item) =>
       _settings.seriesResume(prefsScope, '${item.seriesId}');
 
@@ -2188,8 +2210,9 @@ class SessionController extends ChangeNotifier {
     }
 
     final saved = episodeProgressSeconds(episode);
-    final startAt =
-        (!fromBeginning && saved > 15) ? Duration(seconds: saved) : null;
+    final startAt = (!fromBeginning && saved > 15)
+        ? Duration(seconds: saved)
+        : null;
     _startStallWatch();
     _startVodProgressWatch();
     try {
@@ -2242,7 +2265,8 @@ class SessionController extends ChangeNotifier {
       try {
         final pos = await externalMpv.timePos();
         final dur = await externalMpv.duration();
-        atEnd = dur.inSeconds > 15 &&
+        atEnd =
+            dur.inSeconds > 15 &&
             pos.inSeconds >= dur.inSeconds - 2 &&
             pos.inSeconds > kVodResumeMinSeconds;
       } catch (_) {
@@ -2294,8 +2318,7 @@ class SessionController extends ChangeNotifier {
       }
 
       nowPlayingEpisode = next;
-      final title =
-          '${show.name}  S${next.season}E${next.episodeNum}';
+      final title = '${show.name}  S${next.season}E${next.episodeNum}';
       final ok = await externalMpv.loadFile(uri, title: title);
       if (!ok) {
         await externalMpv.showText(
@@ -2328,10 +2351,7 @@ class SessionController extends ChangeNotifier {
       final line = epTitle.isEmpty
           ? 'S${next.season}E${next.episodeNum}'
           : 'S${next.season}E${next.episodeNum}  $epTitle';
-      await externalMpv.showText(
-        '${show.name}\n$line',
-        durationMs: 2800,
-      );
+      await externalMpv.showText('${show.name}\n$line', durationMs: 2800);
     } finally {
       _lastSeriesAdvanceAt = DateTime.now();
     }
@@ -2377,10 +2397,7 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<String?> watchVod(
-    VodItem item, {
-    bool fromBeginning = false,
-  }) async {
+  Future<String?> watchVod(VodItem item, {bool fromBeginning = false}) async {
     if (_watchInFlight || externalMpv.isRunning) {
       debugPrint('sdtv: watchVod ignored (already watching)');
       return null;
@@ -2399,8 +2416,9 @@ class SessionController extends ChangeNotifier {
     }
 
     final saved = _settings.vodProgressSeconds(prefsScope, item.favoriteKey);
-    final startAt =
-        (!fromBeginning && saved > 15) ? Duration(seconds: saved) : null;
+    final startAt = (!fromBeginning && saved > 15)
+        ? Duration(seconds: saved)
+        : null;
     _startStallWatch();
     _startVodProgressWatch();
     try {
@@ -2624,7 +2642,7 @@ class SessionController extends ChangeNotifier {
   static const Map<String, String> _streamHttpHeaders = {
     'User-Agent':
         'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 '
-            '(KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3',
+        '(KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3',
   };
 
   /// Embedded media_kit open (experimental). Prefer [watchChannel]
@@ -2634,6 +2652,12 @@ class SessionController extends ChangeNotifier {
   /// panel and can get the account flagged. Texture size is never put on
   /// the stream URL.
   Future<String?> playChannel(LiveChannel channel) async {
+    embeddedLive = true;
+    embeddedTitle = null;
+    watchingVod = false;
+    nowPlayingVod = null;
+    nowPlayingEpisode = null;
+    nowPlayingSeries = null;
     nowPlaying = channel;
     notifyListeners();
 
@@ -2649,13 +2673,90 @@ class SessionController extends ChangeNotifier {
     if (url == null) {
       return 'No playable URL for this channel.';
     }
+    return _openEmbedded(url);
+  }
 
+  /// Flutter-chrome VOD. Caller pushes [PlayerPage], then [finishEmbeddedWatch].
+  Future<String?> openEmbeddedVod(
+    VodItem item, {
+    bool fromBeginning = false,
+  }) async {
+    if (externalMpv.isRunning) return null;
+    final uri = resolveVodPlayUri(item);
+    if (uri == null) return 'No playable URL for this title.';
+    final saved = _settings.vodProgressSeconds(prefsScope, item.favoriteKey);
+    final startAt = (!fromBeginning && saved > 15)
+        ? Duration(seconds: saved)
+        : null;
+    embeddedLive = false;
+    watchingVod = true;
+    nowPlayingVod = item;
+    nowPlaying = null;
+    nowPlayingEpisode = null;
+    nowPlayingSeries = null;
+    embeddedTitle = item.name;
+    notifyListeners();
+    final err = await _openEmbedded(uri, startAt: startAt);
+    _startVodProgressWatch(hud: false);
+    return err;
+  }
+
+  /// Flutter-chrome episode. Same lifetime as [openEmbeddedVod].
+  Future<String?> openEmbeddedEpisode(
+    SeriesItem show,
+    SeriesEpisode episode, {
+    bool fromBeginning = false,
+  }) async {
+    if (externalMpv.isRunning) return null;
+    final uri = resolveSeriesPlayUri(episode);
+    if (uri == null) return 'No playable URL for this episode.';
+    final saved = episodeProgressSeconds(episode);
+    final startAt = (!fromBeginning && saved > 15)
+        ? Duration(seconds: saved)
+        : null;
+    embeddedLive = false;
+    watchingVod = true;
+    nowPlayingVod = null;
+    nowPlaying = null;
+    nowPlayingSeries = show;
+    nowPlayingEpisode = episode;
+    embeddedTitle = '${show.name}  S${episode.season}E${episode.episodeNum}';
+    notifyListeners();
+    final err = await _openEmbedded(uri, startAt: startAt);
+    _startVodProgressWatch(hud: false);
+    return err;
+  }
+
+  /// Trailer in the Flutter player. Progress is not stored.
+  Future<String?> openEmbeddedTrailer(Uri uri, {required String title}) async {
+    if (externalMpv.isRunning) return null;
+    embeddedLive = false;
+    watchingVod = false;
+    nowPlaying = null;
+    nowPlayingVod = null;
+    nowPlayingEpisode = null;
+    nowPlayingSeries = null;
+    embeddedTitle = title;
+    notifyListeners();
+    return _openEmbedded(uri);
+  }
+
+  /// A on the Flutter player error card.
+  Future<String?> retryEmbedded() async {
+    final uri = embeddedUri;
+    if (uri == null) return 'Nothing to retry';
+    return _openEmbedded(uri, startAt: embeddedStart);
+  }
+
+  Future<String?> _openEmbedded(Uri url, {Duration? startAt}) async {
+    embeddedUri = url;
+    embeddedStart = startAt;
     try {
       await player.stop();
     } catch (_) {}
 
     debugPrint('sdtv: embed open $url');
-    await player.open(url, httpHeaders: _streamHttpHeaders);
+    await player.open(url, httpHeaders: _streamHttpHeaders, start: startAt);
     for (var t = 0; t < 15; t++) {
       await Future<void>.delayed(const Duration(milliseconds: 100));
       if (player.state == SdtvPlayerState.playing ||
@@ -2671,13 +2772,31 @@ class SessionController extends ChangeNotifier {
     return player.lastError ?? 'Playback failed (embedded)';
   }
 
+  /// Save VOD progress (if any) and stop the Flutter player.
+  Future<void> finishEmbeddedWatch() async {
+    if (watchingVod && !externalMpv.isRunning) {
+      await _saveVodProgress();
+    }
+    _stopVodProgressWatch();
+    embeddedLive = false;
+    embeddedTitle = null;
+    embeddedUri = null;
+    embeddedStart = null;
+    watchingVod = false;
+    nowPlayingVod = null;
+    nowPlayingEpisode = null;
+    nowPlayingSeries = null;
+    await stopPlayback();
+  }
+
   Future<void> playAdjacent(int delta) async {
     // Zap always uses external mpv (smooth). Do not open a second embed
-    // stream against the panel.
+    // stream against the panel. Embedded VOD must not zap the live list.
     if (isWatchingExternal) {
       await watchChannelAdjacent(delta);
       return;
     }
+    if (watchingVod || !embeddedLive) return;
     final list = channelsInCategory;
     if (list.isEmpty) return;
     final idx = nowPlaying == null

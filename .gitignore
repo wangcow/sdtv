@@ -36,3 +36,6 @@ repo/
 
 # Coverage
 coverage/
+
+# Deck package output
+dist/

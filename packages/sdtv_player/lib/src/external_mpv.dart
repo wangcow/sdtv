@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 
+import 'bitmap_overlay.dart';
 import 'osd_chrome.dart';
 import 'play_error.dart';
 
@@ -95,6 +96,19 @@ class ExternalMpvLauncher {
   Duration? _vodStartAt;
 
   bool get isVodSession => _vodMode;
+
+  /// Title passed to the current mpv process (channel, movie, or trailer).
+  String? get activeTitle => _activeTitle;
+
+  /// When true, playback banners stay off mpv's text OSD. The Flutter HUD
+  /// bitmap owns that space. The pause / stall text menu still uses OSD.
+  bool playbackBitmapHud = false;
+
+  /// Set after `overlay-add` keeps failing for this session.
+  bool bitmapOverlayBroken = false;
+
+  static const bitmapOverlayId = 2;
+  String? _bitmapPath;
 
   /// Recent mpv log lines (for HTTP 403-style error messages).
   final List<String> _recentLog = <String>[];
@@ -367,8 +381,17 @@ class ExternalMpvLauncher {
     return res != null && res['error'] == 'success';
   }
 
+  /// Named-argument IPC (`command` is a JSON object). Used when a positional
+  /// command is rejected.
+  Future<bool> sendNamedCommand(String name, Map<String, Object?> args) async {
+    final res = await _ipc(<String, Object?>{'name': name, ...args});
+    return res != null && res['error'] == 'success';
+  }
+
   /// Low-level IPC: returns decoded JSON reply, or null on failure.
-  Future<Map<String, dynamic>?> _ipc(List<Object?> command) async {
+  ///
+  /// [command] is either a JSON list (positional) or a map (named).
+  Future<Map<String, dynamic>?> _ipc(Object command) async {
     final path = _ipcPath;
     if (path == null || !isRunning) return null;
     final id = _ipcReqId++;
@@ -763,6 +786,86 @@ class ExternalMpvLauncher {
 
   Future<void> hideChromeOverlay() => _clearChromeOverlay();
 
+  /// OSD pixel size (`osd-width` / `osd-height`). Null until the window exists.
+  Future<({int w, int h})?> osdPixelSize() async {
+    final rawW = await getProperty('osd-width');
+    final rawH = await getProperty('osd-height');
+    final w = rawW is num ? rawW.toInt() : int.tryParse('$rawW') ?? 0;
+    final h = rawH is num ? rawH.toInt() : int.tryParse('$rawH') ?? 0;
+    if (w < 16 || h < 16) return null;
+    return (w: w, h: h);
+  }
+
+  /// Composite a premultiplied BGRA bitmap on the video.
+  ///
+  /// mpv copies the file before the command returns, so the next frame can
+  /// overwrite the same path. This is not ASS `osd-overlay`.
+  Future<bool> showBitmapOverlay(
+    Uint8List bgra, {
+    required int width,
+    required int height,
+    int? displayWidth,
+    int? displayHeight,
+  }) async {
+    if (!isRunning || width < 1 || height < 1) return false;
+    final stride = width * 4;
+    final need = stride * height;
+    if (bgra.length < need) return false;
+    _bitmapPath ??= '${Directory.systemTemp.path}/sdtv-hud-$pid.bgra';
+    try {
+      final file = File(_bitmapPath!);
+      final bytes = bgra.length == need ? bgra : Uint8List.sublistView(bgra, 0, need);
+      await file.writeAsBytes(bytes, flush: false);
+      final cmd = bitmapOverlayAddCommand(
+        id: bitmapOverlayId,
+        file: file.path,
+        width: width,
+        height: height,
+        displayWidth: displayWidth,
+        displayHeight: displayHeight,
+      );
+      final ok = await sendCommand(cmd);
+      if (ok) return true;
+      // Some builds want named args. Retry once without treating it as fatal.
+      return await sendNamedCommand('overlay-add', {
+        'id': bitmapOverlayId,
+        'x': 0,
+        'y': 0,
+        'file': file.path,
+        'offset': 0,
+        'fmt': 'bgra',
+        'w': width,
+        'h': height,
+        'stride': stride,
+        if (displayWidth != null &&
+            displayHeight != null &&
+            (displayWidth != width || displayHeight != height)) ...{
+          'dw': displayWidth,
+          'dh': displayHeight,
+        },
+      });
+    } catch (e) {
+      debugPrint('sdtv_player: bitmap overlay write failed: $e');
+      return false;
+    }
+  }
+
+  /// Remove the bitmap HUD. The file stays so the next show can overwrite it.
+  Future<void> hideBitmapOverlay() async {
+    if (!isRunning) return;
+    await sendCommand(['overlay-remove', bitmapOverlayId]);
+  }
+
+  void _deleteBitmapFile() {
+    final path = _bitmapPath;
+    _bitmapPath = null;
+    if (path == null) return;
+    try {
+      final f = File(path);
+      if (f.existsSync()) f.deleteSync();
+    } catch (_) {}
+  }
+
   /// Convenience: live banner on the video plane.
   Future<void> showLiveBanner({
     required String title,
@@ -771,6 +874,7 @@ class ExternalMpvLauncher {
     String? hint,
     int durationMs = 4500,
   }) {
+    if (playbackBitmapHud) return Future<void>.value();
     final h = hint ?? 'A menu  ·  B guide  ·  LB/RB channel';
     final ass = liveBannerAss(
       title: title,
@@ -798,6 +902,7 @@ class ExternalMpvLauncher {
     String hint = '←→ seek 10s  ·  A menu  ·  B back',
     int durationMs = 2200,
   }) {
+    if (playbackBitmapHud) return Future<void>.value();
     final durSecs = duration.inSeconds;
     final progress = durSecs > 0 ? position.inSeconds / durSecs : 0.0;
     final timeLine = durSecs > 0
@@ -1259,12 +1364,13 @@ PLAYLIST_NEXT playlist-next force
 < playlist-prev force
 > playlist-next force
 n playlist-next force
-# SDL gamepad (if mpv owns the pad) — A pause only; B/Start stay with Flutter
-GAMEPAD_ACTION_DOWN cycle pause
-GAMEPAD_DPAD_UP osd-msg-bar add volume 5
-GAMEPAD_DPAD_DOWN osd-msg-bar add volume -5
-GAMEPAD_DPAD_LEFT playlist-prev force
-GAMEPAD_DPAD_RIGHT playlist-next force
+# Gamepad is read by Flutter (js*). Ignore it here so A / d-pad are not
+# applied twice (pause + chrome confirm, or zap + focus move).
+GAMEPAD_ACTION_DOWN ignore
+GAMEPAD_DPAD_UP ignore
+GAMEPAD_DPAD_DOWN ignore
+GAMEPAD_DPAD_LEFT ignore
+GAMEPAD_DPAD_RIGHT ignore
 GAMEPAD_SHOULDER_L playlist-prev force
 GAMEPAD_SHOULDER_R playlist-next force
 GAMEPAD_START ignore
@@ -1336,7 +1442,7 @@ GAMEPAD_GUIDE ignore
           '--input-conf=${confFile.path}',
           '--input-ipc-server=$ipcPath',
           // No OSC: stock seek bar on live IPTV jumps into the old cache.
-          // Couch chrome is our ASS overlay / styled show-text, not OSC.
+          // Couch chrome is the Flutter HUD bitmap (overlay-add), not OSC.
           '--osc=no',
           '--osd-bar=yes',
           '--osd-level=1',
@@ -1496,8 +1602,11 @@ GAMEPAD_GUIDE ignore
       _sessionActive = false;
       _launching = false;
       _restartForDisplay = false;
+      playbackBitmapHud = false;
+      bitmapOverlayBroken = false;
       _restartDebounce?.cancel();
       _stopDisplayWatch();
+      _deleteBitmapFile();
       _activeUrl = null;
       _activeTitle = null;
       _activeFallback = null;
@@ -1525,9 +1634,11 @@ GAMEPAD_GUIDE ignore
   Future<void> stop() async {
     _userQuit = true;
     _restartForDisplay = false;
+    playbackBitmapHud = false;
     _restartDebounce?.cancel();
     _chromeHideTimer?.cancel();
     _stopDisplayWatch();
+    _deleteBitmapFile();
     final p = _process;
     _launching = false;
     if (p != null) {

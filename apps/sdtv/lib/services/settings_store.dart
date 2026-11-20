@@ -501,7 +501,7 @@ class SettingsStore {
   }
 
   Future<void> setWatchedKeys(String scope, List<String> keys) async {
-    await _setLibrary(scope, library(scope).copyWith(watchedKeys: keys));
+    await _setLibrary(scope, library(scope).withWatchedKeys(keys));
   }
 
   Future<void> addWatchedKey(String scope, String key) async {
@@ -535,5 +535,54 @@ class SettingsStore {
         episodeNum: episodeNum,
       ),
     );
+  }
+
+  /// Progress, watched flags, and the series pointer in one document write.
+  ///
+  /// [positionSeconds] is the playhead. [finished] clears it and records
+  /// [progressKey] plus [alsoWatched] (a completed show) as watched.
+  Future<void> saveWatchProgress(
+    String scope, {
+    required String progressKey,
+    required int positionSeconds,
+    bool finished = false,
+    List<String> alsoWatched = const [],
+    String seriesId = '',
+    String episodeId = '',
+    int season = 0,
+    int episodeNum = 0,
+  }) async {
+    if (scope.isEmpty || progressKey.isEmpty) return;
+    await _setLibrary(
+      scope,
+      library(scope).withWatchUpdate(
+        progressKey: progressKey,
+        positionSeconds: positionSeconds,
+        finished: finished,
+        alsoWatched: alsoWatched,
+        seriesId: seriesId,
+        episodeId: episodeId,
+        season: season,
+        episodeNum: episodeNum,
+      ),
+    );
+  }
+
+  /// Replace the local copy with a hosted document.
+  ///
+  /// A future Continuity pull uses this when the host replica is already
+  /// merged. Callers still in memory must reload from [library].
+  Future<void> replaceLibrary(String scope, UserLibrary incoming) async {
+    await _setLibrary(scope, incoming);
+  }
+
+  /// Merge a hosted document into the local one and store the result.
+  ///
+  /// Watch spots and watched flags follow [UserLibrary.merge]. The local
+  /// file stays the offline copy. Nothing is uploaded here.
+  Future<UserLibrary> mergeLibrary(String scope, UserLibrary incoming) async {
+    final merged = library(scope).merge(incoming);
+    await _setLibrary(scope, merged);
+    return merged;
   }
 }
