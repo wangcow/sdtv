@@ -54,37 +54,56 @@ class VodTitlePane extends StatelessWidget {
     final title = info.title.isEmpty ? item.name : info.title;
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 20, 12),
+      padding: const EdgeInsets.fromLTRB(24, 20, 28, 16),
       child: LayoutBuilder(
         builder: (context, constraints) {
+          // Poster size depends on the pane only. It used to shrink when
+          // the info load added buttons (Resume, Trailer, …): a visible snap.
           final posterW = _posterWidth(
             paneW: constraints.maxWidth,
             paneH: constraints.maxHeight,
-            actionCount: actions.length,
           );
           return Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              SizedBox(
+                width: posterW,
+                child: AspectRatio(
+                  aspectRatio: _posterAspect,
+                  child: _Poster(
+                    url: info.posterUrl.isNotEmpty
+                        ? info.posterUrl
+                        : item.streamIcon,
+                    cache: artCache,
+                    scope: artScope,
+                    id: '${item.streamId}',
+                    watched: watched,
+                    favorited: favorited,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 32),
               Expanded(
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
                           child: Text(
                             title,
-                            maxLines: 3,
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.headlineSmall?.copyWith(
+                            style: theme.textTheme.headlineMedium?.copyWith(
                               fontWeight: FontWeight.w800,
-                              height: 1.15,
+                              height: 1.1,
                             ),
                           ),
                         ),
                         if (loading)
                           const Padding(
-                            padding: EdgeInsets.only(left: 8),
+                            padding: EdgeInsets.only(left: 12, top: 8),
                             child: SizedBox(
                               width: 18,
                               height: 18,
@@ -94,85 +113,68 @@ class VodTitlePane extends StatelessWidget {
                       ],
                     ),
                     if (meta.isNotEmpty) ...[
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 10),
                       Text(
-                        meta.join('  ·  '),
-                        maxLines: 2,
+                        meta.join('   ·   '),
+                        maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.labelLarge?.copyWith(
+                        style: theme.textTheme.titleSmall?.copyWith(
                           color: theme.colorScheme.primary,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
                     ],
-                    if (info.director.isNotEmpty) ...[
-                      const SizedBox(height: 10),
-                      Text(
-                        'Director  ${info.director}',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodyMedium,
-                      ),
-                    ],
-                    if (cast.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        'Cast  ${cast.join(', ')}',
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodyMedium,
-                      ),
-                    ],
-                    const SizedBox(height: 10),
-                    Expanded(
-                      child: SingleChildScrollView(
-                        child: Text(
-                          info.plot.isEmpty
-                              ? 'No description from the provider.'
-                              : info.plot,
-                          style:
-                              theme.textTheme.bodyLarge?.copyWith(height: 1.35),
+                    const SizedBox(height: 16),
+                    Text(
+                      info.plot.isEmpty
+                          ? (loading ? '' : 'No description from the provider.')
+                          : info.plot,
+                      maxLines: 6,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        height: 1.45,
+                        color: theme.colorScheme.onSurface.withValues(
+                          alpha: 0.85,
                         ),
                       ),
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              SizedBox(
-                width: posterW,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    AspectRatio(
-                      aspectRatio: _posterAspect,
-                      child: _Poster(
-                        url: info.posterUrl.isNotEmpty
-                            ? info.posterUrl
-                            : item.streamIcon,
-                        cache: artCache,
-                        scope: artScope,
-                        id: '${item.streamId}',
-                        watched: watched,
-                        favorited: favorited,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    for (var i = 0; i < actions.length; i++) ...[
-                      if (i > 0) const SizedBox(height: 8),
-                      _ActionTile(
-                        label: actions[i].label,
-                        icon: actions[i].icon,
-                        selected: actionIndex == i,
-                        onTap: () => onAction(actions[i].id),
-                      ),
-                    ],
-                    const SizedBox(height: 8),
-                    Text(
-                      '↑↓ actions · A select · Y star · B back',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.outline,
-                      ),
+                    const SizedBox(height: 24),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          width: 260,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              for (var i = 0; i < actions.length; i++) ...[
+                                if (i > 0) const SizedBox(height: 8),
+                                _ActionTile(
+                                  label: actions[i].label,
+                                  icon: actions[i].icon,
+                                  selected: actionIndex == i,
+                                  onTap: () => onAction(actions[i].id),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 28),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (info.director.isNotEmpty)
+                                _Credit(
+                                  label: 'Director',
+                                  value: info.director,
+                                ),
+                              if (cast.isNotEmpty)
+                                _Credit(label: 'Cast', value: cast.join(', ')),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -184,23 +186,46 @@ class VodTitlePane extends StatelessWidget {
     );
   }
 
-  /// Size the 2:3 poster so it and the action stack fit Deck handheld height.
-  static double _posterWidth({
-    required double paneW,
-    required double paneH,
-    required int actionCount,
-  }) {
-    const gap = 10.0;
-    const actionH = 52.0;
-    const actionGap = 8.0;
-    const hintH = 28.0;
-    final n = actionCount.clamp(1, 5);
-    final actionsBlock =
-        gap + n * actionH + (n - 1) * actionGap + hintH;
-    final maxPosterH = (paneH - actionsBlock).clamp(180.0, 420.0);
-    final fromHeight = maxPosterH * _posterAspect;
-    final fromWidth = paneW * 0.42;
-    return fromHeight.clamp(168.0, fromWidth.clamp(168.0, 280.0));
+  /// A 2:3 poster as tall as the pane allows (capped), from pane size only.
+  static double _posterWidth({required double paneW, required double paneH}) {
+    final fromHeight = paneH.clamp(240.0, 600.0) * _posterAspect;
+    final fromWidth = paneW * 0.34;
+    return fromHeight.clamp(160.0, fromWidth.clamp(160.0, 400.0));
+  }
+}
+
+class _Credit extends StatelessWidget {
+  const _Credit({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.outline,
+              letterSpacing: 1.1,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodyMedium,
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -256,10 +281,7 @@ class _Poster extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             Positioned.fill(child: art),
-            if (watched)
-              const Positioned.fill(
-                child: WatchedArtScrim(),
-              ),
+            if (watched) const Positioned.fill(child: WatchedArtScrim()),
             if (favorited)
               const Positioned(
                 top: 8,
@@ -298,8 +320,9 @@ class _ActionTile extends StatelessWidget {
     final bg = selected
         ? theme.colorScheme.primary
         : theme.colorScheme.surfaceContainerHighest;
-    final fg =
-        selected ? theme.colorScheme.onPrimary : theme.colorScheme.onSurface;
+    final fg = selected
+        ? theme.colorScheme.onPrimary
+        : theme.colorScheme.onSurface;
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
