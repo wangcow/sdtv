@@ -13,11 +13,29 @@ import 'pad_router.dart';
 ///
 /// Mount **once** at the app root.
 class SdtvGamepadBinding extends StatefulWidget {
+  /// What still reaches the page while a text field has focus.
+  ///
+  /// The pad's D-pad and A drive the Steam on-screen keyboard then, and a
+  /// Bluetooth / USB pad reaches sdtv directly even while that keyboard is
+  /// open — so pad presses must not move or confirm anything in the page.
+  /// Only B leaves the field. A physical keyboard's ↓ also leaves it
+  /// (search query → results; login → next field).
+  @visibleForTesting
+  static bool passesWhileTyping(
+    GamepadEdge edge, {
+    required bool fromKeyboard,
+  }) => switch (edge) {
+    GamepadEdge.back => true,
+    GamepadEdge.down => fromKeyboard,
+    _ => false,
+  };
+
   const SdtvGamepadBinding({
     super.key,
     required this.child,
     this.enabled = true,
     this.startDelay = Duration.zero,
+
     /// Called when display metrics change (e.g. Deck dock → 1080p TV).
     this.onMetricsChanged,
   });
@@ -158,8 +176,7 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
     } else if (k == LogicalKeyboardKey.arrowRight) {
       edge = GamepadEdge.right;
     } else if (_acquired &&
-        (k == LogicalKeyboardKey.pageDown ||
-            k == LogicalKeyboardKey.pageUp)) {
+        (k == LogicalKeyboardKey.pageDown || k == LogicalKeyboardKey.pageUp)) {
       // Steam often injects PageDown for Y (north) alongside the js Y press.
       // That was starring AND jumping ~5 channels (guide page size).
       // Real LB/RB still come from /dev/input/js*.
@@ -182,31 +199,20 @@ class _SdtvGamepadBindingState extends State<SdtvGamepadBinding>
     }
 
     if (edge == null) return false;
-    _onEdge(edge);
+    _onEdge(edge, fromKeyboard: true);
     return true; // consume — avoid double-handling via Shortcuts
   }
 
-  void _onEdge(GamepadEdge edge) {
-    // Joystick A/Y/X while the OSK is typing into search.
-    if (SdtvTextFocusRegistry.primaryIsTextField) {
-      switch (edge) {
-        case GamepadEdge.confirm:
-        case GamepadEdge.favorite:
-        case GamepadEdge.mute:
-        case GamepadEdge.pageUp:
-        case GamepadEdge.pageDown:
-        case GamepadEdge.menu:
-        case GamepadEdge.up:
-        case GamepadEdge.left:
-        case GamepadEdge.right:
-          return;
-        // ↓ leaves a text field (search query → results; login → next).
-        case GamepadEdge.down:
-        case GamepadEdge.back:
-          break;
-      }
+  void _onEdge(GamepadEdge edge, {bool fromKeyboard = false}) {
+    if (SdtvTextFocusRegistry.primaryIsTextField &&
+        !SdtvGamepadBinding.passesWhileTyping(
+          edge,
+          fromKeyboard: fromKeyboard,
+        )) {
+      return;
     }
-    final isDir = edge == GamepadEdge.up ||
+    final isDir =
+        edge == GamepadEdge.up ||
         edge == GamepadEdge.down ||
         edge == GamepadEdge.left ||
         edge == GamepadEdge.right;

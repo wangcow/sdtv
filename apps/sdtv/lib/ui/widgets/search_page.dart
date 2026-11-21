@@ -207,7 +207,7 @@ class _SearchPageState extends State<SearchPage> {
             child: Text(
               widget.browsing
                   ? '←→ along a row  ·  ↑↓ rows (↑ from the top row: search box)  ·  A open  ·  B close'
-                  : 'Type (Steam+X for the keyboard)  ·  ↓ or B to the results  ·  B close',
+                  : 'Type (Steam+X for the keyboard)  ·  B to the results (↓ on a keyboard)  ·  B again to close',
               style: theme.textTheme.labelMedium?.copyWith(
                 color: scheme.onSurface.withValues(alpha: 0.6),
               ),
