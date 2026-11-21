@@ -491,6 +491,10 @@ class SessionController extends ChangeNotifier {
   /// (same list as when play started: category or favorites).
   List<LiveChannel> _watchList = const [];
   int _watchIndex = 0;
+
+  /// Channel watched before the current one (in [_watchList]), for the
+  /// HUD's Last ch button. Null until the first zap.
+  int? _previousWatchIndex;
   DateTime? _lastZapAt;
   DateTime? _lastVolAt;
   bool _zapInFlight = false;
@@ -1313,8 +1317,37 @@ class SessionController extends ChangeNotifier {
     var i = (_watchIndex + delta) % _watchList.length;
     if (i < 0) i += _watchList.length;
     if (i == _watchIndex) return;
+    await _zapToIndex(i);
+  }
 
+  /// A previous channel exists to flip back to (live only).
+  bool get hasLastChannel {
+    final prev = _previousWatchIndex;
+    return !watchingVod &&
+        prev != null &&
+        prev < _watchList.length &&
+        prev != _watchIndex;
+  }
+
+  /// Flip to the channel watched before this one (and back again).
+  Future<void> watchLastChannel() async {
+    if (!isWatchingExternal || !hasLastChannel) return;
+    if (watchMenuOpen || _zapInFlight) return;
+    final now = DateTime.now();
+    if (_lastZapAt != null &&
+        now.difference(_lastZapAt!) < const Duration(milliseconds: 280)) {
+      return;
+    }
+    _lastZapAt = now;
+    _stallSince = null;
+    _lastStallPos = null;
+    _sawPlaybackClock = false;
+    await _zapToIndex(_previousWatchIndex!);
+  }
+
+  Future<void> _zapToIndex(int i) async {
     final ch = _watchList[i];
+    _previousWatchIndex = _watchIndex;
     _watchIndex = i;
     nowPlaying = ch;
     notifyListeners();
@@ -1368,10 +1401,7 @@ class SessionController extends ChangeNotifier {
       }
     }
 
-    return externalMpv.ensureHealthyOrShowError(
-      fallback,
-      title: label,
-    );
+    return externalMpv.ensureHealthyOrShowError(fallback, title: label);
   }
 
   /// Volume ± (D-pad / arrows). Steps of 5 on mpv's 0–100 scale + OSD.
@@ -1415,8 +1445,10 @@ class SessionController extends ChangeNotifier {
     final cached = _searchIndex;
     if (cached != null &&
         of.length == _searchIndexOf.length &&
-        [for (var i = 0; i < of.length; i++) identical(of[i], _searchIndexOf[i])]
-            .every((same) => same)) {
+        [
+          for (var i = 0; i < of.length; i++)
+            identical(of[i], _searchIndexOf[i]),
+        ].every((same) => same)) {
       return cached;
     }
     _searchIndexOf = of;
@@ -2325,6 +2357,32 @@ class SessionController extends ChangeNotifier {
   }
 
   /// True when this poll handled series EOF (next episode, or last-episode hold).
+  /// The episode after the one playing, if the show has one.
+  SeriesEpisode? get nextEpisode {
+    final current = nowPlayingEpisode;
+    if (!watchingVod || current == null || nowPlayingSeries == null) {
+      return null;
+    }
+    return seriesCatalog?.nextEpisode(current);
+  }
+
+  /// HUD Next ep: save this episode's position, then play the next one in
+  /// the same mpv (same path as the automatic advance at the end).
+  Future<void> watchNextEpisode() async {
+    final show = nowPlayingSeries;
+    final next = nextEpisode;
+    if (!isWatchingExternal || show == null || next == null) return;
+    if (_seriesAdvanceInFlight || watchMenuOpen) return;
+    _seriesAdvanceInFlight = true;
+    try {
+      await _saveVodProgress();
+      await _advanceToSeriesEpisode(show, next);
+    } finally {
+      _seriesAdvanceInFlight = false;
+      notifyListeners();
+    }
+  }
+
   Future<bool> _tryAdvanceSeriesEpisode() async {
     if (!watchingVod || nowPlayingEpisode == null) return false;
     if (watchMenuOpen || watchStallOpen || _seriesAdvanceInFlight) {
@@ -2650,6 +2708,7 @@ class SessionController extends ChangeNotifier {
 
       _watchList = playable;
       _watchIndex = start;
+      _previousWatchIndex = null;
 
       // Mini guide once mpv is up (playFullscreen blocks until quit).
       unawaited(_showMiniGuideWhenReady(channel));

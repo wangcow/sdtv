@@ -256,6 +256,8 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
         PlayerChromeFocus.prevChannel,
         PlayerChromeFocus.playPause,
         PlayerChromeFocus.nextChannel,
+        // Appears after the first zap.
+        if (widget.session.hasLastChannel) PlayerChromeFocus.lastChannel,
         PlayerChromeFocus.subtitles,
         PlayerChromeFocus.audio,
         if (widget.session.nowPlaying != null) PlayerChromeFocus.favorite,
@@ -267,6 +269,7 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
       if (seek) PlayerChromeFocus.seekBack,
       PlayerChromeFocus.playPause,
       if (seek) PlayerChromeFocus.seekFwd,
+      if (widget.session.nextEpisode != null) PlayerChromeFocus.nextEpisode,
       PlayerChromeFocus.subtitles,
       PlayerChromeFocus.audio,
       PlayerChromeFocus.back,
@@ -314,7 +317,7 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
         );
       }
     }
-    final logo = ch == null ? null : await _loadLogo(ch);
+    final logo = await _loadArt();
     if (!mounted || gen != _infoGen) return;
     setState(() {
       _info = info;
@@ -325,13 +328,40 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
   }
 
   /// The channel logo from the artwork cache, decoded before it is shown.
-  Future<ImageProvider?> _loadLogo(LiveChannel ch) async {
-    if (ch.streamIcon.trim().isEmpty) return null;
+  /// Top-bar art: the channel logo (live), the movie poster, or the show's
+  /// cover for an episode. Same cache entries as the guide and poster grids.
+  Future<ImageProvider?> _loadArt() {
+    final s = widget.session;
+    final ch = s.nowPlaying;
+    final show = s.nowPlayingSeries;
+    final vod = s.nowPlayingVod;
+    if (!_vod && ch != null) {
+      return _loadImage(
+        ArtworkCache.kindChannel,
+        '${ch.streamId}',
+        ch.streamIcon,
+      );
+    }
+    if (show != null) {
+      return _loadImage(ArtworkCache.kindVod, '${show.seriesId}', show.cover);
+    }
+    if (vod != null) {
+      return _loadImage(
+        ArtworkCache.kindVod,
+        '${vod.streamId}',
+        vod.streamIcon,
+      );
+    }
+    return Future.value();
+  }
+
+  Future<ImageProvider?> _loadImage(String kind, String id, String url) async {
+    if (url.trim().isEmpty) return null;
     final file = await widget.session.artwork.getFile(
       scope: widget.session.prefsScope,
-      kind: ArtworkCache.kindChannel,
-      id: '${ch.streamId}',
-      url: ch.streamIcon,
+      kind: kind,
+      id: id,
+      url: url,
     );
     if (file == null || !mounted) return null;
     final provider = ResizeImage(FileImage(file), height: 128);
@@ -353,6 +383,12 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
         unawaited(widget.session.seekVodBy(const Duration(seconds: 10)));
         unawaited(_refreshPosition());
         _bumpHud();
+      case PlayerChromeFocus.lastChannel:
+        _bumpHud();
+        unawaited(widget.session.watchLastChannel());
+      case PlayerChromeFocus.nextEpisode:
+        _bumpHud();
+        unawaited(widget.session.watchNextEpisode());
       case PlayerChromeFocus.prevChannel || PlayerChromeFocus.nextChannel:
         _bumpHud();
         unawaited(
@@ -937,7 +973,8 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
       showChrome: _showHud,
       buttons: _rowFocusOrder,
       favorite: ch != null && widget.session.isFavorite(ch),
-      logo: _vod ? null : _logo,
+      logo: _logo,
+      logoIsPoster: _vod,
       programme: _programme,
       subtitleLabel: _info.subtitles,
       audioLabel: _info.audio,

@@ -14,6 +14,12 @@ enum PlayerChromeFocus {
   playPause,
   seekFwd,
   nextChannel,
+
+  /// Flip back to the channel watched before this one.
+  lastChannel,
+
+  /// Play the next episode of the show (VOD).
+  nextEpisode,
   subtitles,
   audio,
   favorite,
@@ -61,6 +67,7 @@ class PlayerChrome extends StatelessWidget {
     required this.buttons,
     this.favorite = false,
     this.logo,
+    this.logoIsPoster = false,
     this.programme,
     this.subtitleLabel,
     this.audioLabel,
@@ -91,6 +98,9 @@ class PlayerChrome extends StatelessWidget {
   /// Channel logo, already decoded (the mpv HUD captures one frame, so a
   /// still-loading image would be caught blank).
   final ImageProvider? logo;
+
+  /// [logo] is a 2:3 poster (movie / show) rather than a channel logo.
+  final bool logoIsPoster;
   final ChromeProgramme? programme;
   final String? subtitleLabel;
   final String? audioLabel;
@@ -150,16 +160,19 @@ class PlayerChrome extends StatelessWidget {
           children: [
             if (logo != null) ...[
               Container(
-                width: 76,
-                height: 48,
-                padding: const EdgeInsets.all(4),
+                width: logoIsPoster ? 44 : 76,
+                height: logoIsPoster ? 66 : 48,
+                padding: logoIsPoster
+                    ? EdgeInsets.zero
+                    : const EdgeInsets.all(4),
+                clipBehavior: Clip.antiAlias,
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(logoIsPoster ? 6 : 8),
                 ),
                 child: Image(
                   image: logo!,
-                  fit: BoxFit.contain,
+                  fit: logoIsPoster ? BoxFit.cover : BoxFit.contain,
                   errorBuilder: (_, _, _) => const SizedBox.shrink(),
                 ),
               ),
@@ -279,6 +292,16 @@ class PlayerChrome extends StatelessWidget {
       PlayerChromeFocus.nextChannel => (
         Icons.skip_next_rounded,
         'Next ch',
+        false,
+      ),
+      PlayerChromeFocus.lastChannel => (
+        Icons.swap_horiz_rounded,
+        'Last ch',
+        false,
+      ),
+      PlayerChromeFocus.nextEpisode => (
+        Icons.skip_next_rounded,
+        'Next ep',
         false,
       ),
       PlayerChromeFocus.seekBack => (Icons.replay_10_rounded, '−10s', false),

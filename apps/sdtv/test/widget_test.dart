@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -229,6 +230,69 @@ void main() {
     expect(selected(), 'Search');
   });
 
+  testWidgets('Last ch flips between the last two channels', (tester) async {
+    await _useWideSurface(tester);
+    final mpv = _PlayingMpv();
+    final session = await _pumpDemo(tester, mpv: mpv);
+    final chans = session.channelsInCategory;
+    expect(chans.length, greaterThanOrEqualTo(2));
+
+    unawaited(session.watchChannel(chans[0]));
+    await tester.pump();
+    expect(session.nowPlaying?.streamId, chans[0].streamId);
+    expect(session.hasLastChannel, isFalse);
+
+    await session.watchChannelAdjacent(1);
+    expect(session.nowPlaying?.streamId, chans[1].streamId);
+    expect(session.hasLastChannel, isTrue);
+
+    await _pastActivateCooldown(tester); // zap debounce is wall-clock
+    await session.watchLastChannel();
+    expect(session.nowPlaying?.streamId, chans[0].streamId);
+
+    await _pastActivateCooldown(tester);
+    await session.watchLastChannel();
+    expect(session.nowPlaying?.streamId, chans[1].streamId);
+
+    mpv.finish();
+    await _pumpFor(tester, const Duration(seconds: 6));
+  });
+
+  testWidgets('Next ep plays the following episode, across seasons', (
+    tester,
+  ) async {
+    await _useWideSurface(tester);
+    final mpv = _PlayingMpv();
+    final session = await _pumpDemo(tester, mpv: mpv);
+    await session.setGuideSection(GuideSection.series);
+    await _pumpUntil(tester, find.text('Harbor Nights'));
+    final show = session.seriesInCategory.firstWhere(
+      (s) => s.name == 'Harbor Nights',
+    );
+    await tester.runAsync(() => session.openSeriesDetail(show));
+    await _pumpUntilIdle(tester, () => session.seriesCatalog != null);
+    final first = session.seriesCatalog!.firstEpisode!;
+
+    unawaited(session.watchSeriesEpisode(show, first, fromBeginning: true));
+    await tester.pump();
+    expect(session.nowPlayingEpisode?.title, 'Pilot');
+    expect(session.nextEpisode?.title, 'Fog Line');
+
+    await session.watchNextEpisode();
+    expect(session.nowPlayingEpisode?.title, 'Fog Line');
+    expect(session.nextEpisode?.season, 2); // S2E1 comes next
+
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(seconds: 5)),
+    ); // advance debounce is wall-clock
+    await session.watchNextEpisode();
+    expect(session.nowPlayingEpisode?.title, 'Low Tide');
+    expect(mpv.loads.length, 3);
+
+    mpv.finish();
+    await _pumpFor(tester, const Duration(seconds: 6));
+  });
+
   testWidgets('menu has no Flutter chrome entry', (tester) async {
     await _useWideSurface(tester);
     final session = await _pumpDemo(tester, mpv: _RecordingMpv());
@@ -327,6 +391,55 @@ Future<void> _pumpUntil(WidgetTester tester, Finder finder) async {
     if (finder.evaluate().isNotEmpty) return;
   }
   expect(finder, findsWidgets);
+}
+
+/// mpv that "plays" until [finish]: playFullscreen stays pending, loads are
+/// recorded, and every stream reports healthy.
+class _PlayingMpv extends ExternalMpvLauncher {
+  final _done = Completer<ExternalMpvResult>();
+  final loads = <Uri>[];
+  bool _running = false;
+
+  @override
+  bool get isRunning => _running;
+
+  @override
+  Future<ExternalMpvResult> playFullscreen(
+    Uri url, {
+    List<({String title, Uri uri})>? playlist,
+    int startIndex = 0,
+    Uri? fallbackUrl,
+    String? fallbackTitle,
+    bool vod = false,
+    Duration? startAt,
+  }) {
+    _running = true;
+    loads.add(url);
+    return _done.future;
+  }
+
+  @override
+  Future<bool> loadFile(Uri url, {String? title}) async {
+    loads.add(url);
+    return true;
+  }
+
+  @override
+  Future<bool> ensureHealthyOrShowError(
+    Uri? fallback, {
+    String? title,
+    Duration timeout = ExternalMpvLauncher.startTimeout,
+  }) async => true;
+
+  @override
+  Future<bool> sendCommand(List<Object?> command) async => true;
+
+  void finish() {
+    _running = false;
+    _done.complete(
+      const ExternalMpvResult(started: true, durationMs: 60000, userQuit: true),
+    );
+  }
 }
 
 /// Reports a running mpv (so the page is in watch mode) without a process.

@@ -21,7 +21,7 @@ YouTube trailers open in the system/YouTube client (TiviMate-style), not mpv.
 
 **Seasons & episodes (TV Shows):** **↑↓** pick an episode · **LB/RB** change season · **A** plays that episode · **B** / **←** back to the title. **☰** still opens Search (do not use RB for Search here). Resume progress is per episode. A finished episode shows a green check, a dimmed row, and the word **Watched** at the start of the subtitle. The highlighted row stays bright.
 
-While a movie or episode is playing, the Flutter HUD is on the video. **←/→** moves the buttons · **↑** the scrubber · **LB/RB** seek 10s · **A** confirms the focused button (Play pauses) · **B** moves to Back, then returns to the title (position is saved). **☰** opens subs, audio, and mute. Position is also saved every 10s. No live-edge reload. When an episode ends, the **next episode starts automatically**. The last episode holds on the final frame — **B** back to the title.
+While a movie or episode is playing, the Flutter HUD is on the video. **←/→** moves the buttons · **↑** the scrubber · **LB/RB** seek 10s · **A** confirms the focused button (Play pauses) · **B** moves to Back, then returns to the title (position is saved). **☰** opens subs, audio, and mute. Position is also saved every 10s. No live-edge reload. When an episode ends, the **next episode starts automatically**; **Next ep** on the HUD skips there early (your place in this episode is saved). The last episode holds on the final frame — **B** back to the title.
 
 ## Guide (browse)
 
@@ -108,7 +108,7 @@ The Flutter HUD starts visible, then hides. **← / →** or **A** brings it bac
 | Action | When | Deck / Xbox |
 |--------|------|-------------|
 | Show HUD | Hidden | ← / → or A |
-| Move chrome | HUD visible | ← / → (play, ±10s on VOD, Back) |
+| Move chrome | HUD visible | ← / → along the buttons. Live: Prev ch · Play · Next ch · **Last ch** (flips to the channel you came from, after the first zap) · CC · Audio · Favourite · Guide. Movies / episodes: −10s · Play · +10s · **Next ep** (shows) · CC · Audio · Back |
 | Scrubber | VOD HUD | ↑ focuses the bar · ← / → seeks · ↓ leaves it |
 | Channel − / + | Live | LB / RB, or ↑ / ↓ while the HUD is visible |
 | Seek ±10s | Movie / episode | LB / RB |
