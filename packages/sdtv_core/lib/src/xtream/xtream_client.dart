@@ -102,7 +102,7 @@ class HttpXtreamClient implements XtreamClient {
     final query = {
       ...credentials.authQuery,
       'action': 'get_live_streams',
-      if (categoryId != null) 'category_id': categoryId,
+      'category_id': ?categoryId,
     };
     return _getList(query, LiveChannel.fromJson);
   }
@@ -171,7 +171,7 @@ class HttpXtreamClient implements XtreamClient {
     final query = {
       ...credentials.authQuery,
       'action': 'get_vod_streams',
-      if (categoryId != null) 'category_id': categoryId,
+      'category_id': ?categoryId,
     };
     return _getList(query, VodItem.fromJson);
   }
@@ -212,7 +212,7 @@ class HttpXtreamClient implements XtreamClient {
     final query = {
       ...credentials.authQuery,
       'action': 'get_series',
-      if (categoryId != null) 'category_id': categoryId,
+      'category_id': ?categoryId,
     };
     return _getList(query, SeriesItem.fromJson);
   }

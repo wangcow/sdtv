@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 
@@ -138,7 +137,7 @@ class LinuxJoystickReader {
     await close();
 
     final candidates = <String>[
-      if (devicePath != null) devicePath!,
+      ?devicePath,
       if (devicePath == null) ...listDevicePaths(),
     ];
 
@@ -151,11 +150,8 @@ class LinuxJoystickReader {
         // Fire-and-forget pump; IO waits on the background thread pool.
         unawaited(_pump());
         return true;
-      } on FileSystemException {
-        continue;
-      } on PathNotFoundException {
-        continue;
       } catch (_) {
+        // Missing, busy or not permitted: try the next device.
         continue;
       }
     }

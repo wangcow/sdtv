@@ -151,7 +151,6 @@ class ExternalMpvLauncher {
   Uri? _activeFallback;
   String? _activeFallbackTitle;
   bool _vodMode = false;
-  Duration? _vodStartAt;
 
   bool get isVodSession => _vodMode;
 
@@ -1548,7 +1547,6 @@ class ExternalMpvLauncher {
     _launching = true;
     _userQuit = false;
     _vodMode = vod;
-    _vodStartAt = startAt;
     _restartForDisplay = false;
     _dockHintShown = false;
     // Fresh watch — only set again if we detect dock letterboxing mid-session.

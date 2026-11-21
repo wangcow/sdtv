@@ -76,20 +76,3 @@ class SdtvTextFocusRegistry {
     return false;
   }
 }
-
-extension on FocusNode {
-  Iterable<FocusNode> get ancestors sync* {
-    var p = parent;
-    while (p != null) {
-      yield p;
-      p = p.parent;
-    }
-  }
-
-  Iterable<FocusNode> get descendants sync* {
-    for (final c in children) {
-      yield c;
-      yield* c.descendants;
-    }
-  }
-}

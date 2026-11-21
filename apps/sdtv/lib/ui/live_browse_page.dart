@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io' show exit;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:sdtv_core/sdtv_core.dart';
@@ -465,15 +464,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       target.clamp(0.0, max),
       duration: const Duration(milliseconds: 90),
       curve: Curves.easeOut,
-    );
-  }
-
-  void _scrollToChannelIndex(int index) {
-    _ensureIndexVisible(
-      _chanScroll,
-      index,
-      itemExtent: _rowExtent,
-      headerExtent: _listHeaderExtent,
     );
   }
 
