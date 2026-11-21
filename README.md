@@ -112,6 +112,7 @@ copies it to a Deck over SSH (see
 | `SDTV_FORCE_MOCK=1` | Connect uses the mock catalog instead of a real panel |
 | `SDTV_MPV_PATH` | mpv to use: a path, or `flatpak:io.mpv.Mpv` |
 | `SDTV_ENABLE_GAMEPAD=0` | Turn off the joystick reader |
+| `SDTV_PAD_ALL=1` | Read every joystick, even when Steam Input's virtual pads are present |
 | `SDTV_DEMO_STREAM` | Stream URL for demo mode |
 | `SDTV_PLAY_LOG` | File for stream start diagnostics (`run-sdtv.sh` sets it) |
 
