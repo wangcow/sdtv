@@ -353,7 +353,12 @@ fi
   fi
 } > "${DIR}/.sdtv-runtime.txt" 2>/dev/null || true
 
-exec "${DIR}/sdtv" "$@"
+# Keep the output of the last two runs (Game Mode shows none) for
+# troubleshooting: ~/sdtv/.sdtv-last-run.log and .sdtv-prev-run.log.
+if [ -f "${DIR}/.sdtv-last-run.log" ]; then
+  mv -f "${DIR}/.sdtv-last-run.log" "${DIR}/.sdtv-prev-run.log" 2>/dev/null || true
+fi
+exec "${DIR}/sdtv" "$@" >"${DIR}/.sdtv-last-run.log" 2>&1
 EOF
 chmod +x "${BUNDLE}/run-sdtv.sh" "${BUNDLE}/sdtv"
 # App icon, e.g. for the Steam shortcut (Properties → icon).
