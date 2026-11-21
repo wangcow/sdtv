@@ -7,7 +7,6 @@ build/
 **/doc/api/
 .flutter-plugins
 .flutter-plugins-dependencies
-.melos_tool/
 pubspec_overrides.yaml
 
 # IDE
@@ -24,15 +23,9 @@ Thumbs.db
 # Secrets — never commit real Xtream credentials
 .env
 .env.*
-!.env.example
 **/credentials.json
 **/secrets/
 *.local.yaml
-
-# Flatpak / local build
-.flatpak-builder/
-repo/
-*.flatpak
 
 # Coverage
 coverage/

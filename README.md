@@ -71,7 +71,7 @@ apps/sdtv/              Flutter app: UI and session state
 packages/sdtv_core/     Xtream / M3U clients, models, EPG
 packages/sdtv_input/    Gamepad → focus and actions
 packages/sdtv_player/   External mpv: launch, JSON IPC, HUD bitmap overlay
-tool/                   run, package and deploy scripts; mock Xtream fixtures
+tool/                   run, package and deploy scripts
 docs/                   Controller map, Steam Deck guide, library format
 ```
 
@@ -103,7 +103,7 @@ requests.
 
 **Trying a build on a Deck:** `./tool/deploy-deck.sh` packages the app and
 copies it to a Deck over SSH (see
-[docs/STEAM_DECK.md](docs/STEAM_DECK.md#fast-game-mode-test-loop-recommended)).
+[docs/STEAM_DECK.md](docs/STEAM_DECK.md#testing-your-own-builds-on-a-deck)).
 
 ### Environment variables
 
@@ -122,7 +122,7 @@ On the Deck, put these in `~/sdtv/sdtv.env`.
 
 - Every screen must work with a controller alone.
 - Never commit credentials, provider URLs or playlists. Use the fixtures in
-  `tool/mock_xtream/fixtures/`. Automated traffic can get a real account
+  `apps/sdtv/assets/mock_xtream/`. Automated traffic can get a real account
   banned.
 - Video always plays in mpv, never through a Flutter texture.
 

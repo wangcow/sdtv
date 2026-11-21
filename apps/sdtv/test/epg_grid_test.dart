@@ -202,21 +202,5 @@ void main() {
         DateTime(2026, 9, 4, 21, 0),
       );
     });
-
-    test('paging back stops at the current slot', () {
-      final start = DateTime(2026, 9, 4, 22, 0);
-      expect(
-        epgShiftWindow(start, const Duration(hours: -2), now: now),
-        DateTime(2026, 9, 4, 20, 0),
-      );
-      expect(
-        epgShiftWindow(start, const Duration(hours: -6), now: now),
-        DateTime(2026, 9, 4, 20, 0),
-      );
-      expect(
-        epgShiftWindow(start, const Duration(hours: 2), now: now),
-        DateTime(2026, 9, 5, 0, 0),
-      );
-    });
   });
 }

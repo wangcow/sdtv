@@ -2,9 +2,8 @@ import 'package:flutter/widgets.dart';
 
 /// Direct callbacks for couch chrome (bypasses Intent / Actions lookup quirks).
 ///
-/// Prefer these for pad events on fullscreen surfaces (video player). Once
-/// media_kit is *playing*, [Actions.maybeInvoke] for D-pad/bumpers often fails
-/// while [onBack] still works — same root cause as earlier B issues.
+/// Pad events call these directly rather than going through
+/// [Actions.maybeInvoke], which needs a focused context to find a handler.
 class SdtvInputCallbacks extends InheritedWidget {
   const SdtvInputCallbacks({
     super.key,

@@ -18,7 +18,7 @@ Guidance for humans and coding agents working in this repo.
 ## Hard rules
 
 1. **Controller-first** — every new screen must be fully focus-navigable without a mouse.
-2. **No live Xtream in CI** — use `tool/mock_xtream/fixtures/` only.
+2. **No live Xtream in CI** — use the mock fixtures in `apps/sdtv/assets/mock_xtream/` only.
 3. **Never commit credentials** — `.env`, passwords, real server URLs stay gitignored.
 4. **Attribution** — keep Apache-2.0 LICENSE + NOTICE; About footer shows Wangcow line.
 5. Prefer small, focused diffs; do not expand scope past the current phase.

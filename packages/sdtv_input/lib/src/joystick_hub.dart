@@ -6,8 +6,8 @@ import 'package:flutter/scheduler.dart';
 import 'joystick_isolate.dart';
 import 'linux_joystick.dart';
 
-/// Process-wide joystick owner. Prefers a **background isolate** so media_kit
-/// video frames cannot starve pad reads on the UI isolate.
+/// Process-wide joystick owner. Prefers a **background isolate** so heavy UI
+/// frames cannot starve pad reads on the UI isolate.
 ///
 /// Opens every `/dev/input/js*` and **re-scans every ~2s** so a controller
 /// powered on after docking (e.g. Xbox) is picked up without restarting sdtv.

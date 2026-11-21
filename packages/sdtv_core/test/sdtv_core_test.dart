@@ -7,40 +7,23 @@ void main() {
   late String authJson;
   late String categoriesJson;
   late String streamsJson;
+  late Directory fixtureDir;
 
   setUpAll(() {
-    // Resolve fixtures relative to monorepo root or package cwd.
-    final candidates = [
-      Directory.current.path,
-      Directory.current.parent.path,
-      Directory.current.parent.parent.path,
-    ];
-    Directory? root;
-    for (final c in candidates) {
-      final dir = Directory('$c/tool/mock_xtream/fixtures');
-      if (dir.existsSync()) {
-        root = Directory(c);
-        break;
-      }
-      final dir2 = Directory('$c/../tool/mock_xtream/fixtures');
-      if (dir2.existsSync()) {
-        root = Directory('$c/..').absolute;
-        break;
-      }
-    }
-    // packages/sdtv_core -> repo root is ../..
-    final fromPackage = Directory(
-      '${Directory.current.path}/../../tool/mock_xtream/fixtures',
-    );
-    final fixtureDir = fromPackage.existsSync()
-        ? fromPackage
-        : Directory('${root!.path}/tool/mock_xtream/fixtures');
+    // The mock Xtream fixtures live with the app (they are its demo
+    // assets). Tests run from packages/sdtv_core or the repo root.
+    fixtureDir = [
+      Directory('../../apps/sdtv/assets/mock_xtream'),
+      Directory('apps/sdtv/assets/mock_xtream'),
+    ].firstWhere((d) => d.existsSync());
 
     authJson = File('${fixtureDir.path}/auth_ok.json').readAsStringSync();
-    categoriesJson =
-        File('${fixtureDir.path}/live_categories.json').readAsStringSync();
-    streamsJson =
-        File('${fixtureDir.path}/live_streams.json').readAsStringSync();
+    categoriesJson = File(
+      '${fixtureDir.path}/live_categories.json',
+    ).readAsStringSync();
+    streamsJson = File(
+      '${fixtureDir.path}/live_streams.json',
+    ).readAsStringSync();
   });
 
   group('MockXtreamClient', () {
@@ -78,17 +61,16 @@ void main() {
     });
 
     test('lists VOD categories and movies', () async {
-      final fixtureDir = Directory(
-        '${Directory.current.path}/../../tool/mock_xtream/fixtures',
-      );
       final client = MockXtreamClient(
         authJson: authJson,
         liveCategoriesJson: categoriesJson,
         liveStreamsJson: streamsJson,
-        vodCategoriesJson:
-            File('${fixtureDir.path}/vod_categories.json').readAsStringSync(),
-        vodStreamsJson:
-            File('${fixtureDir.path}/vod_streams.json').readAsStringSync(),
+        vodCategoriesJson: File(
+          '${fixtureDir.path}/vod_categories.json',
+        ).readAsStringSync(),
+        vodStreamsJson: File(
+          '${fixtureDir.path}/vod_streams.json',
+        ).readAsStringSync(),
       );
       final cats = await client.getVodCategories();
       expect(cats.map((c) => c.categoryName), contains('Action'));
@@ -98,17 +80,16 @@ void main() {
     });
 
     test('getVodInfo reads fixture metadata', () async {
-      final fixtureDir = Directory(
-        '${Directory.current.path}/../../tool/mock_xtream/fixtures',
-      );
       final client = MockXtreamClient(
         authJson: authJson,
         liveCategoriesJson: categoriesJson,
         liveStreamsJson: streamsJson,
-        vodStreamsJson:
-            File('${fixtureDir.path}/vod_streams.json').readAsStringSync(),
-        vodInfoJson:
-            File('${fixtureDir.path}/vod_info.json').readAsStringSync(),
+        vodStreamsJson: File(
+          '${fixtureDir.path}/vod_streams.json',
+        ).readAsStringSync(),
+        vodInfoJson: File(
+          '${fixtureDir.path}/vod_info.json',
+        ).readAsStringSync(),
       );
       final info = await client.getVodInfo(9001);
       expect(info.title, 'Demo Feature');
@@ -117,41 +98,42 @@ void main() {
       expect(info.hasTrailer, isTrue);
     });
 
-    test('builds live play URL without exposing secrets in toString of creds',
-        () {
-      final creds = XtreamCredentials(
-        baseUrl: 'http://example.com:8080',
-        username: 'u',
-        password: 'secret',
-      );
-      expect(creds.toString(), isNot(contains('secret')));
-      expect(
-        creds.liveStreamUri(42).toString(),
-        'http://example.com:8080/live/u/secret/42.ts',
-      );
-      expect(
-        creds.movieStreamUri(9, extension: 'mkv').toString(),
-        'http://example.com:8080/movie/u/secret/9.mkv',
-      );
-      expect(
-        creds.seriesStreamUri('8101', extension: 'mp4').toString(),
-        'http://example.com:8080/series/u/secret/8101.mp4',
-      );
-    });
+    test(
+      'builds live play URL without exposing secrets in toString of creds',
+      () {
+        final creds = XtreamCredentials(
+          baseUrl: 'http://example.com:8080',
+          username: 'u',
+          password: 'secret',
+        );
+        expect(creds.toString(), isNot(contains('secret')));
+        expect(
+          creds.liveStreamUri(42).toString(),
+          'http://example.com:8080/live/u/secret/42.ts',
+        );
+        expect(
+          creds.movieStreamUri(9, extension: 'mkv').toString(),
+          'http://example.com:8080/movie/u/secret/9.mkv',
+        );
+        expect(
+          creds.seriesStreamUri('8101', extension: 'mp4').toString(),
+          'http://example.com:8080/series/u/secret/8101.mp4',
+        );
+      },
+    );
 
     test('lists series categories, shows, and getSeriesInfo', () async {
-      final fixtureDir = Directory(
-        '${Directory.current.path}/../../tool/mock_xtream/fixtures',
-      );
       final client = MockXtreamClient(
         authJson: authJson,
         liveCategoriesJson: categoriesJson,
         liveStreamsJson: streamsJson,
-        seriesCategoriesJson:
-            File('${fixtureDir.path}/series_categories.json').readAsStringSync(),
+        seriesCategoriesJson: File(
+          '${fixtureDir.path}/series_categories.json',
+        ).readAsStringSync(),
         seriesJson: File('${fixtureDir.path}/series.json').readAsStringSync(),
-        seriesInfoJson:
-            File('${fixtureDir.path}/series_info.json').readAsStringSync(),
+        seriesInfoJson: File(
+          '${fixtureDir.path}/series_info.json',
+        ).readAsStringSync(),
       );
       final cats = await client.getSeriesCategories();
       expect(cats.map((c) => c.categoryName), contains('Drama'));
@@ -196,11 +178,7 @@ void main() {
         name: 'Forensic Files',
         categoryId: 'doc',
       );
-      const b = LiveChannel(
-        streamId: 0,
-        name: 'Other Show',
-        categoryId: 'doc',
-      );
+      const b = LiveChannel(streamId: 0, name: 'Other Show', categoryId: 'doc');
       expect(a.favoriteKey, isNot(b.favoriteKey));
       expect(a.favoriteKey, startsWith('n:'));
     });

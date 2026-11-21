@@ -234,7 +234,6 @@ class SdtvInputScope extends StatefulWidget {
     this.onPageDown,
     this.extraShortcuts = const {},
     this.extraActions = const {},
-    @Deprecated('Ignored — use app-root SdtvGamepadBinding') this.enableGamepad,
   });
 
   final Widget child;
@@ -249,7 +248,6 @@ class SdtvInputScope extends StatefulWidget {
   final VoidCallback? onPageDown;
   final Map<ShortcutActivator, Intent> extraShortcuts;
   final Map<Type, Action<Intent>> extraActions;
-  final bool? enableGamepad;
 
   @override
   State<SdtvInputScope> createState() => _SdtvInputScopeState();

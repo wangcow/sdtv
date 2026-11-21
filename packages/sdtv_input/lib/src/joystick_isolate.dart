@@ -11,8 +11,8 @@ import 'linux_joystick.dart';
 /// Opens **all** `/dev/input/js*` devices and **re-scans** periodically so a
 /// pad turned on after dock (Xbox) works without restarting the app.
 ///
-/// media_kit / heavy UI work can starve pad reads on the UI isolate; the
-/// isolate only sends edge *indices* to the main isolate.
+/// Heavy UI work can starve pad reads on the UI isolate; the isolate only
+/// sends edge *indices* to the main isolate.
 class JoystickIsolate {
   JoystickIsolate();
 

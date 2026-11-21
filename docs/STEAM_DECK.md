@@ -62,178 +62,100 @@ sdtv detects that case and shows an on-screen / snack hint to exit and reopen.
 
 Channels that are actually 720p will still look soft when the window correctly fills 1080p.
 
-## Development build (now)
+## Watching
 
-For development, run from source on Desktop Mode:
+**A** on a channel, movie or episode opens it full screen in **mpv**, which
+decodes in hardware (VA-API). sdtv's controls are drawn on top of the
+picture and hide after a few seconds; **B** hides them, and **B** again goes
+back to the guide. The full button map is in [CONTROLLER.md](CONTROLLER.md).
 
-```bash
-cd ~/sdtv-src
-source tool/bazzite-flutter-env.sh   # Bazzite/Homebrew; skip on normal Fedora if dnf toolchain is installed
-# Needs: brew install mpv   (the external player)
-cd apps/sdtv
-flutter pub get
-flutter run -d linux
-```
+mpv from **Discover** is the Flathub app `io.mpv.Mpv`. That is a Flatpak,
+not `/usr/bin/mpv`, which is normal: sdtv finds either.
 
-### Watching channels (Phase A: external mpv)
+## Connecting to your provider
 
-Selecting a channel **starts fullscreen `mpv`**, then returns to the TV Guide when mpv quits.
+**Connect to provider** asks for:
 
-- Install **mpv** on the Deck (Desktop Mode → **Discover** → search **mpv** → install Flathub app `io.mpv.Mpv`).  
-  Discover installs a **Flatpak**, not `/usr/bin/mpv` — that is normal; sdtv looks for Flatpak too.
-- While watching, the Flutter HUD is painted on the mpv picture (bitmap overlay). It hides after a few seconds.
-  - **← / →** or **A** — show the HUD · **← / →** while it is up moves the buttons
-  - **A** on Play — pause (live unpause reloads the live edge) · **B** — Back, then quit to the guide
-  - **LB / RB** — previous / next channel (same list / favorites), or ±10s on a movie or episode
-  - **↑ / ↓** while the HUD is hidden — volume · **X** / **M** — mute
-  - **☰** — subs / audio / mute text menu
-  - Keyboard (PC, mpv has focus): same as the pad — arrows, Enter = A, Esc = B, Space pause, PgUp/PgDn channel, Tab menu, Q quit. See [CONTROLLER.md](CONTROLLER.md#keyboard-while-playing-pc)
-- If mpv fails to start, the error snack names the problem.
-- Override: create `~/sdtv/sdtv.env` with one of:
-  ```bash
-  SDTV_MPV_PATH=flatpak:io.mpv.Mpv
-  # or system package:
-  # SDTV_MPV_PATH=/usr/bin/mpv
-  ```
-- Debug: after launch, check `~/sdtv/.sdtv-runtime.txt` for `SDTV_MPV_PATH=…`.
+- **Server:** `http://host:port`, the panel root (no `/player_api.php`)
+- **Username** and **password** from your provider
 
-### Watch chrome (daily path)
+M3U playlist URLs work too (Live TV only). Saved playlists can be switched
+in **☰ → Settings**.
 
-**A** on a channel starts **external mpv** (hardware decode, 60fps). The picture stays on mpv. The couch HUD is the Flutter chrome, rendered to an image and composited with mpv `overlay-add` (a bitmap, not ASS text). Gamescope still sees one fullscreen window. Focus stays in sdtv.
+## Troubleshooting
 
-Stock mpv OSC (the seek bar) stays **off**. On live IPTV it rewinds the cache. **☰** opens the subs / audio / mute text menu. If the bitmap overlay fails, sdtv falls back to styled `show-text`. Live sessions use `--keep-open=yes` so a stream hiccup does not quit mpv.
-
-A later use of the same bitmap is a clear corner so the guide can scroll over a live picture. That is not built yet. Do not put the video through a Flutter texture, and do not stack a second window under Gamescope.
-
-### Smooth video (VAAPI)
-
-Stutter + `decode: cpu/software` means **software decode**.
-
-Video decodes in the Deck’s own mpv (system or Flatpak). sdtv bundles no mpv, codecs, `libva`, or Mesa. VAAPI needs the Deck’s driver:
-
-`/usr/lib64/dri/radeonsi_drv_video.so`
-
-`run-sdtv.sh` sets:
-
-- `LIBVA_DRIVERS_PATH=/usr/lib64/dri`
-- `LIBVA_DRIVER_NAME=radeonsi` (Steam Deck APU)
-
-sdtv passes both to a system mpv. A Flatpak mpv (`io.mpv.Mpv`) gets neither: it finds the driver through its own runtime, and the host path breaks VA-API inside the sandbox.
-
-| HUD | Meaning |
-|-----|---------|
-| `decode: vaapi · …` | Good — hardware path |
-| `decode: cpu/software · mpv=bundled` | VAAPI driver still not engaged — check `~/sdtv/.sdtv-runtime.txt` |
-
-After a failed/slow run, open `~/sdtv/.sdtv-runtime.txt` (written at launch) for paths/env.
-
-### Live Xtream on Deck
-
-**Connect to provider** uses your real panel (not demo). Enter:
-
-- Server: `http://host:port` (panel root — no `/player_api.php`)
-- Username / password from your provider
-
-Badge **LIVE** = real catalog + real stream URLs. Channel zap opens a new URL each time.
-
-Optional `~/sdtv/sdtv.env` (created by you, survives deploys if you re-add it):
+**Settings file.** `~/sdtv/sdtv.env` (create it yourself) is read at launch:
 
 ```bash
-# Offline / safe Connect without hitting provider:
-SDTV_FORCE_MOCK=1
+# Use a specific mpv (the default finds a system or Flatpak mpv):
+SDTV_MPV_PATH=flatpak:io.mpv.Mpv
+# SDTV_MPV_PATH=/usr/bin/mpv
 ```
 
-Deploy wipes `~/sdtv` contents — keep a copy of `sdtv.env` if you use it.
+All variables are listed in the [README](../README.md#environment-variables).
+Re-extracting a release keeps it; `deploy-deck.sh` (below) replaces `~/sdtv`
+and does not.
 
-### Fast Game Mode test loop (recommended)
+**Logs**, in `~/sdtv`:
 
-Stay in **Game Mode** on the Deck. Build and push from Bazzite over SSH — no Desktop typing each iteration.
+| File | What's in it |
+|------|--------------|
+| `.sdtv-runtime.txt` | Paths and settings of the last launch (mpv, VA-API) |
+| `.sdtv-last-run.log` | The last launch's log (`.sdtv-prev-run.log` is the one before) |
+| `.sdtv-play.log` | Stream start timings and retries across launches; URLs keep only the host |
 
-#### One-time Deck setup (Desktop Mode once)
+**Stuttering video** usually means software decoding. sdtv bundles no mpv,
+codecs or drivers and uses the Deck's VA-API driver
+(`/usr/lib64/dri/radeonsi_drv_video.so`). `run-sdtv.sh` points a system mpv
+at it (`LIBVA_DRIVERS_PATH`, `LIBVA_DRIVER_NAME=radeonsi`); a Flatpak mpv
+finds it through its own runtime.
 
-1. **Enable SSH** (Desktop → Konsole):
+**A channel won't start.** sdtv waits, retries the same stream, then tries
+the HLS version before showing an error card with **Retry**. Some panels
+start a channel only when the first viewer asks, so the first open can be
+slow.
+
+## Testing your own builds on a Deck
+
+For development: build on a Linux PC and push to the Deck over SSH while it
+stays in Game Mode. Building needs the toolchain in the
+[README](../README.md#development).
+
+**One-time setup**
+
+1. On the Deck, in Desktop Mode (Konsole):
    ```bash
-   passwd   # if you never set a password for user deck
+   passwd                              # if user deck has no password yet
    sudo systemctl enable --now sshd
    ```
-
-2. **SSH key from Bazzite** (skip password prompts):
+2. On the PC:
    ```bash
    ssh-copy-id deck@DECK_IP
-   ssh deck@DECK_IP 'echo ok'
-   ```
-
-3. **First deploy + Non-Steam shortcut** (once):
-   ```bash
-   # on Bazzite
-   export SDTV_DECK_HOST=deck@DECK_IP
+   export SDTV_DECK_HOST=deck@DECK_IP  # or add it to ~/.bashrc
    ./tool/deploy-deck.sh
    ```
-   On Deck Desktop: Steam → **Add a Non-Steam Game** →  
-   `/home/deck/sdtv/run-sdtv.sh` → name it **sdtv**.  
-   Controller: **Gamepad** template (not Desktop).
+3. On the Deck, add `/home/deck/sdtv/run-sdtv.sh` as a non-Steam game and
+   set its controller template to **Gamepad**.
 
-Return to Game Mode. Later deploys overwrite `~/sdtv` in place; the shortcut stays valid.
+**Every change:** run `./tool/deploy-deck.sh` on the PC, then quit and
+relaunch sdtv on the Deck.
 
-#### Everyday (Deck stays in Game Mode)
+| Flag | Effect |
+|------|--------|
+| *(none)* | Build the tarball, upload it, extract to `~/sdtv` |
+| `--no-package` | Upload the existing `dist/sdtv-deck.tar.gz` only |
+| `--package-only` | Build the tarball only |
+| `--host deck@IP` | Target Deck (else `$SDTV_DECK_HOST`) |
 
-```bash
-cd ~/sdtv-src
-export SDTV_DECK_HOST=deck@DECK_IP   # once per shell / add to ~/.bashrc
+`tool/package-deck.sh` builds the release bundle (no mpv, codecs or Mesa
+inside), rewrites library paths to prefer the system's, and writes
+`run-sdtv.sh`. Always launch `run-sdtv.sh`, not `./sdtv`.
 
-./tool/deploy-deck.sh              # rebuild + upload + remote extract
-# ./tool/deploy-deck.sh --no-package   # re-push last tarball only
-```
-
-On the Deck: **Exit game** if sdtv is open → launch **sdtv** from the library again.
-
-| Flag | Meaning |
-|------|---------|
-| *(default)* | `package-deck.sh` + scp + extract to `~/sdtv` |
-| `--no-package` | Upload existing `dist/sdtv-deck.tar.gz` only |
-| `--package-only` | Build tarball, no network |
-| `--host deck@IP` | Target (else `$SDTV_DECK_HOST` or first arg) |
-
-### Packaging details
-
-```bash
-bash tool/package-deck.sh   # or just ./tool/deploy-deck.sh
-```
-
-Produces the Flutter release bundle (no mpv or codec libraries, no brew GTK/X11/mesa), rewritten `DT_NEEDED`, and `run-sdtv.sh` (system-first `LD_LIBRARY_PATH`, VAAPI driver paths, system XKB/fontconfig paths, and mpv discovery).
-
-Always launch **`run-sdtv.sh`**, not `./sdtv`. Prefer `./tool/deploy-deck.sh` over raw `scp -r` (avoids read-only lib Permission denied).
-
-### Bazzite vs regular Fedora
-
-| | Bazzite (immutable) | Fedora Workstation |
-|--|---------------------|--------------------|
-| Install clang/cmake/gtk | Homebrew + `tool/bazzite-flutter-env.sh` | `sudo dnf install clang cmake ninja-build gtk3-devel` |
-| Day-to-day friction | Higher (env vars, brew) | Lower |
-| Controller testing | Same code path (`/dev/input/js*`) | Same |
-| Steam Deck parity | Excellent (same family) | Fine for UI; still validate on Deck |
-
-Bazzite is **not** a blocker for controller support. If brew/env headaches annoy you, a normal Fedora laptop is a great daily driver; keep Bazzite/Deck for packaging and Game Mode acceptance tests.
-
-### “Builds but no window” on Bazzite + NVIDIA
-
-If you see:
-
-```text
-libEGL warning: pci id for fd … driver (null)
-libEGL warning: egl: failed to create dri2 screen
-```
-
-and Flutter says “Syncing files…” with no GUI: **unset `LD_LIBRARY_PATH`**. Homebrew Mesa must not override system NVIDIA EGL. `tool/bazzite-flutter-env.sh` already unsets it. Then:
-
-```bash
-source tool/bazzite-flutter-env.sh
-./tool/run.sh
-```
-
-If still invisible, try `export GDK_BACKEND=x11` before run.
-
-Linux build needs `clang`, `cmake`, `ninja`, GTK 3 development libraries. Playback needs an `mpv` binary (system, Flatpak, or `brew install mpv` on the dev machine).
+**Building on Bazzite (or another immutable Fedora):** install the toolchain
+with Homebrew and `source tool/bazzite-flutter-env.sh`. If the app builds
+but no window appears (`libEGL warning: … failed to create dri2 screen`),
+Homebrew's Mesa is overriding the GPU driver: make sure `LD_LIBRARY_PATH` is
+unset (the script does this), and try `export GDK_BACKEND=x11`.
 
 ## Network tips
 

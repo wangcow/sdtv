@@ -4,8 +4,7 @@ import 'linux_joystick.dart';
 
 /// Page-owned pad handlers. Stored as a stack; only the top layer receives
 /// joystick edges. Callbacks are plain functions — **no [BuildContext]** — so
-/// dispatch still works when media_kit video is compositing and InheritedWidget
-/// / nested [SdtvGamepadBinding] lookups fail.
+/// dispatch works whatever has focus, without InheritedWidget lookups.
 class SdtvPadLayer {
   VoidCallback? onConfirm;
   VoidCallback? onBack;

@@ -13,7 +13,6 @@
 # Flutter SDK, first hit wins (override with FLUTTER_ROOT):
 #   ~/.sdk/flutter
 #   ~/sdk/flutter
-#   ~/sdk/flutter
 
 export PATH="/home/linuxbrew/.linuxbrew/opt/llvm/bin:/home/linuxbrew/.linuxbrew/bin:${PATH}"
 
@@ -29,7 +28,6 @@ _sdtv_prepend_flutter() {
 if ! _sdtv_prepend_flutter "${FLUTTER_ROOT:-}"; then
   for _sdtv_flutter_candidate in \
     "${HOME}/.sdk/flutter" \
-    "${HOME}/sdk/flutter" \
     "${HOME}/sdk/flutter"
   do
     if _sdtv_prepend_flutter "${_sdtv_flutter_candidate}"; then

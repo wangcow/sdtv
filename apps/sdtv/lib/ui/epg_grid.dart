@@ -104,15 +104,6 @@ EpgLayout epgLayoutFor({
   );
 }
 
-/// Shift [windowStart] by [delta], snapped. Never earlier than the
-/// half-hour slot holding [now]: the guide shows now and later only.
-DateTime epgShiftWindow(DateTime windowStart, Duration delta, {DateTime? now}) {
-  return epgClampToNow(
-    epgSnapDown(windowStart.add(delta)),
-    now ?? DateTime.now(),
-  );
-}
-
 /// [windowStart] moved forward to the current slot if it is in the past.
 DateTime epgClampToNow(DateTime windowStart, DateTime now) {
   final floor = epgSnapDown(now);
