@@ -66,6 +66,9 @@ class _FakeOverlay implements MpvBitmapOverlay {
   Future<void> clear() async => bands.clear();
 
   @override
+  Future<void> removeBand(int id) async => bands.remove(id);
+
+  @override
   Future<Duration> position() async => Duration.zero;
 
   @override
@@ -319,4 +322,93 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
   });
+
+  test('with the HUD up, messages become toasts instead of mpv text', () async {
+    SharedPreferences.setMockInitialValues({});
+    final settings = await SettingsStore.open();
+    final mpv = _CommandMpv();
+    final session = SessionController(settings: settings, externalMpv: mpv);
+    mpv.playbackBitmapHud = true; // as when MpvFlutterHud is on screen
+
+    await mpv.showText('Retrying…', durationMs: 1500);
+    expect(session.hudToast?.text, 'Retrying…');
+    expect(session.hudToast?.icon, 'retry');
+
+    await mpv.addVolume(5);
+    expect(mpv.commands.first, ['add', 'volume', 5]); // no mpv volume bar
+    expect(session.hudToast?.text, 'Volume +');
+    expect(mpv.commands.any((c) => c.first == 'show-text'), isFalse);
+    session.dispose();
+  });
+
+  testWidgets('a toast shows with the controls hidden and leaves on expiry', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final settings = await SettingsStore.open();
+    final session = SessionController(settings: settings);
+    final fake = _FakeOverlay();
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: sdtvDarkTheme,
+        home: Scaffold(
+          body: MpvFlutterHud(
+            session: session,
+            overlay: fake,
+            capturePixelRatio: 1,
+          ),
+        ),
+      ),
+    );
+    // Let the controls auto-hide.
+    await tester.pump(const Duration(seconds: 5));
+    await _settle(tester, () => false);
+    expect(
+      fake.bands.containsKey(ExternalMpvLauncher.bitmapOverlayId),
+      isFalse,
+    );
+
+    session.externalMpv.playbackBitmapHud = true;
+    session.externalMpv.onToast!(
+      'Volume 40',
+      durationMs: 1200,
+      level: 0.4,
+      icon: 'volume',
+    );
+    await tester.pump();
+    await _settle(
+      tester,
+      () => fake.bands.containsKey(ExternalMpvLauncher.bitmapOverlayIdToast),
+    );
+    expect(find.text('Volume 40'), findsOneWidget);
+    expect(fake.bands.keys, [ExternalMpvLauncher.bitmapOverlayIdToast]);
+
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump();
+    expect(find.text('Volume 40'), findsNothing);
+    expect(
+      fake.bands.containsKey(ExternalMpvLauncher.bitmapOverlayIdToast),
+      isFalse,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+}
+
+/// Records IPC commands instead of talking to mpv.
+class _CommandMpv extends ExternalMpvLauncher {
+  final commands = <List<Object?>>[];
+
+  @override
+  bool get isRunning => true;
+
+  @override
+  Future<bool> sendCommand(List<Object?> command) async {
+    commands.add(command);
+    return true;
+  }
 }

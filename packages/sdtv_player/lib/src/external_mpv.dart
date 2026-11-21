@@ -171,6 +171,22 @@ class ExternalMpvLauncher {
 
   /// Centered pause / stall menu card.
   static const bitmapOverlayIdMenu = 4;
+
+  /// Short message toast (volume, mute, retrying, notices).
+  static const bitmapOverlayIdToast = 5;
+
+  /// While the Flutter HUD is up, sdtv draws messages itself as a toast on
+  /// the video instead of mpv text. Returns true when handled. [icon] is a
+  /// hint: `volume`, `mute`, `retry` or null; [level] is 0..1 (volume).
+  bool Function(String text, {int durationMs, double? level, String? icon})?
+  onToast;
+
+  bool _toast(String text, {int durationMs = 2000, double? level, String? icon}) {
+    final hook = onToast;
+    return playbackBitmapHud &&
+        hook != null &&
+        hook(text, durationMs: durationMs, level: level, icon: icon);
+  }
   final Map<int, String> _bitmapPaths = {};
   final Set<int> _shownBitmapIds = {};
 
@@ -812,8 +828,12 @@ class ExternalMpvLauncher {
 
   /// Relative volume change with OSD bar + numeric readout.
   Future<void> addVolume(int delta) async {
-    // osd-msg-bar shows the volume slider; plain add is silent on some builds.
-    var ok = await sendCommand(['osd-msg-bar', 'add', 'volume', delta]);
+    // osd-msg-bar shows mpv's own volume slider. With the Flutter HUD up,
+    // sdtv shows a toast instead, so change it silently.
+    final hud = playbackBitmapHud && onToast != null;
+    var ok = await sendCommand(
+      hud ? ['add', 'volume', delta] : ['osd-msg-bar', 'add', 'volume', delta],
+    );
     if (!ok) {
       ok = await sendCommand(['add', 'volume', delta]);
     }
@@ -827,6 +847,14 @@ class ExternalMpvLauncher {
       vol = num.tryParse(raw);
     }
     if (vol != null) {
+      if (_toast(
+        'Volume ${vol.round()}',
+        durationMs: 1200,
+        level: (vol / 100).clamp(0.0, 1.0).toDouble(),
+        icon: 'volume',
+      )) {
+        return;
+      }
       await showText('Volume ${vol.round()}', durationMs: 900);
     } else {
       await showText(delta > 0 ? 'Volume +' : 'Volume −', durationMs: 700);
@@ -834,11 +862,16 @@ class ExternalMpvLauncher {
   }
 
   Future<void> cycleMute() async {
-    await sendCommand(['osd-msg', 'cycle', 'mute']);
+    final hud = playbackBitmapHud && onToast != null;
+    await sendCommand(
+      hud ? ['cycle', 'mute'] : ['osd-msg', 'cycle', 'mute'],
+    );
     final muted = await getProperty('mute');
     if (muted == true || muted == 'yes') {
+      if (_toast('Muted', durationMs: 1200, icon: 'mute')) return;
       await showText('Muted', durationMs: 900);
     } else if (muted == false || muted == 'no') {
+      if (_toast('Unmuted', durationMs: 1200, icon: 'volume')) return;
       await showText('Unmuted', durationMs: 900);
     }
   }
@@ -860,8 +893,16 @@ class ExternalMpvLauncher {
   Future<bool> playlistPrev() async =>
       sendCommand(['playlist-prev', 'force']);
 
-  /// OSD message (milliseconds).
+  /// A short message on the video: a Flutter toast while the HUD is up
+  /// ([onToast]), else mpv text (milliseconds).
   Future<void> showText(String text, {int durationMs = 2000}) async {
+    if (_toast(
+      text,
+      durationMs: durationMs,
+      icon: text.startsWith('Retrying') ? 'retry' : null,
+    )) {
+      return;
+    }
     await sendCommand(['show-text', text, durationMs]);
   }
 

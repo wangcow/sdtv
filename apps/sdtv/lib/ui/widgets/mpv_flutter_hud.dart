@@ -9,6 +9,8 @@ import 'package:sdtv_player/sdtv_player.dart';
 
 import '../../services/artwork_cache.dart';
 import '../../state/session_controller.dart';
+import '../../state/hud_toast.dart';
+import 'hud_toast_card.dart';
 import 'player_chrome.dart';
 import 'watch_menu_card.dart';
 
@@ -42,6 +44,9 @@ abstract class MpvBitmapOverlay {
   Stream<({String name, Object? value})> get propertyChanges;
 
   Future<void> clear();
+
+  /// Remove one layer (e.g. only the toast, or only the chrome bands).
+  Future<void> removeBand(int id);
 
   Future<Duration> position();
 
@@ -136,6 +141,9 @@ class LauncherBitmapOverlay implements MpvBitmapOverlay {
   Future<void> clear() => mpv.hideBitmapOverlay();
 
   @override
+  Future<void> removeBand(int id) => mpv.hideBitmapOverlay(id: id);
+
+  @override
   Future<Duration> position() => mpv.timePos();
 
   @override
@@ -198,6 +206,8 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
   final GlobalKey _topBandKey = GlobalKey();
   final GlobalKey _bottomBandKey = GlobalKey();
   final GlobalKey _menuKey = GlobalKey();
+  final GlobalKey _toastKey = GlobalKey();
+  HudToast? _lastToast;
 
   /// Bumped when the menu opens or closes, so a capture that started before
   /// the swap does not leave the old layer on the video.
@@ -428,7 +438,10 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
       widget.session.isWatchMenuActive || widget.session.watchStallOpen;
 
   /// A capture is wanted for the chrome bands or for the menu card.
-  bool get _wantCapture => _showHud || widget.session.watchMenuModel != null;
+  bool get _wantCapture =>
+      _showHud ||
+      widget.session.watchMenuModel != null ||
+      widget.session.hudToast != null;
 
   void _onSession() {
     if (!mounted) return;
@@ -456,6 +469,19 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
       return;
     }
     if (_nowKey != _infoKey) unawaited(_refreshInfo()); // zapped
+    final toast = widget.session.hudToast;
+    if (!identical(toast, _lastToast)) {
+      _lastToast = toast;
+      setState(() {});
+      if (toast == null) {
+        unawaited(
+          _overlay.removeBand(ExternalMpvLauncher.bitmapOverlayIdToast),
+        );
+      } else {
+        _scheduleCapture();
+      }
+      return;
+    }
     if (_showHud) {
       setState(() {});
       _scheduleCapture();
@@ -474,7 +500,11 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
         if (!mounted || _paused) return;
         setState(() => _showHud = false);
         _syncTick();
-        unawaited(_overlay.clear());
+        // Only the chrome: a toast (e.g. volume) can outlive it.
+        unawaited(_overlay.removeBand(ExternalMpvLauncher.bitmapOverlayId));
+        unawaited(
+          _overlay.removeBand(ExternalMpvLauncher.bitmapOverlayIdBottom),
+        );
       });
     }
     _syncTick();
@@ -704,6 +734,7 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
                 id: ExternalMpvLauncher.bitmapOverlayIdBottom,
                 key: _bottomBandKey,
               ),
+              (id: ExternalMpvLauncher.bitmapOverlayIdToast, key: _toastKey),
             ];
       for (final band in bands) {
         final boundary =
@@ -868,40 +899,61 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
       );
     }
     final ch = widget.session.nowPlaying;
+    final toast = widget.session.hudToast;
     return SizedBox.expand(
       key: _rootKey,
-      child: PlayerChrome(
-        topBandKey: _topBandKey,
-        bottomBandKey: _bottomBandKey,
-        animate: false,
-        title: _title,
-        playerState: _playerState,
-        position: _position,
-        duration: _duration,
-        canSeek: _canSeek,
-        liveMode: !_vod,
-        focus: _focus,
-        showChrome: _showHud,
-        buttons: _rowFocusOrder,
-        favorite: ch != null && widget.session.isFavorite(ch),
-        logo: _vod ? null : _logo,
-        programme: _programme,
-        subtitleLabel: _info.subtitles,
-        audioLabel: _info.audio,
-        infoChips: _info.chips,
-        clock: _clockLabel(DateTime.now()),
-        onAction: _activate,
-        onScrub: _canSeek
-            ? (v) {
-                final ms = (_duration.inMilliseconds * v).round();
-                unawaited(
-                  widget.session.externalMpv.seekTo(Duration(milliseconds: ms)),
-                );
-                setState(() => _position = Duration(milliseconds: ms));
-                _bumpHud();
-              }
-            : null,
+      child: Stack(
+        children: [
+          Positioned.fill(child: _chrome(ch)),
+          if (toast != null)
+            Align(
+              alignment: const Alignment(0, -0.55),
+              child: RepaintBoundary(
+                key: _toastKey,
+                // Room for the card's shadow inside the captured bitmap.
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: HudToastCard(toast: toast),
+                ),
+              ),
+            ),
+        ],
       ),
+    );
+  }
+
+  Widget _chrome(LiveChannel? ch) {
+    return PlayerChrome(
+      topBandKey: _topBandKey,
+      bottomBandKey: _bottomBandKey,
+      animate: false,
+      title: _title,
+      playerState: _playerState,
+      position: _position,
+      duration: _duration,
+      canSeek: _canSeek,
+      liveMode: !_vod,
+      focus: _focus,
+      showChrome: _showHud,
+      buttons: _rowFocusOrder,
+      favorite: ch != null && widget.session.isFavorite(ch),
+      logo: _vod ? null : _logo,
+      programme: _programme,
+      subtitleLabel: _info.subtitles,
+      audioLabel: _info.audio,
+      infoChips: _info.chips,
+      clock: _clockLabel(DateTime.now()),
+      onAction: _activate,
+      onScrub: _canSeek
+          ? (v) {
+              final ms = (_duration.inMilliseconds * v).round();
+              unawaited(
+                widget.session.externalMpv.seekTo(Duration(milliseconds: ms)),
+              );
+              setState(() => _position = Duration(milliseconds: ms));
+              _bumpHud();
+            }
+          : null,
     );
   }
 }

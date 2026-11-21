@@ -10,6 +10,7 @@ import '../services/artwork_cache.dart';
 import '../services/open_external_url.dart';
 import '../services/saved_source.dart';
 import '../services/settings_store.dart';
+import 'hud_toast.dart';
 import 'watch_menu.dart';
 import '../services/vod_progress.dart';
 
@@ -37,6 +38,7 @@ class SessionController extends ChangeNotifier {
        artwork = artwork ?? ArtworkCache(),
        externalMpv = externalMpv ?? ExternalMpvLauncher() {
     this.externalMpv.onPlaybackError = _showPlaybackErrorMenu;
+    this.externalMpv.onToast = _showHudToast;
   }
 
   final SettingsStore _settings;
@@ -502,6 +504,29 @@ class SessionController extends ChangeNotifier {
   bool watchStallOpen = false;
 
   WatchMenuModel? _watchMenuModel;
+
+  /// Message the HUD shows on the video right now, or null.
+  HudToast? hudToast;
+  Timer? _hudToastTimer;
+
+  bool _showHudToast(
+    String text, {
+    int durationMs = 2000,
+    double? level,
+    String? icon,
+  }) {
+    hudToast = HudToast(text: text, icon: icon, level: level);
+    _hudToastTimer?.cancel();
+    _hudToastTimer = Timer(
+      Duration(milliseconds: durationMs.clamp(600, 6000)),
+      () {
+        hudToast = null;
+        notifyListeners();
+      },
+    );
+    notifyListeners();
+    return true;
+  }
 
   /// The open pause / stall menu for the HUD to draw, or null when closed.
   WatchMenuModel? get watchMenuModel =>
@@ -2777,6 +2802,7 @@ class SessionController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _hudToastTimer?.cancel();
     if (_client is HttpXtreamClient) {
       (_client as HttpXtreamClient).close();
     }
