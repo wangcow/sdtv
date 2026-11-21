@@ -317,6 +317,50 @@ void main() {
     expect(saver.states.last, isFalse); // back in the guide
   });
 
+  testWidgets('B on the error card closes it and keeps playing', (
+    tester,
+  ) async {
+    await _useWideSurface(tester);
+    final mpv = _PlayingMpv();
+    final session = await _pumpDemo(tester, mpv: mpv);
+    unawaited(session.watchChannel(session.channelsInCategory.first));
+    await tester.pump();
+
+    await mpv.showPlaybackError(channelName: 'x');
+    expect(session.watchStallOpen, isTrue);
+
+    await session.watchBack();
+    expect(session.watchStallOpen, isFalse);
+    expect(session.isWatchingExternal, isTrue); // still playing, not quit
+
+    mpv.finish();
+    await _pumpFor(tester, const Duration(seconds: 6));
+  });
+
+  testWidgets('the error card closes itself once playback moves again', (
+    tester,
+  ) async {
+    await _useWideSurface(tester);
+    final mpv = _PlayingMpv();
+    final session = await _pumpDemo(tester, mpv: mpv);
+    unawaited(session.watchChannel(session.channelsInCategory.first));
+    await tester.pump();
+    await mpv.showPlaybackError(channelName: 'x');
+    expect(session.watchStallOpen, isTrue);
+
+    // The stall watch polls every second; the clock moves 1s per poll.
+    for (var t = 10.0; t <= 14 && session.watchStallOpen; t++) {
+      mpv.position = t;
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+    }
+    expect(session.watchStallOpen, isFalse);
+    expect(session.isWatchingExternal, isTrue);
+
+    mpv.finish();
+    await _pumpFor(tester, const Duration(seconds: 6));
+  });
+
   testWidgets('☰ holds the essentials; Settings holds the rest', (
     tester,
   ) async {
@@ -504,6 +548,13 @@ class _PlayingMpv extends ExternalMpvLauncher {
 
   @override
   Future<bool> sendCommand(List<Object?> command) async => true;
+
+  /// Play position mpv reports (null: none yet).
+  double? position;
+
+  @override
+  Future<Object?> getProperty(String name) async =>
+      name == 'time-pos' ? position : null;
 
   void finish() {
     _running = false;
