@@ -240,6 +240,14 @@ Linux build needs `clang`, `cmake`, `ninja`, GTK 3 development libraries. Playba
 - Docked Ethernet reduces live-stream buffering.
 - Wi‑Fi is fine for testing UI; stress-test streams when ready.
 
+## Screensaver during playback
+
+In Game Mode, Steam shows a library slideshow after a few idle minutes, and
+it does not notice video in non-Steam apps on its own. sdtv asks Steam to
+hold the screensaver off while a video plays (`org.freedesktop.ScreenSaver`
+Inhibit, which Steam provides in Game Mode). Pause, open ☰, or go back to
+the guide and the normal screensaver timer applies again.
+
 ## Privacy
 
 - Credentials stay on-device (local app data under `~/.local/share`).

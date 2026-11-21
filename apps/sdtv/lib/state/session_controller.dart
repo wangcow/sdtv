@@ -9,6 +9,7 @@ import '../services/mock_client_factory.dart';
 import '../services/artwork_cache.dart';
 import '../services/open_external_url.dart';
 import '../services/saved_source.dart';
+import '../services/screensaver_inhibitor.dart';
 import '../services/settings_store.dart';
 import 'hud_toast.dart';
 import 'watch_menu.dart';
@@ -34,11 +35,36 @@ class SessionController extends ChangeNotifier {
     required SettingsStore settings,
     ArtworkCache? artwork,
     ExternalMpvLauncher? externalMpv,
+    ScreenSaverInhibitor? screensaver,
   }) : _settings = settings,
        artwork = artwork ?? ArtworkCache(),
-       externalMpv = externalMpv ?? ExternalMpvLauncher() {
+       externalMpv = externalMpv ?? ExternalMpvLauncher(),
+       _screensaver = screensaver ?? ScreenSaverInhibitor.platform() {
     this.externalMpv.onPlaybackError = _showPlaybackErrorMenu;
     this.externalMpv.onToast = _showHudToast;
+    _pauseSub = this.externalMpv.propertyChanges.listen((c) {
+      if (c.name == 'pause') _syncScreensaver();
+    });
+  }
+
+  final ScreenSaverInhibitor _screensaver;
+  StreamSubscription<({String name, Object? value})>? _pauseSub;
+  bool _screensaverHeld = false;
+
+  /// Hold off the screensaver (Steam's library slideshow in Game Mode)
+  /// exactly while video plays: not paused, not back in the guide.
+  void _syncScreensaver() {
+    final paused = externalMpv.observedProperty('pause') == true;
+    final want = isWatchingExternal && !paused;
+    if (want == _screensaverHeld) return;
+    _screensaverHeld = want;
+    unawaited(_screensaver.setActive(want));
+  }
+
+  @override
+  void notifyListeners() {
+    super.notifyListeners();
+    _syncScreensaver();
   }
 
   final SettingsStore _settings;
@@ -2862,6 +2888,8 @@ class SessionController extends ChangeNotifier {
   @override
   void dispose() {
     _hudToastTimer?.cancel();
+    unawaited(_pauseSub?.cancel());
+    unawaited(_screensaver.dispose());
     if (_client is HttpXtreamClient) {
       (_client as HttpXtreamClient).close();
     }

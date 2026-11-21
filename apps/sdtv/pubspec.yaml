@@ -9,6 +9,7 @@ environment:
 resolution: workspace
 
 dependencies:
+  dbus: ^0.8.1
   flutter:
     sdk: flutter
   sdtv_core:

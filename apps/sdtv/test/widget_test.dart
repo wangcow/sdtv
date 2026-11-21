@@ -10,6 +10,7 @@ import 'package:sdtv_input/sdtv_input.dart';
 import 'package:sdtv_player/sdtv_player.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sdtv/app.dart';
+import 'package:sdtv/services/screensaver_inhibitor.dart';
 import 'package:sdtv/services/settings_store.dart';
 import 'package:sdtv/state/session_controller.dart';
 import 'package:sdtv/ui/widgets/vod_poster_tile.dart';
@@ -293,6 +294,36 @@ void main() {
     await _pumpFor(tester, const Duration(seconds: 6));
   });
 
+  testWidgets('screensaver is held while playing, not while paused or after', (
+    tester,
+  ) async {
+    await _useWideSurface(tester);
+    final mpv = _PlayingMpv();
+    final saver = _RecordingInhibitor();
+    final session = await _pumpDemo(tester, mpv: mpv, screensaver: saver);
+    expect(saver.states, isEmpty); // guide only
+
+    unawaited(session.watchChannel(session.channelsInCategory.first));
+    await tester.pump();
+    expect(saver.states, [true]);
+
+    void pause(bool paused) => mpv.handleMpvEvent({
+      'event': 'property-change',
+      'name': 'pause',
+      'data': paused,
+    });
+    pause(true);
+    await tester.pump(); // stream events arrive on a microtask
+    expect(saver.states, [true, false]);
+    pause(false);
+    await tester.pump();
+    expect(saver.states, [true, false, true]);
+
+    mpv.finish();
+    await _pumpFor(tester, const Duration(seconds: 6));
+    expect(saver.states.last, isFalse); // back in the guide
+  });
+
   testWidgets('menu has no Flutter chrome entry', (tester) async {
     await _useWideSurface(tester);
     final session = await _pumpDemo(tester, mpv: _RecordingMpv());
@@ -442,6 +473,16 @@ class _PlayingMpv extends ExternalMpvLauncher {
   }
 }
 
+class _RecordingInhibitor implements ScreenSaverInhibitor {
+  final states = <bool>[];
+
+  @override
+  Future<void> setActive(bool active) async => states.add(active);
+
+  @override
+  Future<void> dispose() async {}
+}
+
 /// Reports a running mpv (so the page is in watch mode) without a process.
 class _WatchingMpv extends ExternalMpvLauncher {
   int quits = 0;
@@ -480,9 +521,14 @@ class _RecordingMpv extends ExternalMpvLauncher {
 Future<SessionController> _pumpDemo(
   WidgetTester tester, {
   ExternalMpvLauncher? mpv,
+  ScreenSaverInhibitor? screensaver,
 }) async {
   final settings = await SettingsStore.open();
-  final session = SessionController(settings: settings, externalMpv: mpv);
+  final session = SessionController(
+    settings: settings,
+    externalMpv: mpv,
+    screensaver: screensaver,
+  );
   await tester.pumpWidget(SdtvApp(session: session));
   // Let bootstrap land on login before connectDemo, or a late bootstrap
   // notify can send the session back to the login phase.
