@@ -12,8 +12,10 @@ enum GamepadEdge {
   confirm,
   back,
   menu,
+
   /// Y / North — toggle channel favorite.
   favorite,
+
   /// X / West — mute while watching (optional elsewhere).
   mute,
   pageUp,
@@ -28,15 +30,20 @@ enum GamepadEdge {
 class LinuxJoystickReader {
   LinuxJoystickReader({
     this.devicePath,
+
     /// Hat / D-pad deadzone (axis 6/7). Stick uses [stickDeadzone].
     this.axisDeadzone = 16000,
+
     /// Left stick needs a larger deadzone — near-center noise during video
     /// playback was spamming channel zap (1↔2 flicker) and starving B.
     this.stickDeadzone = 22000,
+
     /// Delay before the first auto-repeat (short tap = one step only).
     this.repeatInitial = const Duration(milliseconds: 380),
+
     /// Base period after [repeatInitial] (then accelerates while held).
     this.repeatPeriod = const Duration(milliseconds: 140),
+
     /// Auto-repeat only for hat/D-pad (list scroll). Stick is one-shot per tilt
     /// so a resting stick during video never floods channel-up/down.
     this.repeatStick = false,
@@ -129,7 +136,41 @@ class LinuxJoystickReader {
 
       return n(a).compareTo(n(b));
     });
-    return out;
+    if (Platform.environment['SDTV_PAD_ALL'] == '1') return out;
+    return preferSteamVirtualPads(out, deviceIdOf);
+  }
+
+  /// Steam Input's virtual gamepad (Valve `28de:11ff`).
+  static const steamVirtualPadId = '28de:11ff';
+
+  /// When Steam Input is running it mirrors every controller into its own
+  /// virtual pad. The raw controller stays visible too, with its own button
+  /// numbering (a Bluetooth Xbox pad reports LB/RB as 6/7, which read as ☰,
+  /// and Y as 4, which reads as LB), so every press would arrive twice and
+  /// partly as the wrong button. With any virtual pad present, read only
+  /// the virtual pads. Without Steam, read everything.
+  static List<String> preferSteamVirtualPads(
+    List<String> paths,
+    String? Function(String path) idOf,
+  ) {
+    final virtual = [
+      for (final p in paths)
+        if (idOf(p) == steamVirtualPadId) p,
+    ];
+    return virtual.isEmpty ? paths : virtual;
+  }
+
+  /// `vendor:product` of a joystick from sysfs (lowercase hex), or null.
+  static String? deviceIdOf(String path) {
+    final name = path.split('/').last;
+    try {
+      final base = '/sys/class/input/$name/device/id';
+      final vendor = File('$base/vendor').readAsStringSync().trim();
+      final product = File('$base/product').readAsStringSync().trim();
+      return '${vendor.toLowerCase()}:${product.toLowerCase()}';
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Open a single device ([devicePath]) or the first available joystick.

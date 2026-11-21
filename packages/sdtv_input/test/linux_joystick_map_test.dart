@@ -21,9 +21,38 @@ void main() {
     }
     // Sorted by index when multiple exist (empty list is fine on CI).
     for (var i = 1; i < paths.length; i++) {
-      final a = int.parse(RegExp(r'js(\d+)$').firstMatch(paths[i - 1])!.group(1)!);
+      final a = int.parse(
+        RegExp(r'js(\d+)$').firstMatch(paths[i - 1])!.group(1)!,
+      );
       final b = int.parse(RegExp(r'js(\d+)$').firstMatch(paths[i])!.group(1)!);
       expect(a, lessThanOrEqualTo(b));
     }
+  });
+
+  test('with Steam Input running, only its virtual pads are read', () {
+    // The Deck in Game Mode with a Bluetooth Xbox pad (seen on a real Deck).
+    const ids = {
+      '/dev/input/js0': '28de:11ff', // Steam virtual pad (Deck controls)
+      '/dev/input/js1': '045e:0b13', // the Xbox pad itself, raw
+      '/dev/input/js2': '28de:11ff', // Steam virtual pad (Xbox pad)
+    };
+    expect(
+      LinuxJoystickReader.preferSteamVirtualPads(
+        ids.keys.toList(),
+        (p) => ids[p],
+      ),
+      ['/dev/input/js0', '/dev/input/js2'],
+    );
+  });
+
+  test('without Steam Input every controller is read', () {
+    const ids = {'/dev/input/js0': '045e:0b13', '/dev/input/js1': null};
+    expect(
+      LinuxJoystickReader.preferSteamVirtualPads(
+        ids.keys.toList(),
+        (p) => ids[p],
+      ),
+      ['/dev/input/js0', '/dev/input/js1'],
+    );
   });
 }

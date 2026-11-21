@@ -1052,6 +1052,14 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     // dual-fired ☰ menu from also changing season, and stops RB-in-search
     // from mutating the page underneath.
     if (_overlayOpen) {
+      // The ☰ menu and Settings move with the D-pad / stick only.
+      final menuOnTop =
+          _menuOpen ||
+          (_settingsOpen &&
+              !_switchSourceOpen &&
+              !_manageCatsOpen &&
+              !_aboutOpen);
+      if (menuOnTop) return;
       _moveVertical(delta < 0 ? -1 : 1);
       return;
     }

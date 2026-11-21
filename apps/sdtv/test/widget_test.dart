@@ -420,6 +420,27 @@ void main() {
     expect(session.guideSection, GuideSection.series);
   });
 
+  testWidgets('LB/RB do not move the ☰ menu', (tester) async {
+    await _useWideSurface(tester);
+    final session = await _pumpDemo(tester);
+    _invoke(tester, find.byType(Scaffold).last, const SdtvMenuIntent());
+    await _pumpUntil(tester, find.text('Exit sdtv'));
+    expect(_focusedMenuRow(), 'Search');
+
+    for (final bumper in [
+      const SdtvPageDownIntent(),
+      const SdtvPageUpIntent(),
+    ]) {
+      await _pastActivateCooldown(tester);
+      _invoke(tester, find.byType(Scaffold).last, bumper);
+      await tester.pump();
+    }
+    expect(_focusedMenuRow(), 'Search');
+    expect(find.text('Exit sdtv'), findsOneWidget); // still open
+    expect(session.guideSection, GuideSection.live); // no section switch
+    await _pumpFor(tester, const Duration(seconds: 5));
+  });
+
   testWidgets('a ☰ doubled with RB is ignored even when the switch is slow', (
     tester,
   ) async {
