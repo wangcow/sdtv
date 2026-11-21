@@ -405,6 +405,53 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
   });
+
+  testWidgets('captures the same bands when shifted outside the window', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final settings = await SettingsStore.open();
+    final session = SessionController(settings: settings);
+    final fake = _FakeOverlay();
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    // As in the guide: clipped Stack, HUD translated off-screen.
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: sdtvDarkTheme,
+        home: Scaffold(
+          body: Stack(
+            children: [
+              Positioned.fill(
+                child: FractionalTranslation(
+                  translation: const Offset(-2, 0),
+                  child: MpvFlutterHud(
+                    session: session,
+                    overlay: fake,
+                    capturePixelRatio: 1,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await _settle(tester, () => fake.bands.length >= 2);
+
+    final top = fake.bands[ExternalMpvLauncher.bitmapOverlayId]!;
+    final bottom = fake.bands[ExternalMpvLauncher.bitmapOverlayIdBottom]!;
+    expect(top.w, 1280);
+    expect(top.x, 0); // positions are relative to the HUD, not the window
+    expect(top.y, 0);
+    expect(bottom.y + bottom.h, 720);
+    expect(top.alphaAt(8, 2), greaterThan(150)); // real pixels, not blank
+    expect(bottom.alphaAt(8, bottom.h - 1), greaterThan(150));
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
 }
 
 /// Records IPC commands instead of talking to mpv.

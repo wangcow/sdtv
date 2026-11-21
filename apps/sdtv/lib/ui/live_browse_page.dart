@@ -3239,10 +3239,13 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
               if (session.isWatchingExternal)
                 Positioned.fill(
                   child: IgnorePointer(
-                    // Nearly invisible here. The sharp copy is the mpv bitmap.
-                    // Opacity stays above 0 so the child is still painted.
-                    child: Opacity(
-                      opacity: 0.012,
+                    // The HUD is shown on mpv as a bitmap; here it only has
+                    // to be painted so it can be captured. Shifted outside
+                    // the window (the Stack clips it) it costs no blending
+                    // or drawing, unlike a near-zero Opacity, which forced
+                    // an offscreen full-screen layer on every Flutter frame.
+                    child: FractionalTranslation(
+                      translation: const Offset(-2, 0),
                       child: MpvFlutterHud(key: _mpvHudKey, session: session),
                     ),
                   ),
