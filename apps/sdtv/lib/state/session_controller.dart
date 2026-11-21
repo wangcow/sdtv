@@ -573,6 +573,35 @@ class SessionController extends ChangeNotifier {
   final Map<int, ShortEpg> _shortEpgCache = {};
   static const _shortEpgTtl = Duration(minutes: 12);
   final Map<int, ShortEpg> _fullEpgCache = {};
+
+  /// Channels whose guide request failed recently: don't ask again until
+  /// then (the guide prefetches on every move).
+  final Map<int, DateTime> _epgFailedUntil = {};
+
+  /// The panel answered 503 (busy / rate-limited): no guide requests at all
+  /// until then, so the panel has room to start streams.
+  DateTime? _epgPanelBusyUntil;
+
+  static const _epgRetryAfter = Duration(minutes: 2);
+  static const _epgBusyPause = Duration(seconds: 30);
+
+  /// True when a guide request for [id] should be skipped for now.
+  bool _epgBackingOff(int id) {
+    final now = DateTime.now();
+    final busy = _epgPanelBusyUntil;
+    if (busy != null && now.isBefore(busy)) return true;
+    final until = _epgFailedUntil[id];
+    return until != null && now.isBefore(until);
+  }
+
+  void _noteEpgFailure(int id, Object e) {
+    final now = DateTime.now();
+    _epgFailedUntil[id] = now.add(_epgRetryAfter);
+    if (e is XtreamException && e.statusCode == 503) {
+      _epgPanelBusyUntil = now.add(_epgBusyPause);
+    }
+  }
+
   static const _fullEpgTtl = Duration(minutes: 45);
   int _miniGuideGen = 0;
 
@@ -1171,7 +1200,10 @@ class SessionController extends ChangeNotifier {
       }
       return;
     }
-    if (watchMenuOpen || _zapInFlight || _seriesAdvanceInFlight) {
+    if (watchMenuOpen ||
+        _zapInFlight ||
+        _seriesAdvanceInFlight ||
+        externalMpv.startCheckInFlight) {
       _stallSince = null;
       return;
     }
@@ -1602,6 +1634,7 @@ class SessionController extends ChangeNotifier {
     if (!force) {
       final cached = cachedShortEpg(channel);
       if (cached != null) return cached;
+      if (_epgBackingOff(id)) return null;
     }
 
     final client = _client;
@@ -1624,6 +1657,7 @@ class SessionController extends ChangeNotifier {
       return stored;
     } catch (e) {
       debugPrint('sdtv: short EPG failed for ${channel.name}: $e');
+      _noteEpgFailure(id, e);
       return null;
     }
   }
@@ -1655,6 +1689,7 @@ class SessionController extends ChangeNotifier {
     if (!force) {
       final cached = cachedFullEpg(channel);
       if (cached != null) return cached;
+      if (_epgBackingOff(id)) return null;
     }
 
     final client = _client;
@@ -1674,6 +1709,11 @@ class SessionController extends ChangeNotifier {
       );
     } catch (e) {
       debugPrint('sdtv: simple EPG failed for ${channel.name}: $e');
+      // A busy panel won't answer the second endpoint either.
+      if (e is XtreamException && e.statusCode == 503) {
+        _noteEpgFailure(id, e);
+        return null;
+      }
       try {
         final epg = await client.getShortEpg(sid, limit: 12);
         stored = ShortEpg(
@@ -1683,6 +1723,7 @@ class SessionController extends ChangeNotifier {
         );
       } catch (e2) {
         debugPrint('sdtv: short EPG fallback failed for ${channel.name}: $e2');
+        _noteEpgFailure(id, e2);
         return null;
       }
     }

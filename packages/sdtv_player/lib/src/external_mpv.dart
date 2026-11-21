@@ -301,14 +301,21 @@ class ExternalMpvLauncher {
     (m) => '${m[1]}/…',
   );
 
-  void _playLog(String message, {bool reset = false}) {
+  /// [newPlay] starts a new entry; the file keeps earlier plays until it
+  /// passes ~256 KB, then starts over.
+  void _playLog(String message, {bool newPlay = false}) {
     final path = _playLogPath;
     if (path == null) return;
     try {
-      final stamp = DateTime.now().toIso8601String().substring(11, 23);
-      File(path).writeAsStringSync(
+      final file = File(path);
+      final restart =
+          newPlay && file.existsSync() && file.lengthSync() > 256 * 1024;
+      final now = DateTime.now().toIso8601String();
+      final stamp = now.substring(11, 23);
+      file.writeAsStringSync(
+        '${newPlay ? '\n— ${now.substring(0, 10)}\n' : ''}'
         '$stamp ${redactUrls(message)}\n',
-        mode: reset ? FileMode.write : FileMode.append,
+        mode: restart ? FileMode.write : FileMode.append,
       );
     } catch (_) {}
   }
@@ -1213,7 +1220,29 @@ class ExternalMpvLauncher {
   }
 
   /// Wait for the current load to start, else try [fallback] (.m3u8) once.
+  /// True while a start check (first try, same-URL reload, fallback) is
+  /// running: an idle mpv then means "still connecting", not "stalled".
+  bool get startCheckInFlight => _startChecks > 0;
+  int _startChecks = 0;
+
   Future<bool> waitUntilHealthyOrFallback(
+    Uri? fallback, {
+    String? title,
+    Duration timeout = startTimeout,
+  }) async {
+    _startChecks++;
+    try {
+      return await _waitUntilHealthyOrFallback(
+        fallback,
+        title: title,
+        timeout: timeout,
+      );
+    } finally {
+      _startChecks--;
+    }
+  }
+
+  Future<bool> _waitUntilHealthyOrFallback(
     Uri? fallback, {
     String? title,
     Duration timeout = startTimeout,
@@ -1229,6 +1258,29 @@ class ExternalMpvLauncher {
       'no start after ${DateTime.now().difference(t0).inMilliseconds}ms '
       '(hard error: $hasHardStreamError)',
     );
+
+    // No data and no error: many panels only start pulling a channel when
+    // the first viewer asks, and that first connection can hang while it
+    // spins up. A fresh request for the same URL then starts at once (the
+    // same thing Retry does), so try that before the colder HLS variant.
+    final primary = _activeUrl;
+    if (!hasHardStreamError && primary != null) {
+      _playLog('reloading the same URL');
+      clearRecentLog();
+      if (await loadFile(primary, title: title)) {
+        final tr = DateTime.now();
+        if (await waitForPlayback(timeout: timeout)) {
+          final ms = DateTime.now().difference(tr).inMilliseconds;
+          _playLog('reload started in ${ms}ms');
+          return true;
+        }
+        if (_userQuit || !isRunning) return false;
+        final ms = DateTime.now().difference(tr).inMilliseconds;
+        _playLog(
+          'reload: no start after ${ms}ms (hard error: $hasHardStreamError)',
+        );
+      }
+    }
 
     if (fallback == null) {
       debugPrint('sdtv_player: stream did not start, no fallback URL');
@@ -1552,7 +1604,7 @@ class ExternalMpvLauncher {
     // Fresh watch — only set again if we detect dock letterboxing mid-session.
     needsAppRestartForFullDisplay = false;
     clearRecentLog();
-    _playLog('play $url${vod ? ' (vod)' : ''}', reset: true);
+    _playLog('play $url${vod ? ' (vod)' : ''}', newPlay: true);
     final startedAt = DateTime.now();
 
     // Track active media for dock respawn (zap updates via [loadFile]).
