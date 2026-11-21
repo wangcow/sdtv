@@ -88,7 +88,7 @@ On the Deck, Steam can inject a key (Esc for B) alongside a pad press. sdtv igno
 - **☰ Start → Search** (Search is the first menu row) or keyboard **`/`** / **Ctrl+F** opens search. The footer shows **☰ Search**, not `/`.
 - Matches **Live** channels (not channel categories), **Movies**, and **TV Shows** (titles + their categories). Hidden cats still appear, marked. Type with keyboard or Deck OSK (Steam+X).
 - Physical keyboard: type, then **↓** moves to the result list (**↑** on the first result returns to the box) · **Enter** jumps there.
-- Deck OSK (Steam+X): **A** types a letter and does **not** leave the box. When finished, **B** moves to the result list, then **A** jumps there (Live guide, Movies grid, or TV Shows grid) — does not play and does not open the title landing. **↑** on the first result returns to the search box to edit the query. **B** from the list closes search. **LB/RB** are not Search — they change season (TV episodes) or switch section (guide).
+- Deck OSK (Steam+X): **A** types a letter and does **not** leave the box. When finished, **B** moves to the result list, then **A** on a movie or show opens its title page (**B** from there lands on its poster in the grid); **A** on a channel jumps to it in the Live guide; **A** on a category opens that category. A does not start playback. **↑** on the first result returns to the search box to edit the query. **B** from the list closes search. **LB/RB** are not Search — they change season (TV episodes) or switch section (guide).
 - Result model includes `GuideSearchKind.epg` for future program search — same UI.
 
 ## Player chrome (external mpv — daily)

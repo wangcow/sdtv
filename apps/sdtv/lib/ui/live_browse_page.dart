@@ -1760,9 +1760,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     session.selectVodCategory(catId);
     final list = session.vodInCategory;
     var idx = 0;
+    VodItem? title = hit.vod;
     if (hit.vod != null && list.isNotEmpty) {
       final i = list.indexWhere((v) => v.streamId == hit.vod!.streamId);
       idx = i >= 0 ? i : 0;
+      if (i >= 0) title = list[i];
     } else {
       idx = _vodIndexFor(catId, list.length);
     }
@@ -1780,6 +1782,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _chanIndex = idx;
       _indexCategoryId = catId;
     });
+    // A title result opens its page (the grid sits on its poster behind
+    // it, so B lands there). A category result stays on the grid.
+    if (title != null) _openVodDetail(title);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _scrollTo(
@@ -1800,9 +1805,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     session.selectSeriesCategory(catId);
     final list = session.seriesInCategory;
     var idx = 0;
+    SeriesItem? title = hit.series;
     if (hit.series != null && list.isNotEmpty) {
       final i = list.indexWhere((s) => s.seriesId == hit.series!.seriesId);
       idx = i >= 0 ? i : 0;
+      if (i >= 0) title = list[i];
     } else {
       idx = _seriesIndexFor(catId, list.length);
     }
@@ -1820,6 +1827,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _chanIndex = idx;
       _indexCategoryId = catId;
     });
+    // A title result opens its page (the grid sits on its poster behind
+    // it, so B lands there). A category result stays on the grid.
+    if (title != null) _openSeriesDetail(title);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _scrollTo(

@@ -196,6 +196,44 @@ void main() {
     expect(selected(), 'box');
   });
 
+  for (final (title, section) in [
+    ('Demo Feature', GuideSection.movies),
+    ('Harbor Nights', GuideSection.series),
+  ]) {
+    testWidgets('A on a search result opens the $title page', (tester) async {
+      await _useWideSurface(tester);
+      final session = await _pumpDemo(tester);
+      await _pumpUntil(tester, find.text('Entertainment'));
+
+      _invoke(tester, find.text('CATEGORIES'), const SdtvSearchIntent());
+      await _pumpUntil(tester, find.byType(TextField));
+      await tester.enterText(find.byType(TextField), title);
+      await _pumpFor(tester, const Duration(milliseconds: 600));
+
+      Future<void> press(LogicalKeyboardKey key) async {
+        await _pastActivateCooldown(tester);
+        await tester.sendKeyEvent(key);
+        await tester.pump();
+        await tester.pump();
+      }
+
+      await press(LogicalKeyboardKey.arrowDown); // into the results
+      await press(LogicalKeyboardKey.enter);
+      await _pumpFor(tester, const Duration(milliseconds: 600));
+
+      expect(session.guideSection, section);
+      expect(find.text('Play Now'), findsWidgets); // the title page
+      expect(find.byType(TextField), findsNothing); // search closed
+
+      // B goes back to the grid (no title page).
+      await press(LogicalKeyboardKey.escape);
+      await _pumpFor(tester, const Duration(milliseconds: 300));
+      expect(find.text('Play Now'), findsNothing);
+      expect(find.widgetWithText(VodPosterTile, title), findsOneWidget);
+      await _pumpFor(tester, const Duration(seconds: 5));
+    });
+  }
+
   testWidgets('↑ on the first menu row wraps to Exit sdtv', (tester) async {
     await _useWideSurface(tester);
     await _pumpDemo(tester);
