@@ -382,6 +382,35 @@ void main() {
     expect(session.guideSection, GuideSection.series);
   });
 
+  testWidgets('a ☰ doubled with RB is ignored even when the switch is slow', (
+    tester,
+  ) async {
+    await _useWideSurface(tester);
+    final session = await _pumpDemo(tester);
+    await _pastActivateCooldown(tester);
+
+    // Deck: RB arrives with a stray ☰. The new section takes longer than
+    // the usual 450ms window to draw before the ☰ is handled.
+    _invoke(tester, find.byType(Scaffold).last, const SdtvPageDownIntent());
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 600)),
+    );
+    _invoke(tester, find.byType(Scaffold).last, const SdtvMenuIntent());
+    await _pumpFor(tester, const Duration(milliseconds: 300));
+
+    expect(session.guideSection, GuideSection.movies);
+    expect(find.text('Exit sdtv'), findsNothing); // no menu
+
+    // A real ☰ later still opens it.
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 500)),
+    );
+    _invoke(tester, find.byType(Scaffold).last, const SdtvMenuIntent());
+    await tester.pump();
+    expect(find.text('Exit sdtv'), findsOneWidget);
+    await _pumpFor(tester, const Duration(seconds: 5));
+  });
+
   testWidgets('Manage categories: move a category up, hide one, B back', (
     tester,
   ) async {
@@ -429,14 +458,15 @@ void main() {
     expect(find.text('Hidden'), findsOneWidget);
     expect(guideCats(), ['★ Favorites', 'Entertainment', 'News']);
 
-    // The order is saved for this playlist.
-    final settings = await SettingsStore.open();
-    expect(settings.categoryOrder(session.prefsScope), ['3', '1', '2']);
-
     // B leaves Manage categories for Settings, not the guide.
     await press(const SdtvBackIntent());
     expect(find.textContaining('A move'), findsNothing);
     expect(find.text('Switch playlist'), findsOneWidget);
+
+    // Leaving saves the order for this playlist.
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    final settings = await SettingsStore.open();
+    expect(settings.categoryOrder(session.prefsScope), ['3', '1', '2']);
     await _pumpFor(tester, const Duration(seconds: 5));
   });
 

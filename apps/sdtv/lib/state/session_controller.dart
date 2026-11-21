@@ -196,6 +196,13 @@ class SessionController extends ChangeNotifier {
   List<MediaCategory> get orderedCategories {
     final order = _categoryOrder;
     if (order.isEmpty) return categories;
+    // The guide asks for this many times per frame; sort once per change.
+    final cached = _orderedCache;
+    if (cached != null &&
+        identical(_orderedCacheFor, categories) &&
+        identical(_orderedCacheOrder, order)) {
+      return cached;
+    }
     final rank = {for (var i = 0; i < order.length; i++) order[i]: i};
     final placed = <MediaCategory>[];
     final rest = <MediaCategory>[];
@@ -203,7 +210,22 @@ class SessionController extends ChangeNotifier {
       (rank.containsKey(c.categoryId) ? placed : rest).add(c);
     }
     placed.sort((a, b) => rank[a.categoryId]!.compareTo(rank[b.categoryId]!));
-    return [...placed, ...rest];
+    _orderedCacheFor = categories;
+    _orderedCacheOrder = order;
+    return _orderedCache = List.unmodifiable([...placed, ...rest]);
+  }
+
+  List<MediaCategory>? _orderedCache;
+  List<MediaCategory>? _orderedCacheFor;
+  List<String>? _orderedCacheOrder;
+  Timer? _categoryOrderSave;
+
+  /// Write a pending category order now (leaving Manage categories).
+  Future<void> saveCategoryOrderNow() async {
+    final pending = _categoryOrderSave;
+    if (pending == null || !pending.isActive) return;
+    pending.cancel();
+    await _settings.setCategoryOrder(prefsScope, _categoryOrder);
   }
 
   /// Move a Live category up (delta < 0) or down in the user's order.
@@ -220,7 +242,12 @@ class SessionController extends ChangeNotifier {
       ..insert(to, categoryId);
     _categoryOrder = ids;
     notifyListeners();
-    unawaited(_settings.setCategoryOrder(prefsScope, ids));
+    // Held ↑↓ moves many times a second: save once the moving stops.
+    final scope = prefsScope;
+    _categoryOrderSave?.cancel();
+    _categoryOrderSave = Timer(const Duration(milliseconds: 600), () {
+      unawaited(_settings.setCategoryOrder(scope, ids));
+    });
     return to;
   }
 
@@ -292,7 +319,6 @@ class SessionController extends ChangeNotifier {
 
   void _reloadHiddenCategories() {
     _hiddenCategoryIds = _settings.hiddenCategoryIds(prefsScope).toSet();
-    _categoryOrder = _settings.categoryOrder(prefsScope);
   }
 
   List<String> _categoryOrder = const [];
@@ -305,6 +331,10 @@ class SessionController extends ChangeNotifier {
   void _reloadGuidePrefs() {
     _reloadFavorites();
     _reloadHiddenCategories();
+    // Only on load / playlist change: a pending (unsaved) order must
+    // survive hide / show.
+    _categoryOrderSave?.cancel();
+    _categoryOrder = _settings.categoryOrder(prefsScope);
     _reloadLastPlayed();
     _reloadWatched();
   }
@@ -3007,6 +3037,7 @@ class SessionController extends ChangeNotifier {
   @override
   void dispose() {
     _hudToastTimer?.cancel();
+    _categoryOrderSave?.cancel();
     unawaited(_pauseSub?.cancel());
     unawaited(_screensaver.dispose());
     if (_client is HttpXtreamClient) {

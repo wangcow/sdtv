@@ -117,6 +117,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   /// Deck often double-fires RB as pageDown + ☰/Start (menu first row is Search).
   static const _ignoreMenuAfterPage = Duration(milliseconds: 450);
 
+  /// LB/RB is switching section. A slow switch can delay the Deck's
+  /// doubled ☰ past [_ignoreMenuAfterPage], so ☰ is ignored until the new
+  /// section has drawn (and the window restarts then).
+  bool _sectionSwitchBusy = false;
+
   /// Fixed row height so scroll offset matches the selected tile (highlight stays on-screen).
   static const _rowExtent = 78.0;
 
@@ -1061,7 +1066,17 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     // Guide (categories, channels or posters): Live ⇄ Movies ⇄ TV Shows.
     if (!_acceptNav()) return;
-    unawaited(_cycleSection(delta < 0 ? -1 : 1));
+    _sectionSwitchBusy = true;
+    unawaited(
+      _cycleSection(delta < 0 ? -1 : 1).whenComplete(() {
+        // Count the ☰ window from when the new section has drawn.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _lastPageAt = DateTime.now();
+          _sectionSwitchBusy = false;
+        });
+        WidgetsBinding.instance.scheduleFrame();
+      }),
+    );
   }
 
   DateTime? _lastActivateAt;
@@ -1311,6 +1326,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
           _manageCatsOpen = false;
         }
       });
+      if (!_manageCatsOpen) unawaited(session.saveCategoryOrderNow());
       return;
     }
     if (_menuOpen) {
@@ -1410,8 +1426,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   void _openMenu() {
     // ☰ / Start always opens menu (or closes overlay if one is up).
     // Ignore a Start/menu edge that arrived with LB/RB (Deck dual-fire).
-    if (_lastPageAt != null &&
-        DateTime.now().difference(_lastPageAt!) < _ignoreMenuAfterPage) {
+    if (_sectionSwitchBusy ||
+        (_lastPageAt != null &&
+            DateTime.now().difference(_lastPageAt!) < _ignoreMenuAfterPage)) {
       return;
     }
     _lastMenuAt = DateTime.now();
@@ -1436,6 +1453,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         _manageCatsOpen = false;
         _manageMoving = false;
       });
+      unawaited(session.saveCategoryOrderNow());
       return;
     }
     if (_menuOpen) {
