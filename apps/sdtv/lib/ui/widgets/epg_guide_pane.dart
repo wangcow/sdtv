@@ -272,7 +272,7 @@ class _EpgRow extends StatelessWidget {
     final programs =
         epg?.inWindow(layout.windowStart, layout.windowEnd) ??
         const <EpgProgram>[];
-    final focusIdx = epg == null || focusTime == null
+    final focusIdx = epg == null || epg!.listings.isEmpty || focusTime == null
         ? -1
         : epg!.indexForTime(focusTime!);
     final focusedProgram = (focusIdx >= 0 && epg != null)
@@ -307,13 +307,20 @@ class _EpgRow extends StatelessWidget {
             child: Row(
               children: [
                 if (channel.num > 0)
+                  // 4 digits fit; longer numbers shrink rather than wrap.
                   SizedBox(
-                    width: 36,
-                    child: Text(
-                      '${channel.num}',
-                      style: theme.textTheme.labelLarge?.copyWith(
-                        color: fg.withValues(alpha: 0.55),
-                        fontFeatures: const [FontFeature.tabularFigures()],
+                    width: 46,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '${channel.num}',
+                        maxLines: 1,
+                        softWrap: false,
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: fg.withValues(alpha: 0.55),
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
                       ),
                     ),
                   ),
