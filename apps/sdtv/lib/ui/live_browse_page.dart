@@ -63,6 +63,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   bool _aboutOpen = false;
   bool _manageCatsOpen = false;
+
+  /// Manage categories: the focused category is picked up (↑↓ move it).
+  bool _manageMoving = false;
   bool _searchOpen = false;
 
   /// False while the query field should own the pad (Deck OSK). A/D-pad
@@ -174,7 +177,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         Icons.category_outlined,
         'Manage categories',
         section: 'Guide',
-        subtitle: hidden == 0 ? 'All categories shown' : '$hidden hidden',
+        subtitle: hidden == 0
+            ? 'Reorder or hide Live categories'
+            : 'Reorder or hide · $hidden hidden',
       ),
       MenuEntry(
         'about',
@@ -521,8 +526,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _ensureIndexVisible(
         _manageScroll,
         index,
-        itemExtent: _rowExtent,
-        headerExtent: 0,
+        itemExtent: ManageCategoriesPage.rowExtent,
+        headerExtent: ManageCategoriesPage.listTop,
       );
     });
   }
@@ -760,8 +765,17 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     if (_manageCatsOpen) {
       if (!_acceptNav()) return;
-      final n = session.categories.length;
+      final cats = session.orderedCategories;
+      final n = cats.length;
       if (n == 0) return;
+      if (_manageMoving) {
+        final id = cats[_manageIndex.clamp(0, n - 1)].categoryId;
+        final to = session.moveCategory(id, delta);
+        if (to < 0) return;
+        setState(() => _manageIndex = to);
+        _scrollToManageIndex(to);
+        return;
+      }
       final next = (_manageIndex + delta).clamp(0, n - 1);
       setState(() => _manageIndex = next);
       _scrollToManageIndex(next);
@@ -1045,19 +1059,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       // Title landing is ↑↓ only — LB/RB are season (episodes) / EPG time.
       return;
     }
-    if (_isLive && _column == 1) {
-      if (!_acceptNav()) return;
-      _shiftEpgWindow(delta < 0 ? -kEpgSlot : kEpgSlot);
-      return;
-    }
-    if (_column == 0) {
-      _moveVertical(delta);
-    } else if (_isPosterGuide) {
-      if (!_acceptNav()) return;
-      _applyVodGridMove(dy: delta * 2);
-    } else {
-      _moveVertical(delta * 5);
-    }
+    // Guide (categories, channels or posters): Live ⇄ Movies ⇄ TV Shows.
+    if (!_acceptNav()) return;
+    unawaited(_cycleSection(delta < 0 ? -1 : 1));
   }
 
   DateTime? _lastActivateAt;
@@ -1149,7 +1153,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
 
     if (_manageCatsOpen) {
-      await _toggleManageRow();
+      // A picks the category up (↑↓ then move it) and drops it again.
+      if (session.orderedCategories.isNotEmpty) {
+        setState(() => _manageMoving = !_manageMoving);
+      }
       return;
     }
 
@@ -1297,7 +1304,13 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
     if (_manageCatsOpen) {
-      setState(() => _manageCatsOpen = false);
+      setState(() {
+        if (_manageMoving) {
+          _manageMoving = false; // B drops a picked-up category
+        } else {
+          _manageCatsOpen = false;
+        }
+      });
       return;
     }
     if (_menuOpen) {
@@ -1419,7 +1432,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
     if (_manageCatsOpen) {
-      setState(() => _manageCatsOpen = false);
+      setState(() {
+        _manageCatsOpen = false;
+        _manageMoving = false;
+      });
       return;
     }
     if (_menuOpen) {
@@ -1463,6 +1479,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       _menuOpen = false;
       _aboutOpen = false;
       _manageCatsOpen = false;
+      _manageMoving = false;
       _unfavOpen = false;
       _unfavName = '';
       _unfavRemove = null;
@@ -1562,8 +1579,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     });
   }
 
-  Duration get _epgWindowLength => epgWindowLength(_epgProgramWidth);
-
   void _leaveEpgToCategories() {
     _rememberChanIndex();
     setState(() => _column = 0);
@@ -1580,24 +1595,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   DateTime get _epgFocusNow {
     final now = DateTime.now();
     return _epgFocusTime.isBefore(now) ? now : _epgFocusTime;
-  }
-
-  void _shiftEpgWindow(Duration delta) {
-    final now = DateTime.now();
-    final next = epgShiftWindow(_epgWindowNow, delta, now: now);
-    final len = _epgWindowLength;
-    var t = _epgFocusNow.add(delta);
-    if (t.isBefore(next)) {
-      t = next.add(const Duration(minutes: 1));
-    } else if (!t.isBefore(next.add(len))) {
-      t = next.add(len).subtract(const Duration(minutes: 1));
-    }
-    if (t.isBefore(now)) t = now;
-    setState(() {
-      _epgWindowStart = next;
-      _epgFocusTime = t;
-    });
-    session.prefetchFullEpgAround(session.channelsInCategory, _chanIndex);
   }
 
   /// New results: regroup into rows and keep the cursor in range. [reset]
@@ -1857,6 +1854,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       case 'manage_cats':
         setState(() {
           _manageCatsOpen = true;
+          _manageMoving = false;
           _manageIndex = 0;
         });
       case 'about':
@@ -1936,7 +1934,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   Future<void> _toggleManageRow() async {
-    final all = session.categories;
+    final all = session.orderedCategories;
     if (all.isEmpty) return;
     final i = _manageIndex.clamp(0, all.length - 1);
     final cat = all[i];
@@ -2831,17 +2829,17 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         return '↑↓ actions · A select · Y star · B back';
       }
       if (_column == 1) {
-        return '↑↓←→ posters · A title · B cats · ☰ Search';
+        return '↑↓←→ posters · A title · B cats · LB/RB section';
       }
-      return '↑↓ cats · B top · A open · ☰ Search';
+      return '↑↓ cats · A open · LB/RB section · ☰ menu';
     }
     if (_column == 1) {
       if (_epgAwayFromNow) {
-        return '↑↓ channels · LB/RB ±30 min · A play · ← cats · B now';
+        return '↑↓ channels · A play · ← cats · B now · LB/RB section';
       }
-      return '↑↓ channels · LB/RB ±30 min · A play · ←/B cats';
+      return '↑↓ channels · A play · ←/B cats · LB/RB section';
     }
-    return '↑↓ cats · B top · → guide · X hide · ☰ Search';
+    return '↑↓ cats · → guide · X hide · LB/RB section · ☰ menu';
   }
 
   /// Quit the process so Game Mode returns to Steam (no STEAM → Exit game).
@@ -3380,98 +3378,35 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                   ),
                 ),
 
-              // —— Manage categories (show / hide) ——
-              if (_manageCatsOpen) ...[
+              // —— Manage categories (Settings page: reorder / hide) ——
+              if (_manageCatsOpen)
                 Positioned.fill(
-                  child: GestureDetector(
-                    onTap: () => setState(() => _manageCatsOpen = false),
-                    child: ColoredBox(
-                      color: Colors.black.withValues(alpha: 0.55),
-                    ),
+                  child: Builder(
+                    builder: (context) {
+                      final cats = session.orderedCategories;
+                      return ManageCategoriesPage(
+                        names: [for (final c in cats) c.categoryName],
+                        hidden: [
+                          for (final c in cats)
+                            session.isCategoryHidden(c.categoryId),
+                        ],
+                        selected: cats.isEmpty
+                            ? 0
+                            : _manageIndex.clamp(0, cats.length - 1),
+                        moving: _manageMoving,
+                        scrollController: _manageScroll,
+                        onTap: (i) => setState(() {
+                          if (_manageIndex == i) {
+                            _manageMoving = !_manageMoving;
+                          } else {
+                            _manageIndex = i;
+                            _manageMoving = false;
+                          }
+                        }),
+                      );
+                    },
                   ),
                 ),
-                Center(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(
-                      maxWidth: 480,
-                      maxHeight: 520,
-                    ),
-                    child: Material(
-                      color: theme.colorScheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(16),
-                      elevation: 12,
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Text(
-                              'Manage categories',
-                              style: theme.textTheme.headlineSmall?.copyWith(
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'A toggles hide/show · Hidden stay off the guide.\n'
-                              'Hidden: ${session.hiddenCategoryCount} · '
-                              'Visible: ${session.visibleCategories.length}',
-                              style: theme.textTheme.bodyMedium,
-                            ),
-                            const SizedBox(height: 16),
-                            Expanded(
-                              child: session.categories.isEmpty
-                                  ? Text(
-                                      'No categories from provider.',
-                                      style: theme.textTheme.bodyLarge,
-                                    )
-                                  : ListView.builder(
-                                      controller: _manageScroll,
-                                      // Fixed extent keeps scroll math aligned
-                                      // with the highlight (same bug as search).
-                                      itemExtent: _rowExtent,
-                                      itemCount: session.categories.length,
-                                      itemBuilder: (context, i) {
-                                        final cat = session.categories[i];
-                                        final hidden = session.isCategoryHidden(
-                                          cat.categoryId,
-                                        );
-                                        final selected = _manageIndex == i;
-                                        return Padding(
-                                          padding: const EdgeInsets.only(
-                                            bottom: 6,
-                                          ),
-                                          child: _BrowseTile(
-                                            label: hidden
-                                                ? '${cat.categoryName}  · hidden'
-                                                : cat.categoryName,
-                                            icon: hidden
-                                                ? Icons.visibility_off_outlined
-                                                : Icons.visibility_outlined,
-                                            selected: selected,
-                                            onTap: () async {
-                                              setState(() => _manageIndex = i);
-                                              await _toggleManageRow();
-                                            },
-                                          ),
-                                        );
-                                      },
-                                    ),
-                            ),
-                            const SizedBox(height: 12),
-                            Text(
-                              '↑↓ move · A toggle · B close',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.outline,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
 
               // —— In-page about ——
               if (_aboutOpen) ...[

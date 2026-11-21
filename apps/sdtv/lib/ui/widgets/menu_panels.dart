@@ -302,3 +302,189 @@ class _Row extends StatelessWidget {
     );
   }
 }
+
+/// Settings → Manage categories: full screen like Settings. X hides or
+/// shows the focused category; A picks it up so ↑↓ move it, A / B drop it.
+class ManageCategoriesPage extends StatelessWidget {
+  const ManageCategoriesPage({
+    super.key,
+    required this.names,
+    required this.hidden,
+    required this.selected,
+    required this.moving,
+    required this.scrollController,
+    required this.onTap,
+  });
+
+  /// Fixed row height (scroll math in the page uses it).
+  static const rowExtent = 62.0;
+
+  /// Gap above the first row (also scroll math).
+  static const listTop = 14.0;
+
+  final List<String> names;
+  final List<bool> hidden;
+  final int selected;
+
+  /// The focused row is picked up: ↑↓ move it.
+  final bool moving;
+  final ScrollController scrollController;
+  final ValueChanged<int> onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final hiddenCount = hidden.where((h) => h).length;
+    return Material(
+      color: scheme.surface,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(28, 18, 28, 14),
+            color: scheme.surfaceContainerLow,
+            child: Row(
+              children: [
+                Icon(Icons.category_outlined, color: scheme.primary, size: 28),
+                const SizedBox(width: 12),
+                Text(
+                  'Manage categories',
+                  style: theme.textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  'Live TV  ·  ${names.length} categories'
+                  '${hiddenCount > 0 ? '  ·  $hiddenCount hidden' : ''}',
+                  style: theme.textTheme.labelLarge?.copyWith(
+                    color: scheme.onSurface.withValues(alpha: 0.6),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: names.isEmpty
+                ? Center(
+                    child: Text(
+                      'No categories from the provider.',
+                      style: theme.textTheme.bodyLarge,
+                    ),
+                  )
+                : Align(
+                    alignment: Alignment.topCenter,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 760),
+                      child: ListView.builder(
+                        controller: scrollController,
+                        padding: const EdgeInsets.fromLTRB(28, listTop, 28, 24),
+                        itemExtent: rowExtent,
+                        itemCount: names.length,
+                        itemBuilder: (context, i) => _CategoryRow(
+                          name: names[i],
+                          hidden: hidden[i],
+                          focused: i == selected,
+                          moving: moving && i == selected,
+                          onTap: () => onTap(i),
+                        ),
+                      ),
+                    ),
+                  ),
+          ),
+          Container(
+            height: 40,
+            padding: const EdgeInsets.symmetric(horizontal: 28),
+            color: scheme.surfaceContainerLow,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              moving
+                  ? '↑↓ move category  ·  A / B drop'
+                  : '↑↓ choose  ·  A move  ·  X hide / show  ·  B back',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: scheme.onSurface.withValues(alpha: 0.6),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CategoryRow extends StatelessWidget {
+  const _CategoryRow({
+    required this.name,
+    required this.hidden,
+    required this.focused,
+    required this.moving,
+    required this.onTap,
+  });
+
+  final String name;
+  final bool hidden;
+  final bool focused;
+  final bool moving;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final bg = moving
+        ? scheme.tertiary
+        : focused
+        ? scheme.primary
+        : scheme.surfaceContainerHigh;
+    final fg = moving
+        ? scheme.onTertiary
+        : focused
+        ? scheme.onPrimary
+        : scheme.onSurface.withValues(alpha: hidden ? 0.45 : 1);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                moving ? Icons.swap_vert_rounded : Icons.drag_indicator_rounded,
+                color: fg.withValues(alpha: moving ? 1 : 0.5),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    color: fg,
+                    fontWeight: focused ? FontWeight.w800 : FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (hidden)
+                Row(
+                  children: [
+                    Icon(Icons.visibility_off_outlined, size: 18, color: fg),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Hidden',
+                      style: theme.textTheme.labelLarge?.copyWith(color: fg),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

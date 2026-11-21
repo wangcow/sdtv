@@ -361,6 +361,85 @@ void main() {
     await _pumpFor(tester, const Duration(seconds: 6));
   });
 
+  testWidgets('LB/RB cycle Live, Movies and TV Shows', (tester) async {
+    await _useWideSurface(tester);
+    final session = await _pumpDemo(tester);
+    expect(session.guideSection, GuideSection.live);
+
+    Future<void> bumper(Intent intent) async {
+      await _pastActivateCooldown(tester);
+      _invoke(tester, find.byType(Scaffold).last, intent);
+      await _pumpFor(tester, const Duration(milliseconds: 300));
+    }
+
+    await bumper(const SdtvPageDownIntent());
+    expect(session.guideSection, GuideSection.movies);
+    await bumper(const SdtvPageDownIntent());
+    expect(session.guideSection, GuideSection.series);
+    await bumper(const SdtvPageDownIntent());
+    expect(session.guideSection, GuideSection.live); // wraps
+    await bumper(const SdtvPageUpIntent());
+    expect(session.guideSection, GuideSection.series);
+  });
+
+  testWidgets('Manage categories: move a category up, hide one, B back', (
+    tester,
+  ) async {
+    await _useWideSurface(tester);
+    final session = await _pumpDemo(tester);
+    List<String> guideCats() => [
+      for (final c in session.browseCategories) c.categoryName,
+    ];
+    expect(guideCats(), ['★ Favorites', 'Entertainment', 'News', 'Sports']);
+
+    Future<void> press(Intent intent) async {
+      await _pastActivateCooldown(tester);
+      final target = find.text('Manage categories').evaluate().isNotEmpty
+          ? find.text('Manage categories').first
+          : find.byType(Scaffold).last;
+      _invoke(tester, target, intent);
+      await tester.pump();
+    }
+
+    // ☰ → Settings → Manage categories (second row).
+    _invoke(tester, find.byType(Scaffold).last, const SdtvMenuIntent());
+    await _pumpUntil(tester, find.text('Exit sdtv'));
+    await press(const DirectionalFocusIntent(TraversalDirection.down));
+    await press(const SdtvConfirmIntent());
+    await _pumpUntil(tester, find.text('Switch playlist'));
+    await press(const DirectionalFocusIntent(TraversalDirection.down));
+    await press(const SdtvConfirmIntent());
+    await _pumpUntil(tester, find.textContaining('A move'));
+    expect(find.text('Sports'), findsWidgets);
+
+    // Sports: ↓↓, A picks it up, ↑↑ moves it to the top, A drops it.
+    await press(const DirectionalFocusIntent(TraversalDirection.down));
+    await press(const DirectionalFocusIntent(TraversalDirection.down));
+    await press(const SdtvConfirmIntent());
+    expect(find.textContaining('A / B drop'), findsOneWidget);
+    await press(const DirectionalFocusIntent(TraversalDirection.up));
+    await press(const DirectionalFocusIntent(TraversalDirection.up));
+    await press(const SdtvConfirmIntent());
+    expect(find.textContaining('A move'), findsOneWidget);
+    expect(guideCats(), ['★ Favorites', 'Sports', 'Entertainment', 'News']);
+
+    // X hides the focused one (Sports, still focused at the top).
+    await press(const SdtvMuteIntent());
+    await _pumpFor(tester, const Duration(milliseconds: 100));
+    expect(find.text('Hidden'), findsOneWidget);
+    expect(guideCats(), ['★ Favorites', 'Entertainment', 'News']);
+
+    // The order is saved for this playlist.
+    final settings = await SettingsStore.open();
+    expect(settings.categoryOrder(session.prefsScope), ['3', '1', '2']);
+
+    // B leaves Manage categories for Settings, not the guide.
+    await press(const SdtvBackIntent());
+    expect(find.textContaining('A move'), findsNothing);
+    expect(find.text('Switch playlist'), findsOneWidget);
+    await _pumpFor(tester, const Duration(seconds: 5));
+  });
+
   testWidgets('☰ holds the essentials; Settings holds the rest', (
     tester,
   ) async {

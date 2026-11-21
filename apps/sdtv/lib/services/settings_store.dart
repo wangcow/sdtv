@@ -28,6 +28,9 @@ class SettingsStore {
   static const _kUserLibrary = 'user_library.v1';
   /// JSON map: scope → list of hidden category_id strings.
   static const _kHiddenCategories = 'hidden_categories.v1';
+
+  /// Live category ids in the user's order (scope → ids).
+  static const _kCategoryOrder = 'category_order.v1';
   /// JSON map: scope → { categoryId, favoriteKey, name }.
   static const _kLastPlayed = 'last_played.v1';
   /// JSON list of [SavedSource] maps.
@@ -384,6 +387,21 @@ class SettingsStore {
     }
     await setHiddenCategoryIds(scope, list);
     return !had;
+  }
+
+  // —— Category order (scoped by playlist / panel) ——
+
+  /// Live category ids in the order the user arranged them. Empty: the
+  /// provider's order.
+  List<String> categoryOrder(String scope) {
+    if (scope.isEmpty) return const [];
+    return List<String>.from(
+      _stringListMap(_kCategoryOrder)[scope] ?? const [],
+    );
+  }
+
+  Future<void> setCategoryOrder(String scope, List<String> ids) async {
+    await _setStringListMap(_kCategoryOrder, scope, ids);
   }
 
   // —— Last played channel (scoped by playlist / panel) ——

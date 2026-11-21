@@ -8,11 +8,11 @@ Couch navigation is the core product requirement. Every screen must work with a 
 
 Top chips: **LIVE** · **MOVIES** · **TV SHOWS**. From the first category, **↑** focuses the chips · **←/→** switch · **↓** or **A** back to the list. Movies use Xtream `get_vod_*`; TV Shows use `get_series_*` (M3U has neither catalog). Demo uses a mock list + public HLS.
 
-**LIVE** right pane is the **TV Guide** (channel names + program timeline). It replaces the old channel list / now·next miniguide. The guide shows now and later only. **↑↓** channels · **LB/RB** move the timeline 30 minutes (never before now) · **←** returns to categories · **→** does nothing · **A** plays the live channel. **B** jumps to now when the timeline is ahead of now; **B** again (already at now) returns to categories. **G** also jumps the window to now.
+**LIVE** right pane is the **TV Guide** (channel names + program timeline). It replaces the old channel list / now·next miniguide. The guide shows now and later only. **↑↓** channels · **LB/RB** switch section (Live ⇄ Movies ⇄ TV Shows) · **←** returns to categories · **→** does nothing · **A** plays the live channel. **B** jumps to now when the timeline is ahead of now; **B** again (already at now) returns to categories. **G** also jumps the window to now.
 
 Movies and TV Shows right panes are a **poster grid**. **←** on the first column of a row returns to categories · **↑↓** move by row · **→** stays in the row · **A** opens the **title landing page** (does not play) · **B** back to categories. A green check and a dimmed poster mean the movie (or every episode of the show) has been watched to the end. The poster under the cursor stays brighter. In-progress titles keep a resume bar and are not dimmed.
 
-**Title landing:** poster, title, description, director, cast, provider rating. **↑↓** actions · **A** select · **B** / **←** back to the same poster. **LB/RB** do not change actions (those bumpers are for seasons / EPG time).
+**Title landing:** poster, title, description, director, cast, provider rating. **↑↓** actions · **A** select · **B** / **←** back to the same poster. **LB/RB** do nothing here (they switch sections from the guide, and change season on the episode list).
 
 - **Movies:** in-progress titles get **Resume Playing** · **Start from Beginning**; otherwise **Play Now**. Then **Add to Favorites** / **Remove from Favorites**. **Watch trailer** is hidden when the panel has none.
 - **TV Shows:** in-progress shows get **Resume Playing** (last episode) · **Start from Beginning** (S1E1); otherwise **Play Now**. Then **Add to Favorites** / **Remove from Favorites**. **Seasons & episodes** is always present. **Watch trailer** is hidden when none.
@@ -21,7 +21,7 @@ YouTube trailers open in the system/YouTube client (TiviMate-style), not mpv.
 
 **Seasons & episodes (TV Shows):** **↑↓** pick an episode · **LB/RB** change season · **A** plays that episode · **B** / **←** back to the title. **☰** still opens Search (do not use RB for Search here). Resume progress is per episode. A finished episode shows a green check, a dimmed row, and the word **Watched** at the start of the subtitle. The highlighted row stays bright.
 
-While a movie or episode is playing, the Flutter HUD is on the video. **←/→** moves the buttons · **↑** the scrubber · **LB/RB** seek 10s · **A** confirms the focused button (Play pauses) · **B** moves to Back, then returns to the title (position is saved). **☰** opens subs, audio, and mute. Position is also saved every 10s. No live-edge reload. When an episode ends, the **next episode starts automatically**; **Next ep** on the HUD skips there early (your place in this episode is saved). The last episode holds on the final frame — **B** back to the title.
+While a movie or episode is playing, the Flutter HUD is on the video. **←/→** moves the buttons · **↑** the scrubber · **LB/RB** seek 10s · **A** confirms the focused button (Play pauses) · **B** hides the HUD, then **B** again returns to the title (position is saved). **☰** opens subs, audio, and mute. Position is also saved every 10s. No live-edge reload. When an episode ends, the **next episode starts automatically**; **Next ep** on the HUD skips there early (your place in this episode is saved). The last episode holds on the final frame — **B** back to the title.
 
 ## Guide (browse)
 
@@ -67,7 +67,7 @@ On the Deck, Steam can inject a key (Esc for B) alongside a pad press. sdtv igno
 ### Hidden categories
 
 - **X** (guide) or **☰ → Hide category** removes the focused category from the list (not ★ Favorites).
-- **☰ → Manage categories** lists every provider category; **A** toggles hidden/shown.
+- **☰ → Settings → Manage categories** (full screen) lists every Live category in your order. **X** hides / shows the focused one · **A** picks it up, **↑↓** move it, **A** or **B** drops it · **B** back to Settings. The order and hidden list are saved per playlist.
 - Hidden ids are stored locally, scoped per Xtream account / M3U URL (same as favorites).
 
 ### Last played
@@ -88,7 +88,7 @@ On the Deck, Steam can inject a key (Esc for B) alongside a pad press. sdtv igno
 - **☰ Start → Search** (Search is the first menu row) or keyboard **`/`** / **Ctrl+F** opens search. The footer shows **☰ Search**, not `/`.
 - Matches **Live** channels (not channel categories), **Movies**, and **TV Shows** (titles + their categories). Hidden cats still appear, marked. Type with keyboard or Deck OSK (Steam+X).
 - Physical keyboard: type, then **↓** moves to the result list (**↑** on the first result returns to the box) · **Enter** jumps there.
-- Deck OSK (Steam+X): **A** types a letter and does **not** leave the box. When finished, **B** moves to the result list, then **A** jumps there (Live guide, Movies grid, or TV Shows grid) — does not play and does not open the title landing. **↑** on the first result returns to the search box to edit the query. **B** from the list closes search. **LB/RB** are not Search — they change season (TV episodes) or jump EPG time (Live).
+- Deck OSK (Steam+X): **A** types a letter and does **not** leave the box. When finished, **B** moves to the result list, then **A** jumps there (Live guide, Movies grid, or TV Shows grid) — does not play and does not open the title landing. **↑** on the first result returns to the search box to edit the query. **B** from the list closes search. **LB/RB** are not Search — they change season (TV episodes) or switch section (guide).
 - Result model includes `GuideSearchKind.epg` for future program search — same UI.
 
 ## Player chrome (external mpv — daily)
@@ -127,7 +127,7 @@ The Live tab **is** the EPG grid — not a separate overlay and not a channel li
 
 - Left: categories (including ★ Favorites). **→** / **A** enters the grid.
 - Right: channel column + program timeline. Bottom strip is the focused program (title, time, description).
-- **↑↓** channels · **LB/RB** ±30 minutes (never before now) · **←** returns to categories · **G** jump to now · **A** plays **live** · **B** now (if the timeline is ahead) then categories
+- **↑↓** channels · **LB/RB** switch section · **←** returns to categories · **G** jump to now · **A** plays **live** · **B** now (if the timeline is ahead) then categories
 - A vertical line marks **now**. Demo/mock synthesizes a day’s listings. Real Xtream uses `get_simple_data_table` (falls back to `get_short_epg`). **M3U** has no panel EPG — channel names only.
 - Selecting a past or future program still plays **live** (no catch-up in this phase)
 

@@ -190,8 +190,43 @@ class SessionController extends ChangeNotifier {
   /// Same scope string as [favoritesScope] (hidden cats share the namespace).
   String get prefsScope => favoritesScope;
 
-  /// Provider categories that are not hidden (guide list without ★).
-  List<MediaCategory> get visibleCategories => categories
+  /// Live categories in the user's order (Settings → Manage categories).
+  /// Categories the user never placed keep the provider's order, after
+  /// the placed ones.
+  List<MediaCategory> get orderedCategories {
+    final order = _categoryOrder;
+    if (order.isEmpty) return categories;
+    final rank = {for (var i = 0; i < order.length; i++) order[i]: i};
+    final placed = <MediaCategory>[];
+    final rest = <MediaCategory>[];
+    for (final c in categories) {
+      (rank.containsKey(c.categoryId) ? placed : rest).add(c);
+    }
+    placed.sort((a, b) => rank[a.categoryId]!.compareTo(rank[b.categoryId]!));
+    return [...placed, ...rest];
+  }
+
+  /// Move a Live category up (delta < 0) or down in the user's order.
+  /// Returns its new index in [orderedCategories], or -1. The order changes
+  /// at once (quick repeated presses build on it); saving runs behind.
+  int moveCategory(String categoryId, int delta) {
+    final ids = [for (final c in orderedCategories) c.categoryId];
+    final from = ids.indexOf(categoryId);
+    if (from < 0) return -1;
+    final to = (from + delta).clamp(0, ids.length - 1);
+    if (to == from) return from;
+    ids
+      ..removeAt(from)
+      ..insert(to, categoryId);
+    _categoryOrder = ids;
+    notifyListeners();
+    unawaited(_settings.setCategoryOrder(prefsScope, ids));
+    return to;
+  }
+
+  /// Provider categories that are not hidden (guide list without ★), in
+  /// the user's order.
+  List<MediaCategory> get visibleCategories => orderedCategories
       .where((c) => !_hiddenCategoryIds.contains(c.categoryId))
       .toList();
 
@@ -257,7 +292,10 @@ class SessionController extends ChangeNotifier {
 
   void _reloadHiddenCategories() {
     _hiddenCategoryIds = _settings.hiddenCategoryIds(prefsScope).toSet();
+    _categoryOrder = _settings.categoryOrder(prefsScope);
   }
+
+  List<String> _categoryOrder = const [];
 
   /// Last played (restored on connect for this [prefsScope]).
   String? lastPlayedCategoryId;
@@ -2915,6 +2953,7 @@ class SessionController extends ChangeNotifier {
     selectedCategoryId = null;
     _favoriteKeys = const [];
     _hiddenCategoryIds = {};
+    _categoryOrder = const [];
     _watchedKeys.clear();
     lastPlayedCategoryId = null;
     lastPlayedFavoriteKey = null;
