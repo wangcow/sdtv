@@ -2,7 +2,7 @@
 
 **Product of the Wangcow Corporation**
 
-Couch navigation is the core product requirement. Every screen must work with a **gamepad** and a **keyboard** (desktop / future Flatpak users).
+Couch navigation is the core product requirement. Every screen must work with a **gamepad** and a **keyboard** (desktop users).
 
 ## Live / Movies / TV Shows
 

@@ -13,15 +13,15 @@ Import your Xtream Codes URL, username, and password → browse Live TV, Movies,
 | App ID | `org.wangcow.SDTV` |
 | License | Apache-2.0 (see [LICENSE](LICENSE) + [NOTICE](NOTICE)) |
 | Domain | [wangcow.com](https://wangcow.com) |
-| Platform | Linux (Steam Deck / Flatpak first); Android later via Flutter |
+| Platform | Linux (Steam Deck first); Android later via Flutter |
 
 ## Product pillars
 
 1. **Controller-first UI** — D-pad / stick focus, A confirm, B back. Keyboard works for desktop dev.
-2. **Steam Game Mode** — Flatpak → non-Steam game → Gamepad Steam Input template.
+2. **Steam Game Mode** — release download → non-Steam game → Gamepad Steam Input template.
 3. **Hardware decode** — external mpv (`vo=gpu`), VAAPI on Deck.
 4. **Xtream Codes first** — URL + user + pass. M3U later.
-5. **Open source / Flathub-bound** — Apache-2.0 with Wangcow attribution in About.
+5. **Open source** — Apache-2.0 with Wangcow attribution in About. Releases on GitHub.
 
 ## Status
 
@@ -61,7 +61,7 @@ sdtv/
     sdtv_core/         # Xtream client, models, cache
     sdtv_input/        # Gamepad → Flutter intents (critical)
     sdtv_player/       # External mpv launcher, IPC, HUD bitmap overlay
-  flatpak/             # org.wangcow.SDTV manifest stubs
+  branding/            # App icon (SVG + 256px PNG)
   tool/mock_xtream/    # Fixture JSON for safe offline dev
   docs/                # Controller map, Steam Deck setup
 ```
@@ -141,20 +141,20 @@ The default screen is a **focus maze** (no network). Use:
 
 Fixtures live under `tool/mock_xtream/fixtures/`.
 
-## Flatpak (stub)
+## Releases
 
-```text
-flatpak/
-  org.wangcow.SDTV.yml
-  org.wangcow.SDTV.desktop
-  org.wangcow.SDTV.metainfo.xml
-```
+sdtv is distributed as `sdtv-deck.tar.gz` on
+[GitHub releases](https://github.com/wangcow/sdtv/releases). It is not on
+Flathub and there is no Flatpak: Flathub's policy bars AI-written packaging,
+and sdtv is largely AI-written.
 
-Build pipeline and Flathub submission come after MVP Live TV is Deck-validated.
+To make a release: `bash tool/package-deck.sh`, then attach
+`dist/sdtv-deck.tar.gz` to a tagged GitHub release. Install steps for users
+are in [docs/STEAM_DECK.md](docs/STEAM_DECK.md#install-from-github-releases).
 
 ## Steam Deck (preview)
 
-See [docs/STEAM_DECK.md](docs/STEAM_DECK.md). Short version: install Flatpak → add as non-Steam game → set controller template to **Gamepad** (not Desktop/mouse).
+See [docs/STEAM_DECK.md](docs/STEAM_DECK.md). Short version: install mpv from Discover → extract the release to `~/sdtv` → add `run-sdtv.sh` as a non-Steam game → set controller template to **Gamepad** (not Desktop/mouse).
 
 ## MVP roadmap
 
@@ -163,7 +163,7 @@ See [docs/STEAM_DECK.md](docs/STEAM_DECK.md). Short version: install Flatpak →
 3. libmpv playback + channel zap  
 4. ~~Favorites / short EPG (now·next mini guide)~~  
 5. ~~Movies + Series + full EPG grid~~  
-6. Flathub  
+6. GitHub releases (Deck tarball)  
 7. *Future:* Flutter HUD over live mpv — not Flutter texture video. Gamescope Game Mode is the constraint. See [docs/STEAM_DECK.md](docs/STEAM_DECK.md).
 
 ### Movies / TV art

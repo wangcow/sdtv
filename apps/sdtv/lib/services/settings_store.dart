@@ -1,4 +1,7 @@
 import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sdtv_core/sdtv_core.dart';
@@ -37,7 +40,36 @@ class SettingsStore {
   /// JSON map: scope → { section: live|movies, vodCategoryId }.
   static const _kGuideLanding = 'guide_landing.v1';
 
+  static String? _linuxDataHome() {
+    final xdg = Platform.environment['XDG_DATA_HOME'];
+    if (xdg != null && xdg.isNotEmpty) return xdg;
+    final home = Platform.environment['HOME'];
+    return home == null ? null : '$home/.local/share';
+  }
+
+  /// Settings are stored under the GTK app ID, which changed from
+  /// `org.wangcow.sdtv` to `org.wangcow.SDTV`. Copy the old file once; the
+  /// old one is left as a backup.
+  @visibleForTesting
+  static void migrateLinuxPrefs({required String? dataHome}) {
+    if (dataHome == null) return;
+    try {
+      const name = 'shared_preferences.json';
+      final old = File('$dataHome/org.wangcow.sdtv/$name');
+      final current = File('$dataHome/org.wangcow.SDTV/$name');
+      if (!old.existsSync() || current.existsSync()) return;
+      current.parent.createSync(recursive: true);
+      old.copySync(current.path);
+      debugPrint('sdtv: settings moved to ${current.parent.path}');
+    } catch (e) {
+      debugPrint('sdtv: settings migration skipped: $e');
+    }
+  }
+
   static Future<SettingsStore> open() async {
+    if (!kIsWeb && Platform.isLinux) {
+      migrateLinuxPrefs(dataHome: _linuxDataHome());
+    }
     final prefs = await SharedPreferences.getInstance();
     return SettingsStore(prefs);
   }

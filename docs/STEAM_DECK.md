@@ -4,22 +4,30 @@
 
 > sdtv is a media player only. You supply your own Xtream Codes credentials. No channels are included.
 
-## Install (once Flatpak ships)
+## Install from GitHub releases
 
 1. **STEAM** → Power → **Switch to Desktop**.
-2. Open **Discover**, search **sdtv**, install the Flatpak (`org.wangcow.SDTV`).
-3. Optional: pin or create a desktop shortcut.
+2. Install **mpv** (sdtv plays video through it): open **Discover**, search
+   **mpv**, install it.
+3. Download `sdtv-deck.tar.gz` from the latest
+   [GitHub release](https://github.com/wangcow/sdtv/releases).
+4. In **Konsole**:
+
+   ```bash
+   mkdir -p ~/sdtv
+   tar -xzf ~/Downloads/sdtv-deck.tar.gz -C ~/sdtv
+   ```
+
+   To update later, run the same two lines again; settings and favourites
+   are kept (they live outside `~/sdtv`).
 
 ### Add to Game Mode
 
 1. In Desktop Mode, open **Steam**.
-2. **Add a Game** → **Add a Non-Steam Game**.
-3. Browse to the sdtv export, or use a wrapper that runs:
-
-   ```bash
-   flatpak run org.wangcow.SDTV
-   ```
-
+2. **Add a Game** → **Add a Non-Steam Game** → **Browse…** → pick
+   `~/sdtv/run-sdtv.sh` (always launch this, not `./sdtv`).
+3. Optional: in the shortcut's **Properties**, set the icon to
+   `~/sdtv/sdtv.png` and rename it **sdtv**.
 4. Return to Game Mode and launch **sdtv** from your library.
 
 ## Controller settings
@@ -56,7 +64,7 @@ Channels that are actually 720p will still look soft when the window correctly f
 
 ## Development build (now)
 
-Until Flatpak is published, run from source on Desktop Mode:
+For development, run from source on Desktop Mode:
 
 ```bash
 cd ~/sdtv-src
@@ -234,5 +242,5 @@ Linux build needs `clang`, `cmake`, `ninja`, GTK 3 development libraries. Playba
 
 ## Privacy
 
-- Credentials stay on-device (XDG config under Flatpak).
+- Credentials stay on-device (local app data under `~/.local/share`).
 - No Wangcow cloud login is required for core playback.

@@ -356,6 +356,8 @@ fi
 exec "${DIR}/sdtv" "$@"
 EOF
 chmod +x "${BUNDLE}/run-sdtv.sh" "${BUNDLE}/sdtv"
+# App icon, e.g. for the Steam shortcut (Properties → icon).
+install -m644 "${ROOT}/branding/org.wangcow.SDTV-256.png" "${BUNDLE}/sdtv.png"
 
 echo "Making bundle user-writable (for re-deploy)…"
 chmod -R u+rwX "${BUNDLE}"

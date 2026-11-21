@@ -31,7 +31,7 @@ Guidance for humans and coding agents working in this repo.
 | `packages/sdtv_input` | Gamepad → intents (product differentiator) |
 | `packages/sdtv_core` | Models, Xtream client, fixtures parsers |
 | `packages/sdtv_player` | Playback wrapper |
-| `flatpak/` | Flatpak manifest + metainfo |
+| `branding/` | App icon (SVG + 256px PNG) |
 | `docs/` | Controller map, Steam Deck install |
 
 ## Commands
@@ -48,6 +48,6 @@ cd packages/sdtv_core && dart test
 Daily watch is **external mpv** (`vo=gpu`). Flutter is the guide. On-video chrome is the Flutter `PlayerChrome` rasterized onto that mpv with bitmap `overlay-add` (not ASS, not `show-text`). Do **not** chase Flutter-texture FPS for live TV — Deck embed is 7–15fps and cannot match mpv picture quality. Video must **never** go through a Flutter texture; the embedded media_kit player was removed.
 
 - **Now:** Live tab is the EPG grid · external mpv + Flutter HUD bitmap · Movies / TV Shows poster grid · title landing · seasons/episodes · provider art cache · Search covers live, movies, and TV shows · ★ Favorites on live, movies, and TV shows
-- **Next:** Flathub
+- **Next:** GitHub releases of the Deck tarball (`tool/package-deck.sh`). No Flatpak and no Flathub: Flathub's policy bars AI-written packaging.
 - Later: program search in Search overlay · catch-up if the panel supports it · a clear corner in the same bitmap so the guide can scroll over a live picture · paid Wangcow Continuity (host the timestamped `UserLibrary` JSON across signed-in devices — merge with `UserLibrary.merge`; do not add a second watch store — see [docs/LIBRARY.md](docs/LIBRARY.md))
 - Gamescope Game Mode is one nest. Do not chase X11 `--wid` / stacked windows, and do not write a second video presenter unless `overlay-add` cannot take the bitmap.

@@ -7,7 +7,10 @@ project(runner LANGUAGES CXX)
 set(BINARY_NAME "sdtv")
 # The unique GTK application identifier for this application. See:
 # https://wiki.gnome.org/HowDoI/ChooseApplicationID
-set(APPLICATION_ID "org.wangcow.sdtv")
+# Matches the product app ID (org.wangcow.SDTV), so Wayland shells pair the
+# window with sdtv's desktop entry and icon. Settings are stored under this
+# ID; SettingsStore copies them over from the old lowercase ID.
+set(APPLICATION_ID "org.wangcow.SDTV")
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
