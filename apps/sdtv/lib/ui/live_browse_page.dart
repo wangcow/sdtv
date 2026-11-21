@@ -12,6 +12,7 @@ import '../state/session_controller.dart';
 import 'epg_grid.dart';
 import 'vod_grid.dart';
 import 'widgets/epg_guide_pane.dart';
+import 'widgets/menu_panels.dart';
 import 'widgets/mpv_flutter_hud.dart';
 import 'widgets/search_page.dart';
 import 'widgets/vod_poster_tile.dart';
@@ -51,6 +52,14 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   /// In-page menu (no showDialog — avoids stuck modal barriers on Deck).
   bool _menuOpen = false;
+
+  /// Settings page (☰ → Settings). Sub-panels open on top of it.
+  bool _settingsOpen = false;
+  int _settingsIndex = 0;
+
+  /// Sign out needs a second A within a few seconds.
+  bool _signOutArmed = false;
+  Timer? _signOutTimer;
 
   bool _aboutOpen = false;
   bool _manageCatsOpen = false;
@@ -116,38 +125,74 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   int _vodCols = 4;
   double _vodRowExtent = 240;
 
-  /// Sign out is red, between Cancel and Exit, so destructive actions sit at the bottom.
-  static const _menuItems =
-      <({String id, String label, IconData icon, bool danger})>[
-        (id: 'search', label: 'Search', icon: Icons.search, danger: false),
-        (
-          id: 'switch_source',
-          label: 'Switch playlist',
-          icon: Icons.swap_horiz,
-          danger: false,
-        ),
-        (
-          id: 'hide_cat',
-          label: 'Hide category',
-          icon: Icons.visibility_off_outlined,
-          danger: false,
-        ),
-        (
-          id: 'manage_cats',
-          label: 'Manage categories',
-          icon: Icons.category_outlined,
-          danger: false,
-        ),
-        (id: 'about', label: 'About', icon: Icons.info_outline, danger: false),
-        (id: 'cancel', label: 'Cancel', icon: Icons.close, danger: false),
-        (id: 'signout', label: 'Sign out', icon: Icons.logout, danger: true),
-        (
-          id: 'exit',
-          label: 'Exit sdtv',
-          icon: Icons.power_settings_new,
-          danger: false,
-        ),
-      ];
+  /// ☰ menu: the essentials. Account / playlist / category tools live in
+  /// Settings.
+  List<MenuEntry> get _menuEntries {
+    final hide = _hideableCategoryName;
+    return [
+      const MenuEntry('search', Icons.search_rounded, 'Search'),
+      const MenuEntry('settings', Icons.settings_outlined, 'Settings'),
+      if (hide != null)
+        MenuEntry('hide_cat', Icons.visibility_off_outlined, 'Hide “$hide”'),
+      const MenuEntry('exit', Icons.power_settings_new_rounded, 'Exit sdtv'),
+    ];
+  }
+
+  /// Name of the Live category ☰ → Hide would hide, or null when it can't.
+  String? get _hideableCategoryName {
+    if (!_isLive || session.isWatchingExternal) return null;
+    final cats = session.browseCategories;
+    if (cats.isEmpty) return null;
+    final cat = cats[_catIndex.clamp(0, cats.length - 1)];
+    if (cat.categoryId == kFavoritesCategoryId) return null;
+    return cat.categoryName;
+  }
+
+  List<MenuEntry> get _settingsEntries {
+    final sources = session.savedSources;
+    String? active;
+    for (final src in sources) {
+      if (src.id == session.activeSourceId) active = src.label;
+    }
+    final hidden = session.hiddenCategoryCount;
+    final user = session.userInfo?.username ?? 'user';
+    return [
+      MenuEntry(
+        'switch_source',
+        Icons.playlist_play_rounded,
+        'Switch playlist',
+        section: 'Playlist',
+        subtitle: session.useDemo
+            ? 'Demo playlist'
+            : active ??
+                  (sources.isEmpty
+                      ? 'No saved playlists'
+                      : '${sources.length} saved'),
+      ),
+      MenuEntry(
+        'manage_cats',
+        Icons.category_outlined,
+        'Manage categories',
+        section: 'Guide',
+        subtitle: hidden == 0 ? 'All categories shown' : '$hidden hidden',
+      ),
+      MenuEntry(
+        'about',
+        Icons.info_outline_rounded,
+        'About sdtv',
+        section: 'About',
+        subtitle: SdtvBuildInfo.label,
+      ),
+      MenuEntry(
+        'signout',
+        Icons.logout_rounded,
+        _signOutArmed ? 'Press A again to sign out' : 'Sign out',
+        section: 'Account',
+        subtitle: session.useDemo ? 'Demo' : 'Signed in as $user',
+        danger: true,
+      ),
+    ];
+  }
 
   SessionController get session => widget.session;
 
@@ -158,6 +203,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   bool get _overlayOpen =>
       _menuOpen ||
+      _settingsOpen ||
       _aboutOpen ||
       _manageCatsOpen ||
       _searchOpen ||
@@ -290,6 +336,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    _signOutTimer?.cancel();
     unawaited(_mpvKeys?.cancel());
     session.removeListener(_onSession);
     _searchCtrl.removeListener(_onSearchQueryChanged);
@@ -729,8 +776,17 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       if (!_acceptNav()) return;
       setState(() {
         // Wraps: ↑ on Search reaches Exit sdtv at the bottom, and back.
-        final n = _menuItems.length;
+        final n = _menuEntries.length;
         _menuIndex = ((_menuIndex + delta) % n + n) % n;
+      });
+      return;
+    }
+    if (_settingsOpen) {
+      if (!_acceptNav()) return;
+      final n = _settingsEntries.length;
+      setState(() {
+        _settingsIndex = ((_settingsIndex + delta) % n + n) % n;
+        _disarmSignOut();
       });
       return;
     }
@@ -1098,7 +1154,16 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
 
     if (_menuOpen) {
-      await _runMenuAction(_menuItems[_menuIndex].id);
+      final entries = _menuEntries;
+      await _runMenuAction(entries[_menuIndex.clamp(0, entries.length - 1)].id);
+      return;
+    }
+
+    if (_settingsOpen) {
+      final entries = _settingsEntries;
+      await _runSettingsAction(
+        entries[_settingsIndex.clamp(0, entries.length - 1)].id,
+      );
       return;
     }
 
@@ -1239,6 +1304,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       setState(() => _menuOpen = false);
       return;
     }
+    if (_settingsOpen) {
+      _closeSettings();
+      return;
+    }
     if (_seriesEpisodesOpen) {
       _closeSeriesEpisodes();
       return;
@@ -1355,6 +1424,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     if (_menuOpen) {
       setState(() => _menuOpen = false);
+      return;
+    }
+    if (_settingsOpen) {
+      _closeSettings();
       return;
     }
     if (session.isWatchingExternal) {
@@ -1746,57 +1819,85 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   Future<void> _runMenuAction(String id) async {
     setState(() => _menuOpen = false);
-    if (id == 'cancel') return;
-    if (id == 'search') {
-      _openSearch();
+    switch (id) {
+      case 'search':
+        _openSearch();
+      case 'settings':
+        setState(() {
+          _settingsOpen = true;
+          _settingsIndex = 0;
+          _disarmSignOut();
+        });
+      case 'hide_cat':
+        await _hideFocusedCategory();
+      case 'exit':
+        await _exitApp();
+    }
+  }
+
+  void _closeSettings() {
+    setState(() {
+      _settingsOpen = false;
+      _disarmSignOut();
+    });
+  }
+
+  void _disarmSignOut() {
+    _signOutTimer?.cancel();
+    _signOutArmed = false;
+  }
+
+  Future<void> _runSettingsAction(String id) async {
+    if (id != 'signout') {
+      setState(_disarmSignOut);
+    }
+    switch (id) {
+      case 'switch_source':
+        _openSwitchSource();
+      case 'manage_cats':
+        setState(() {
+          _manageCatsOpen = true;
+          _manageIndex = 0;
+        });
+      case 'about':
+        setState(() => _aboutOpen = true);
+      case 'signout':
+        if (!_signOutArmed) {
+          // First A arms it; a second A within a few seconds signs out.
+          setState(() => _signOutArmed = true);
+          _signOutTimer?.cancel();
+          _signOutTimer = Timer(const Duration(seconds: 4), () {
+            if (mounted) setState(() => _signOutArmed = false);
+          });
+          return;
+        }
+        _closeSettings();
+        await session.signOut();
+    }
+  }
+
+  void _openSwitchSource() {
+    final list = session.savedSources;
+    if (list.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No saved playlists yet — connect M3U/Xtream first'),
+          duration: Duration(seconds: 3),
+        ),
+      );
       return;
     }
-    if (id == 'switch_source') {
-      final list = session.savedSources;
-      if (list.isEmpty) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No saved playlists yet — connect M3U/Xtream first'),
-            duration: Duration(seconds: 3),
-          ),
-        );
-        return;
-      }
-      var idx = 0;
-      final active = session.activeSourceId;
-      if (active != null) {
-        final i = list.indexWhere((s) => s.id == active);
-        if (i >= 0) idx = i;
-      }
-      setState(() {
-        _switchSourceOpen = true;
-        _switchSourceIndex = idx;
-      });
-      return;
+    var idx = 0;
+    final active = session.activeSourceId;
+    if (active != null) {
+      final i = list.indexWhere((s) => s.id == active);
+      if (i >= 0) idx = i;
     }
-    if (id == 'hide_cat') {
-      await _hideFocusedCategory();
-      return;
-    }
-    if (id == 'manage_cats') {
-      setState(() {
-        _manageCatsOpen = true;
-        _manageIndex = 0;
-      });
-      return;
-    }
-    if (id == 'about') {
-      setState(() => _aboutOpen = true);
-      return;
-    }
-    if (id == 'signout') {
-      await session.signOut();
-      return;
-    }
-    if (id == 'exit') {
-      await _exitApp();
-    }
+    setState(() {
+      _switchSourceOpen = true;
+      _switchSourceIndex = idx;
+    });
   }
 
   /// Hide the category under the guide cursor (not ★ Favorites).
@@ -1825,7 +1926,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Hidden: $name · ☰ Manage categories to restore'),
+        content: Text('Hidden: $name · Settings → Manage categories to restore'),
         duration: const Duration(seconds: 3),
       ),
     );
@@ -3122,66 +3223,18 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                 ),
               ),
 
-              // —— In-page menu (no Navigator dialog) ——
-              if (_menuOpen) ...[
+              // —— ☰ menu (left panel; no Navigator dialog) ——
+              if (_menuOpen)
                 Positioned.fill(
-                  child: GestureDetector(
-                    onTap: () => setState(() => _menuOpen = false),
-                    child: ColoredBox(
-                      color: Colors.black.withValues(alpha: 0.55),
-                    ),
+                  child: SideMenu(
+                    entries: _menuEntries,
+                    selected: _menuIndex.clamp(0, _menuEntries.length - 1),
+                    accountLine:
+                        '$user  ·  ${session.useDemo ? 'Demo' : session.useM3u ? 'M3U' : 'Xtream'}',
+                    onTap: (i) => _runMenuAction(_menuEntries[i].id),
+                    onDismiss: () => setState(() => _menuOpen = false),
                   ),
                 ),
-                Center(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 400),
-                    child: Material(
-                      color: theme.colorScheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(16),
-                      elevation: 12,
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Text(
-                              'Menu',
-                              style: theme.textTheme.headlineSmall?.copyWith(
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'Signed in as $user'
-                              '${session.useDemo ? ' (demo)' : ''}',
-                              style: theme.textTheme.bodyMedium,
-                            ),
-                            const SizedBox(height: 20),
-                            for (var i = 0; i < _menuItems.length; i++) ...[
-                              if (i > 0) const SizedBox(height: 8),
-                              _BrowseTile(
-                                label: _menuItems[i].label,
-                                icon: _menuItems[i].icon,
-                                selected: _menuIndex == i,
-                                danger: _menuItems[i].danger,
-                                onTap: () => _runMenuAction(_menuItems[i].id),
-                              ),
-                            ],
-                            const SizedBox(height: 12),
-                            Text(
-                              '↑↓ move · A select · B close',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.outline,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
 
               if (session.isWatchingExternal)
                 Positioned.fill(
@@ -3192,6 +3245,22 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                       opacity: 0.012,
                       child: MpvFlutterHud(key: _mpvHudKey, session: session),
                     ),
+                  ),
+                ),
+
+              // —— Settings (sub-panels below render on top of it) ——
+              if (_settingsOpen)
+                Positioned.fill(
+                  child: SettingsPage(
+                    entries: _settingsEntries,
+                    selected: _settingsIndex.clamp(
+                      0,
+                      _settingsEntries.length - 1,
+                    ),
+                    onTap: (i) {
+                      setState(() => _settingsIndex = i);
+                      unawaited(_runSettingsAction(_settingsEntries[i].id));
+                    },
                   ),
                 ),
 

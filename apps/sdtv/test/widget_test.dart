@@ -203,14 +203,7 @@ void main() {
 
     _invoke(tester, find.text('CATEGORIES'), const SdtvMenuIntent());
     await _pumpUntil(tester, find.text('Exit sdtv'));
-    String selected() {
-      final rows = find.byWidgetPredicate(
-        (w) =>
-            w.runtimeType.toString() == '_BrowseTile' &&
-            (w as dynamic).selected == true,
-      );
-      return (rows.evaluate().first.widget as dynamic).label as String;
-    }
+    String selected() => _focusedMenuRow();
 
     expect(selected(), 'Search');
     await _pastActivateCooldown(tester);
@@ -324,15 +317,62 @@ void main() {
     expect(saver.states.last, isFalse); // back in the guide
   });
 
-  testWidgets('menu has no Flutter chrome entry', (tester) async {
+  testWidgets('☰ holds the essentials; Settings holds the rest', (
+    tester,
+  ) async {
     await _useWideSurface(tester);
-    final session = await _pumpDemo(tester, mpv: _RecordingMpv());
+    final session = await _pumpDemo(tester);
     await session.setGuideSection(GuideSection.movies);
     await _pumpUntil(tester, find.text('Demo Feature'));
 
     _invoke(tester, find.text('Demo Feature'), const SdtvMenuIntent());
-    await _pumpUntil(tester, find.text('Switch playlist'));
-    expect(find.text('Flutter chrome (slow)'), findsNothing);
+    await _pumpUntil(tester, find.text('Exit sdtv'));
+    expect(find.text('Settings'), findsOneWidget);
+    expect(find.text('Sign out'), findsNothing);
+    expect(find.text('Switch playlist'), findsNothing);
+    expect(
+      find.textContaining('Hide'),
+      findsNothing,
+    ); // Movies: nothing to hide
+
+    Future<void> press(Intent intent) async {
+      await _pastActivateCooldown(tester);
+      _invoke(
+        tester,
+        find.text('Exit sdtv').evaluate().isNotEmpty
+            ? find.text('Exit sdtv')
+            : find.text('About sdtv'),
+        intent,
+      );
+      await tester.pump();
+    }
+
+    await press(const DirectionalFocusIntent(TraversalDirection.down));
+    expect(_focusedMenuRow(), 'Settings');
+    await press(const SdtvConfirmIntent());
+    await _pumpUntil(tester, find.text('Manage categories'));
+    for (final row in [
+      'Switch playlist',
+      'Manage categories',
+      'About sdtv',
+      'Sign out',
+    ]) {
+      expect(find.text(row), findsOneWidget, reason: row);
+    }
+
+    // Sign out: the first A only arms it.
+    for (var i = 0; i < 3; i++) {
+      await press(const DirectionalFocusIntent(TraversalDirection.down));
+    }
+    expect(_focusedMenuRow(), 'Sign out');
+    await press(const SdtvConfirmIntent());
+    expect(find.text('Press A again to sign out'), findsOneWidget);
+    expect(session.phase, isNot(SessionPhase.login));
+
+    // B leaves Settings.
+    await press(const SdtvBackIntent());
+    expect(find.text('Manage categories'), findsNothing);
+    await _pumpFor(tester, const Duration(seconds: 5));
   });
 
   testWidgets('finished movie poster dims and a finished episode row checks', (
@@ -580,4 +620,13 @@ Future<void> _pumpUntilIdle(WidgetTester tester, bool Function() ready) async {
 void _invoke(WidgetTester tester, Finder finder, Intent intent) {
   // CallbackAction.invoke returns null. A missing binding throws in debug.
   Actions.invoke(tester.element(finder), intent);
+}
+
+/// Title of the focused row in the ☰ menu or Settings.
+String _focusedMenuRow() {
+  final rows = find.byWidgetPredicate(
+    (w) => w.runtimeType.toString() == '_Row' && (w as dynamic).focused == true,
+  );
+  return ((rows.evaluate().first.widget as dynamic).entry as dynamic).title
+      as String;
 }
