@@ -108,22 +108,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   final _searchFocus = FocusNode();
 
   DateTime? _lastNavAt;
-  DateTime? _lastFavoriteAt;
-  DateTime? _lastPageAt;
-  DateTime? _lastMenuAt;
   // Allow accelerated hold-scroll from the joystick reader (~40ms + bursts).
   static const _navCooldown = Duration(milliseconds: 28);
 
-  /// Steam injects PageDown with Y; ignore the page jump that follows a star.
-  static const _ignorePageAfterFavorite = Duration(milliseconds: 450);
-
-  /// Deck often double-fires RB as pageDown + ☰/Start (menu first row is Search).
-  static const _ignoreMenuAfterPage = Duration(milliseconds: 450);
-
-  /// LB/RB is switching section. A slow switch can delay the Deck's
-  /// doubled ☰ past [_ignoreMenuAfterPage], so ☰ is ignored until the new
-  /// section has drawn (and the window restarts then).
-  bool _sectionSwitchBusy = false;
 
   /// Fixed row height so scroll offset matches the selected tile (highlight stays on-screen).
   static const _rowExtent = 78.0;
@@ -1040,15 +1027,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   void _onPage(int delta) {
-    if (_lastFavoriteAt != null &&
-        DateTime.now().difference(_lastFavoriteAt!) <
-            _ignorePageAfterFavorite) {
-      return;
-    }
-    if (_lastMenuAt != null &&
-        DateTime.now().difference(_lastMenuAt!) < _ignoreMenuAfterPage) {
-      return;
-    }
     // Error menu on a live channel: LB/RB zaps away instead of moving rows.
     if (session.watchStallOpen && !session.watchingVod) {
       unawaited(session.watchZapFromError(delta));
@@ -1067,10 +1045,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       }
       return;
     }
-    _lastPageAt = DateTime.now();
-    // Overlays own LB/RB. Checking this before seasons/title prevents a
-    // dual-fired ☰ menu from also changing season, and stops RB-in-search
-    // from mutating the page underneath.
+    // Overlays own LB/RB, so RB in search (or a panel) never changes the
+    // page underneath.
     if (_overlayOpen) {
       // The ☰ menu and Settings move with the D-pad / stick only.
       final menuOnTop =
@@ -1100,17 +1076,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     // Guide (categories, channels or posters): Live ⇄ Movies ⇄ TV Shows.
     if (!_acceptNav()) return;
-    _sectionSwitchBusy = true;
-    unawaited(
-      _cycleSection(delta < 0 ? -1 : 1).whenComplete(() {
-        // Count the ☰ window from when the new section has drawn.
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _lastPageAt = DateTime.now();
-          _sectionSwitchBusy = false;
-        });
-        WidgetsBinding.instance.scheduleFrame();
-      }),
-    );
+    unawaited(_cycleSection(delta < 0 ? -1 : 1));
   }
 
   DateTime? _lastActivateAt;
@@ -1159,7 +1125,8 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   Future<void> _activate() async {
-    // Belt-and-suspenders vs dual js+Enter on Deck.
+    // Steam can type Enter for the same A press the pad reader handled;
+    // ignore a second activate within 280ms.
     final now = DateTime.now();
     if (_lastActivateAt != null &&
         now.difference(_lastActivateAt!) < const Duration(milliseconds: 280)) {
@@ -1459,13 +1426,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   void _openMenu() {
     // ☰ / Start always opens menu (or closes overlay if one is up).
-    // Ignore a Start/menu edge that arrived with LB/RB (Deck dual-fire).
-    if (_sectionSwitchBusy ||
-        (_lastPageAt != null &&
-            DateTime.now().difference(_lastPageAt!) < _ignoreMenuAfterPage)) {
-      return;
-    }
-    _lastMenuAt = DateTime.now();
     if (_unfavOpen) {
       _closeUnfav();
       return;
@@ -2036,7 +1996,6 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   /// Y / F: star live from the guide; movies / TV shows only on the title page.
   Future<void> _toggleFavorite() async {
     if (_overlayOpen) return;
-    _lastFavoriteAt = DateTime.now();
 
     if (session.isWatchingExternal) {
       if (session.nowPlayingVod != null || session.nowPlayingSeries != null) {

@@ -516,35 +516,6 @@ void main() {
     await _pumpFor(tester, const Duration(seconds: 5));
   });
 
-  testWidgets('a ☰ doubled with RB is ignored even when the switch is slow', (
-    tester,
-  ) async {
-    await _useWideSurface(tester);
-    final session = await _pumpDemo(tester);
-    await _pastActivateCooldown(tester);
-
-    // Deck: RB arrives with a stray ☰. The new section takes longer than
-    // the usual 450ms window to draw before the ☰ is handled.
-    _invoke(tester, find.byType(Scaffold).last, const SdtvPageDownIntent());
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 600)),
-    );
-    _invoke(tester, find.byType(Scaffold).last, const SdtvMenuIntent());
-    await _pumpFor(tester, const Duration(milliseconds: 300));
-
-    expect(session.guideSection, GuideSection.movies);
-    expect(find.text('Exit sdtv'), findsNothing); // no menu
-
-    // A real ☰ later still opens it.
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 500)),
-    );
-    _invoke(tester, find.byType(Scaffold).last, const SdtvMenuIntent());
-    await tester.pump();
-    expect(find.text('Exit sdtv'), findsOneWidget);
-    await _pumpFor(tester, const Duration(seconds: 5));
-  });
-
   testWidgets('Manage categories: move a category up, hide one, B back', (
     tester,
   ) async {
