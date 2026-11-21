@@ -144,7 +144,7 @@ class PlayerChrome extends StatelessWidget {
         ),
       ),
       child: Padding(
-        padding: EdgeInsets.fromLTRB(28, pad.top + 20, 28, 44),
+        padding: EdgeInsets.fromLTRB(28, pad.top + 20, 28, 28),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
@@ -216,7 +216,7 @@ class PlayerChrome extends StatelessWidget {
         ),
       ),
       child: Padding(
-        padding: EdgeInsets.fromLTRB(28, 48, 28, pad.bottom + 16),
+        padding: EdgeInsets.fromLTRB(28, 28, 28, pad.bottom + 16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -243,16 +243,8 @@ class PlayerChrome extends StatelessWidget {
                 ],
               ],
             ),
-            const SizedBox(height: 10),
-            Text(
-              liveMode
-                  ? '←→ select  ·  A press  ·  LB/RB channel  ·  B back'
-                  : canSeek
-                  ? '←→ select  ·  ↑ scrubber  ·  LB/RB ±10s  ·  B back'
-                  : '←→ select  ·  A press  ·  B back',
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodySmall?.copyWith(color: Colors.white54),
-            ),
+            // No hint line: every button is labelled, and each extra row is
+            // pixels sent to mpv on every HUD update.
           ],
         ),
       ),
