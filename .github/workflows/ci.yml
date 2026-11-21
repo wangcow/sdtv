@@ -1,0 +1,55 @@
+# Analyze and test every package on pushes to main and on pull requests.
+# Mock fixtures only: no test reaches an Xtream panel or launches mpv.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.6
+          cache: true
+
+      - name: Get packages (workspace)
+        run: flutter pub get
+
+      # flutter analyze fails on any finding, infos included.
+      - name: Analyze app
+        working-directory: apps/sdtv
+        run: flutter analyze
+      - name: Analyze sdtv_core
+        working-directory: packages/sdtv_core
+        run: flutter analyze
+      - name: Analyze sdtv_input
+        working-directory: packages/sdtv_input
+        run: flutter analyze
+      - name: Analyze sdtv_player
+        working-directory: packages/sdtv_player
+        run: flutter analyze
+
+      - name: Test sdtv_core
+        working-directory: packages/sdtv_core
+        run: dart test
+      - name: Test sdtv_input
+        working-directory: packages/sdtv_input
+        run: flutter test
+      - name: Test sdtv_player
+        working-directory: packages/sdtv_player
+        run: flutter test
+      - name: Test app
+        working-directory: apps/sdtv
+        run: flutter test

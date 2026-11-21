@@ -124,7 +124,13 @@ Run package tests (mock fixtures only — no live providers):
 ```bash
 cd packages/sdtv_core && dart test
 cd ../sdtv_input && flutter test
+cd ../sdtv_player && flutter test
+cd ../../apps/sdtv && flutter test
 ```
+
+CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs `flutter analyze`
+(any finding fails, infos included) and these four suites on every push to
+`main` and every pull request.
 
 ### Controller playground
 
