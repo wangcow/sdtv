@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -47,7 +49,8 @@ class HttpXtreamClient implements XtreamClient {
     http.Client? httpClient,
     this.timeout = const Duration(seconds: 25),
     // Many XUI / CF panels fingerprint exotic UAs; use a common IPTV client string.
-    this.userAgent = 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 '
+    this.userAgent =
+        'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 '
         '(KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3',
   }) : _http = httpClient ?? http.Client();
 
@@ -57,9 +60,9 @@ class HttpXtreamClient implements XtreamClient {
   final String userAgent;
 
   Map<String, String> get _headers => {
-        'User-Agent': userAgent,
-        'Accept': 'application/json, text/plain, */*',
-      };
+    'User-Agent': userAgent,
+    'Accept': 'application/json, text/plain, */*',
+  };
 
   @override
   Future<UserInfo> authenticate() async {
@@ -101,8 +104,7 @@ class HttpXtreamClient implements XtreamClient {
       'action': 'get_live_streams',
       if (categoryId != null) 'category_id': categoryId,
     };
-    final json = await _getJson(query);
-    return _parseList(json, LiveChannel.fromJson);
+    return _getList(query, LiveChannel.fromJson);
   }
 
   @override
@@ -171,16 +173,14 @@ class HttpXtreamClient implements XtreamClient {
       'action': 'get_vod_streams',
       if (categoryId != null) 'category_id': categoryId,
     };
-    final json = await _getJson(query);
-    return _parseList(json, VodItem.fromJson);
+    return _getList(query, VodItem.fromJson);
   }
 
   @override
-  Uri vodPlayUrl(VodItem item) =>
-      credentials.movieStreamUri(
-        item.streamId,
-        extension: item.containerExtension,
-      );
+  Uri vodPlayUrl(VodItem item) => credentials.movieStreamUri(
+    item.streamId,
+    extension: item.containerExtension,
+  );
 
   @override
   Future<VodInfo> getVodInfo(int vodId) async {
@@ -214,8 +214,7 @@ class HttpXtreamClient implements XtreamClient {
       'action': 'get_series',
       if (categoryId != null) 'category_id': categoryId,
     };
-    final json = await _getJson(query);
-    return _parseList(json, SeriesItem.fromJson);
+    return _getList(query, SeriesItem.fromJson);
   }
 
   @override
@@ -235,11 +234,10 @@ class HttpXtreamClient implements XtreamClient {
   }
 
   @override
-  Uri seriesPlayUrl(SeriesEpisode episode) =>
-      credentials.seriesStreamUri(
-        episode.id,
-        extension: episode.containerExtension,
-      );
+  Uri seriesPlayUrl(SeriesEpisode episode) => credentials.seriesStreamUri(
+    episode.id,
+    extension: episode.containerExtension,
+  );
 
   List<EpgProgram> _parseEpgListings(dynamic json) {
     List<dynamic>? raw;
@@ -266,6 +264,54 @@ class HttpXtreamClient implements XtreamClient {
   }
 
   Future<dynamic> _getJson(Map<String, String> query) async {
+    final (uri, response) = await _send(query);
+    final body = response.body.trim();
+    if (body.startsWith('{') || body.startsWith('[')) {
+      try {
+        return jsonDecode(body);
+      } on FormatException catch (e) {
+        throw XtreamException('Invalid JSON from player_api: $e');
+      }
+    }
+    _throwNotJson(body, uri);
+  }
+
+  /// The big catalog lists (live channels, movies, series). These can be
+  /// tens of MB of JSON: text decoding, parsing and building the models all
+  /// run in a background isolate so the UI does not stall while they load.
+  Future<List<T>> _getList<T>(
+    Map<String, String> query,
+    T Function(Map<String, dynamic>) fromJson,
+  ) async {
+    final (uri, response) = await _send(query);
+    final bytes = response.bodyBytes;
+    final headers = response.headers;
+    final List<T>? list;
+    try {
+      list = await Isolate.run(() => _decodeList(bytes, headers, fromJson));
+    } on FormatException catch (e) {
+      throw XtreamException('Invalid JSON from player_api: $e');
+    }
+    if (list != null) return list;
+    _throwNotJson(response.body.trim(), uri);
+  }
+
+  /// Runs in a background isolate. Decodes the text exactly as
+  /// [http.Response.body] would (charset from the headers), then the JSON,
+  /// then the models. Null when the body is not JSON (e.g. an HTML error).
+  static List<T>? _decodeList<T>(
+    Uint8List bytes,
+    Map<String, String> headers,
+    T Function(Map<String, dynamic>) fromJson,
+  ) {
+    final body = http.Response.bytes(bytes, 200, headers: headers).body.trim();
+    if (!body.startsWith('{') && !body.startsWith('[')) return null;
+    return _parseList(jsonDecode(body), fromJson);
+  }
+
+  /// GET player_api.php and check the status. The body is only decoded to
+  /// text here for error pages, which are small.
+  Future<(Uri, http.Response)> _send(Map<String, String> query) async {
     final uri = credentials.playerApiUri.replace(queryParameters: query);
     late final http.Response response;
     try {
@@ -275,10 +321,10 @@ class HttpXtreamClient implements XtreamClient {
         'Network error reaching ${credentials.baseUrl}: $e',
       );
     }
-    final body = response.body.trim();
 
     // Prefer parsing body even on 4xx — XUI may send HTML error pages.
     if (response.statusCode == 401 || response.statusCode == 403) {
+      final body = response.body.trim();
       final htmlHint = body.isNotEmpty ? _parseHtmlApiError(body) : null;
       if (htmlHint != null) {
         throw XtreamException(htmlHint, statusCode: response.statusCode);
@@ -304,19 +350,18 @@ class HttpXtreamClient implements XtreamClient {
         statusCode: response.statusCode,
       );
     }
+    if (response.bodyBytes.isEmpty) {
+      throw XtreamException('Empty response from player_api.php');
+    }
+    return (uri, response);
+  }
+
+  /// A 2xx body that is not JSON: name the panel error if it is a known HTML
+  /// page, else show the start of the body.
+  Never _throwNotJson(String body, Uri uri) {
     if (body.isEmpty) {
       throw XtreamException('Empty response from player_api.php');
     }
-
-    // Happy path: JSON object/array.
-    if (body.startsWith('{') || body.startsWith('[')) {
-      try {
-        return jsonDecode(body);
-      } on FormatException catch (e) {
-        throw XtreamException('Invalid JSON from player_api: $e');
-      }
-    }
-
     // XUI.one and some panels return HTML error pages for bad logins
     // (e.g. title "INVALID_CREDENTIALS") instead of JSON.
     final htmlHint = _parseHtmlApiError(body);
@@ -376,7 +421,7 @@ class HttpXtreamClient implements XtreamClient {
     return null;
   }
 
-  List<T> _parseList<T>(
+  static List<T> _parseList<T>(
     dynamic json,
     T Function(Map<String, dynamic>) fromJson,
   ) {
