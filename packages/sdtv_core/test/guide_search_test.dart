@@ -161,6 +161,15 @@ void main() {
       );
     });
 
+    test(
+      'a hidden Live id does not mark a movie category with the same id',
+      () {
+        expect(hiddenCategoryKey(GuideSearchSection.live, '7'), '7');
+        expect(hiddenCategoryKey(GuideSearchSection.movies, '7'), 'vod:7');
+        expect(hiddenCategoryKey(GuideSearchSection.series, '7'), 'series:7');
+      },
+    );
+
     test('marks hidden movie categories', () {
       final hits = GuideSearch.search(
         query: 'batman',
@@ -168,7 +177,7 @@ void main() {
         channels: channels,
         vodCategories: vodCats,
         vodItems: vods,
-        hiddenCategoryIds: {'m1'},
+        hiddenCategoryIds: {hiddenCategoryKey(GuideSearchSection.movies, 'm1')},
       );
       final movie = hits.firstWhere((h) => h.isVod);
       expect(movie.subtitle, contains('hidden'));

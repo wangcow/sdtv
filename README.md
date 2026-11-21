@@ -23,7 +23,7 @@ decoding.
 - **Favorites** for live channels, movies and shows.
 - **Search** across live channels, movies and TV shows.
 - **Your guide, your order:** hide categories you never watch and move the
-  ones you do to the top.
+  ones you do to the top, in Live TV, Movies and TV Shows.
 - **Several playlists:** Xtream Codes accounts and M3U playlists, with a
   switcher in Settings.
 - **Deck-friendly:** keeps Steam's screensaver away during playback and
@@ -56,7 +56,7 @@ AI-written.
 | **B** | Back | Hide the controls, then leave |
 | **LB / RB** | Switch Live ⇄ Movies ⇄ TV Shows | Channel − / + (live) · seek (movies, shows) |
 | **Y** | Favorite | Favorite (live) |
-| **X** | Hide the focused category | Mute |
+| **X** | — | Mute |
 | **☰** | Menu: Search, Settings, Exit | Subtitles, audio, mute |
 
 The full map is in [docs/CONTROLLER.md](docs/CONTROLLER.md). A keyboard

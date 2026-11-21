@@ -53,9 +53,11 @@ void main() {
     expect(find.textContaining('CATEGORIES'), findsOneWidget);
     expect(find.text('Entertainment'), findsOneWidget);
     expect(find.textContaining('DEMO'), findsOneWidget);
-    // Footer controls render as key caps + actions.
-    expect(find.text('X'), findsOneWidget);
-    expect(find.text('hide'), findsOneWidget);
+    // Footer controls render as key caps + actions. X no longer hides in
+    // the guide, and → guide is gone (the guide is already on screen).
+    expect(find.text('LB/RB'), findsOneWidget);
+    expect(find.text('X'), findsNothing);
+    expect(find.textContaining('guide'), findsNothing);
   });
 
   testWidgets('A on a live channel plays on mpv without asking', (
@@ -420,6 +422,79 @@ void main() {
     expect(session.guideSection, GuideSection.series);
   });
 
+  testWidgets('Manage categories: LB/RB tabs; hiding counts per section', (
+    tester,
+  ) async {
+    await _useWideSurface(tester);
+    final session = await _pumpDemo(tester);
+
+    Future<void> press(Intent intent) async {
+      await _pastActivateCooldown(tester);
+      _invoke(tester, find.byType(Scaffold).last, intent);
+      await _pumpFor(tester, const Duration(milliseconds: 200));
+    }
+
+    // X in the guide hides nothing.
+    await press(const SdtvMuteIntent());
+    expect(session.hiddenCategoryCount, 0);
+
+    // ☰ → Settings → Manage categories → RB to the Movies tab.
+    await press(const SdtvMenuIntent());
+    await press(const DirectionalFocusIntent(TraversalDirection.down));
+    await press(const SdtvConfirmIntent());
+    await press(const DirectionalFocusIntent(TraversalDirection.down));
+    await press(const SdtvConfirmIntent());
+    await _pumpUntil(tester, find.textContaining('A move'));
+    await press(const SdtvPageDownIntent());
+    await _pumpUntil(tester, find.text('Comedy'));
+    expect(find.text('Action'), findsWidgets);
+
+    // Comedy: ↓, X hides it, A picks it up, ↑ moves it above Action.
+    await press(const DirectionalFocusIntent(TraversalDirection.down));
+    await press(const SdtvMuteIntent());
+    await press(const SdtvConfirmIntent());
+    await press(const DirectionalFocusIntent(TraversalDirection.up));
+    await press(const SdtvConfirmIntent());
+
+    expect(session.isCategoryHiddenIn(GuideSection.movies, '11'), isTrue);
+    expect(session.hiddenCountFor(GuideSection.movies), 1);
+    expect(session.hiddenCountFor(GuideSection.live), 0);
+    expect(session.hiddenCountFor(GuideSection.series), 0);
+    expect(
+      [
+        for (final c in session.orderedCategoriesFor(GuideSection.movies))
+          c.categoryName,
+      ],
+      ['Comedy', 'Action'],
+    );
+    expect(
+      [for (final c in session.browseVodCategories) c.categoryName],
+      ['★ Favorites', 'Action'],
+    );
+    // Live keeps the provider order.
+    expect(
+      [for (final c in session.orderedCategories) c.categoryName],
+      ['Entertainment', 'News', 'Sports'],
+    );
+
+    // RB again: TV Shows. LB back to Movies keeps its order.
+    await press(const SdtvPageDownIntent());
+    await _pumpUntil(tester, find.text('Sci-Fi'));
+    await press(const SdtvPageUpIntent());
+    await _pumpUntil(tester, find.text('Comedy'));
+
+    // Leaving saves the Movies order under its own key.
+    await press(const SdtvBackIntent());
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    final settings = await SettingsStore.open();
+    expect(settings.categoryOrder('${session.prefsScope}#movies'), [
+      '11',
+      '10',
+    ]);
+    expect(settings.categoryOrder(session.prefsScope), isEmpty);
+    await _pumpFor(tester, const Duration(seconds: 5));
+  });
+
   testWidgets('LB/RB do not move the ☰ menu', (tester) async {
     await _useWideSurface(tester);
     final session = await _pumpDemo(tester);
@@ -542,10 +617,8 @@ void main() {
     expect(find.text('Settings'), findsOneWidget);
     expect(find.text('Sign out'), findsNothing);
     expect(find.text('Switch playlist'), findsNothing);
-    expect(
-      find.textContaining('Hide'),
-      findsNothing,
-    ); // Movies: nothing to hide
+    // Movies categories can be hidden too.
+    expect(find.textContaining('Hide “'), findsOneWidget);
 
     Future<void> press(Intent intent) async {
       await _pastActivateCooldown(tester);

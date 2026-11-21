@@ -190,49 +190,86 @@ class SessionController extends ChangeNotifier {
   /// Same scope string as [favoritesScope] (hidden cats share the namespace).
   String get prefsScope => favoritesScope;
 
-  /// Live categories in the user's order (Settings → Manage categories).
-  /// Categories the user never placed keep the provider's order, after
-  /// the placed ones.
-  List<MediaCategory> get orderedCategories {
-    final order = _categoryOrder;
-    if (order.isEmpty) return categories;
+  /// Provider categories of [section] as loaded (provider order).
+  List<MediaCategory> rawCategoriesFor(GuideSection section) =>
+      switch (section) {
+        GuideSection.live => categories,
+        GuideSection.movies => vodCategories,
+        GuideSection.series => seriesCategories,
+      };
+
+  static GuideSearchSection _searchSection(GuideSection s) => switch (s) {
+    GuideSection.live => GuideSearchSection.live,
+    GuideSection.movies => GuideSearchSection.movies,
+    GuideSection.series => GuideSearchSection.series,
+  };
+
+  /// Prefs scope of a section's category order (Live keeps the old one).
+  String _orderScope(GuideSection s) =>
+      s == GuideSection.live ? prefsScope : '$prefsScope#${s.name}';
+
+  /// Categories of [section] in the user's order (Settings → Manage
+  /// categories). Ones the user never placed keep the provider's order,
+  /// after the placed ones.
+  List<MediaCategory> orderedCategoriesFor(GuideSection section) {
+    final raw = rawCategoriesFor(section);
+    final order = _categoryOrders[section] ?? const <String>[];
+    if (order.isEmpty) return raw;
     // The guide asks for this many times per frame; sort once per change.
-    final cached = _orderedCache;
+    final cached = _orderedCache[section];
     if (cached != null &&
-        identical(_orderedCacheFor, categories) &&
-        identical(_orderedCacheOrder, order)) {
-      return cached;
+        identical(cached.raw, raw) &&
+        identical(cached.order, order)) {
+      return cached.list;
     }
     final rank = {for (var i = 0; i < order.length; i++) order[i]: i};
     final placed = <MediaCategory>[];
     final rest = <MediaCategory>[];
-    for (final c in categories) {
+    for (final c in raw) {
       (rank.containsKey(c.categoryId) ? placed : rest).add(c);
     }
     placed.sort((a, b) => rank[a.categoryId]!.compareTo(rank[b.categoryId]!));
-    _orderedCacheFor = categories;
-    _orderedCacheOrder = order;
-    return _orderedCache = List.unmodifiable([...placed, ...rest]);
+    final list = List<MediaCategory>.unmodifiable([...placed, ...rest]);
+    _orderedCache[section] = (raw: raw, order: order, list: list);
+    return list;
   }
 
-  List<MediaCategory>? _orderedCache;
-  List<MediaCategory>? _orderedCacheFor;
-  List<String>? _orderedCacheOrder;
+  /// Live categories in the user's order.
+  List<MediaCategory> get orderedCategories =>
+      orderedCategoriesFor(GuideSection.live);
+
+  final Map<GuideSection, List<String>> _categoryOrders = {};
+  final Map<
+    GuideSection,
+    ({List<MediaCategory> raw, List<String> order, List<MediaCategory> list})
+  >
+  _orderedCache = {};
+  final Set<GuideSection> _unsavedOrders = {};
   Timer? _categoryOrderSave;
 
-  /// Write a pending category order now (leaving Manage categories).
+  /// Write pending category orders now (leaving Manage categories).
   Future<void> saveCategoryOrderNow() async {
-    final pending = _categoryOrderSave;
-    if (pending == null || !pending.isActive) return;
-    pending.cancel();
-    await _settings.setCategoryOrder(prefsScope, _categoryOrder);
+    _categoryOrderSave?.cancel();
+    final dirty = _unsavedOrders.toList();
+    _unsavedOrders.clear();
+    for (final section in dirty) {
+      await _settings.setCategoryOrder(
+        _orderScope(section),
+        _categoryOrders[section] ?? const [],
+      );
+    }
   }
 
-  /// Move a Live category up (delta < 0) or down in the user's order.
-  /// Returns its new index in [orderedCategories], or -1. The order changes
-  /// at once (quick repeated presses build on it); saving runs behind.
-  int moveCategory(String categoryId, int delta) {
-    final ids = [for (final c in orderedCategories) c.categoryId];
+  /// Move a category of [section] up (delta < 0) or down in the user's
+  /// order. Returns its new index in [orderedCategoriesFor], or -1. The
+  /// order changes at once (quick repeated presses build on it); saving
+  /// runs behind.
+  int moveCategory(
+    String categoryId,
+    int delta, {
+    GuideSection section = GuideSection.live,
+  }) {
+    final ids = [for (final c in orderedCategoriesFor(section)) c.categoryId];
     final from = ids.indexOf(categoryId);
     if (from < 0) return -1;
     final to = (from + delta).clamp(0, ids.length - 1);
@@ -240,15 +277,57 @@ class SessionController extends ChangeNotifier {
     ids
       ..removeAt(from)
       ..insert(to, categoryId);
-    _categoryOrder = ids;
+    _categoryOrders[section] = ids;
+    _unsavedOrders.add(section);
     notifyListeners();
     // Held ↑↓ moves many times a second: save once the moving stops.
-    final scope = prefsScope;
     _categoryOrderSave?.cancel();
-    _categoryOrderSave = Timer(const Duration(milliseconds: 600), () {
-      unawaited(_settings.setCategoryOrder(scope, ids));
-    });
+    _categoryOrderSave = Timer(
+      const Duration(milliseconds: 600),
+      () => unawaited(saveCategoryOrderNow()),
+    );
     return to;
+  }
+
+  /// True when [categoryId] of [section] is hidden from the guide.
+  bool isCategoryHiddenIn(GuideSection section, String categoryId) =>
+      _hiddenCategoryIds.contains(
+        hiddenCategoryKey(_searchSection(section), categoryId),
+      );
+
+  /// How many of [section]'s categories are hidden.
+  int hiddenCountFor(GuideSection section) => rawCategoriesFor(
+    section,
+  ).where((c) => isCategoryHiddenIn(section, c.categoryId)).length;
+
+  /// Hide / show a category of any section. Returns true if now hidden.
+  Future<bool> toggleCategoryHiddenIn(
+    GuideSection section,
+    String categoryId,
+  ) async {
+    if (section == GuideSection.live) {
+      return toggleCategoryHidden(categoryId);
+    }
+    if (categoryId.isEmpty || categoryId == kFavoritesCategoryId) {
+      return false;
+    }
+    final nowHidden = await _settings.toggleHiddenCategoryId(
+      prefsScope,
+      hiddenCategoryKey(_searchSection(section), categoryId),
+    );
+    _reloadHiddenCategories();
+    if (nowHidden) {
+      if (section == GuideSection.movies &&
+          selectedVodCategoryId == categoryId) {
+        selectedVodCategoryId = kFavoritesCategoryId;
+      }
+      if (section == GuideSection.series &&
+          selectedSeriesCategoryId == categoryId) {
+        selectedSeriesCategoryId = kFavoritesCategoryId;
+      }
+    }
+    notifyListeners();
+    return nowHidden;
   }
 
   /// Provider categories that are not hidden (guide list without ★), in
@@ -308,6 +387,7 @@ class SessionController extends ChangeNotifier {
   int get seriesFavoriteCount =>
       _favoriteKeys.where(UserLibrary.isSeriesFavoriteKey).length;
 
+  /// Hidden categories across Live, Movies and TV Shows.
   int get hiddenCategoryCount => _hiddenCategoryIds.length;
 
   bool isCategoryHidden(String categoryId) =>
@@ -321,7 +401,6 @@ class SessionController extends ChangeNotifier {
     _hiddenCategoryIds = _settings.hiddenCategoryIds(prefsScope).toSet();
   }
 
-  List<String> _categoryOrder = const [];
 
   /// Last played (restored on connect for this [prefsScope]).
   String? lastPlayedCategoryId;
@@ -334,7 +413,10 @@ class SessionController extends ChangeNotifier {
     // Only on load / playlist change: a pending (unsaved) order must
     // survive hide / show.
     _categoryOrderSave?.cancel();
-    _categoryOrder = _settings.categoryOrder(prefsScope);
+    _unsavedOrders.clear();
+    for (final section in GuideSection.values) {
+      _categoryOrders[section] = _settings.categoryOrder(_orderScope(section));
+    }
     _reloadLastPlayed();
     _reloadWatched();
   }
@@ -724,9 +806,8 @@ class SessionController extends ChangeNotifier {
       !useM3u || mockCatalog || useDemo || seriesCategories.isNotEmpty;
 
   List<MediaCategory> get browseVodCategories {
-    final hidden = _hiddenCategoryIds;
-    final visible = vodCategories
-        .where((c) => !hidden.contains(c.categoryId))
+    final visible = orderedCategoriesFor(GuideSection.movies)
+        .where((c) => !isCategoryHiddenIn(GuideSection.movies, c.categoryId))
         .toList();
     const fav = MediaCategory(
       categoryId: kFavoritesCategoryId,
@@ -739,9 +820,8 @@ class SessionController extends ChangeNotifier {
       _settings.vodProgressSeconds(prefsScope, item.favoriteKey);
 
   List<MediaCategory> get browseSeriesCategories {
-    final hidden = _hiddenCategoryIds;
-    final visible = seriesCategories
-        .where((c) => !hidden.contains(c.categoryId))
+    final visible = orderedCategoriesFor(GuideSection.series)
+        .where((c) => !isCategoryHiddenIn(GuideSection.series, c.categoryId))
         .toList();
     const fav = MediaCategory(
       categoryId: kFavoritesCategoryId,
@@ -2265,7 +2345,9 @@ class SessionController extends ChangeNotifier {
       return;
     }
     final ok = vodCategories.any(
-      (c) => c.categoryId == vodId && !_hiddenCategoryIds.contains(vodId),
+      (c) =>
+          c.categoryId == vodId &&
+          !isCategoryHiddenIn(GuideSection.movies, vodId),
     );
     selectedVodCategoryId = ok ? vodId : vodCategories.first.categoryId;
   }
@@ -2282,7 +2364,9 @@ class SessionController extends ChangeNotifier {
       return;
     }
     final ok = seriesCategories.any(
-      (c) => c.categoryId == seriesId && !_hiddenCategoryIds.contains(seriesId),
+      (c) =>
+          c.categoryId == seriesId &&
+          !isCategoryHiddenIn(GuideSection.series, seriesId),
     );
     selectedSeriesCategoryId = ok
         ? seriesId
@@ -2983,7 +3067,8 @@ class SessionController extends ChangeNotifier {
     selectedCategoryId = null;
     _favoriteKeys = const [];
     _hiddenCategoryIds = {};
-    _categoryOrder = const [];
+    _categoryOrders.clear();
+    _unsavedOrders.clear();
     _watchedKeys.clear();
     lastPlayedCategoryId = null;
     lastPlayedFavoriteKey = null;

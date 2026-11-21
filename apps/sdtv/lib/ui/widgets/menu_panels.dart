@@ -308,6 +308,9 @@ class _Row extends StatelessWidget {
 class ManageCategoriesPage extends StatelessWidget {
   const ManageCategoriesPage({
     super.key,
+    required this.tabs,
+    required this.tab,
+    this.loading = false,
     required this.names,
     required this.hidden,
     required this.selected,
@@ -321,6 +324,13 @@ class ManageCategoriesPage extends StatelessWidget {
 
   /// Gap above the first row (also scroll math).
   static const listTop = 14.0;
+
+  /// Section tabs (Live TV / Movies / TV Shows) and the one shown.
+  final List<String> tabs;
+  final int tab;
+
+  /// The shown section's categories are still loading.
+  final bool loading;
 
   final List<String> names;
   final List<bool> hidden;
@@ -354,9 +364,15 @@ class ManageCategoriesPage extends StatelessWidget {
                     fontWeight: FontWeight.w800,
                   ),
                 ),
+                const SizedBox(width: 28),
+                for (var i = 0; i < tabs.length; i++)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: _Tab(label: tabs[i], selected: i == tab),
+                  ),
                 const Spacer(),
                 Text(
-                  'Live TV  ·  ${names.length} categories'
+                  '${names.length} categories'
                   '${hiddenCount > 0 ? '  ·  $hiddenCount hidden' : ''}',
                   style: theme.textTheme.labelLarge?.copyWith(
                     color: scheme.onSurface.withValues(alpha: 0.6),
@@ -369,7 +385,7 @@ class ManageCategoriesPage extends StatelessWidget {
             child: names.isEmpty
                 ? Center(
                     child: Text(
-                      'No categories from the provider.',
+                      loading ? 'Loading…' : 'No categories from the provider.',
                       style: theme.textTheme.bodyLarge,
                     ),
                   )
@@ -401,7 +417,8 @@ class ManageCategoriesPage extends StatelessWidget {
             child: Text(
               moving
                   ? '↑↓ move category  ·  A / B drop'
-                  : '↑↓ choose  ·  A move  ·  X hide / show  ·  B back',
+                  : '↑↓ choose  ·  A move  ·  X hide / show  ·  '
+                        '${tabs.length > 1 ? 'LB/RB section  ·  ' : ''}B back',
               style: theme.textTheme.labelMedium?.copyWith(
                 color: scheme.onSurface.withValues(alpha: 0.6),
               ),
@@ -483,6 +500,33 @@ class _CategoryRow extends StatelessWidget {
                 ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Tab extends StatelessWidget {
+  const _Tab({required this.label, required this.selected});
+
+  final String label;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      decoration: BoxDecoration(
+        color: selected ? scheme.primary : scheme.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        label,
+        style: theme.textTheme.labelLarge?.copyWith(
+          color: selected ? scheme.onPrimary : scheme.onSurface,
+          fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
         ),
       ),
     );

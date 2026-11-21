@@ -32,7 +32,7 @@ While a movie or episode is playing, the Flutter HUD is on the video. **←/→*
 | Back | B | Escape |
 | Menu | Start (☰) | Context menu / F1 |
 | Favorite channel | Y | F |
-| Hide category | X (guide) | M (guide) |
+| Hide category | ☰ → Hide (guide) | ☰ → Hide (guide) |
 | Search | ☰ Start → Search | `/` or Ctrl+F |
 | Jump guide to now | — | `G` |
 | Page jump / EPG time | LB / RB | PageUp / PageDown |
@@ -66,8 +66,8 @@ On the Deck, Steam can inject a key (Esc for B) alongside a pad press. sdtv igno
 
 ### Hidden categories
 
-- **X** (guide) or **☰ → Hide category** removes the focused category from the list (not ★ Favorites).
-- **☰ → Settings → Manage categories** (full screen) lists every Live category in your order. **X** hides / shows the focused one · **A** picks it up, **↑↓** move it, **A** or **B** drops it · **B** back to Settings. The order and hidden list are saved per playlist.
+- **☰ → Hide “…”** removes the focused category from the list, in Live TV, Movies or TV Shows (not ★ Favorites). **X** in the guide does nothing, so a stray press can't hide anything.
+- **☰ → Settings → Manage categories** (full screen) lists the categories of one section in your order; **LB/RB** switch Live TV / Movies / TV Shows. **X** hides / shows the focused one · **A** picks it up, **↑↓** move it, **A** or **B** drops it · **B** back to Settings. Each section's order and the hidden list are saved per playlist. The guide's category header counts only that section's hidden categories.
 - Hidden ids are stored locally, scoped per Xtream account / M3U URL (same as favorites).
 
 ### Last played

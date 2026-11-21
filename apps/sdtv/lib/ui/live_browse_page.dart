@@ -66,6 +66,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
   /// Manage categories: the focused category is picked up (↑↓ move it).
   bool _manageMoving = false;
+
+  /// Manage categories: which section's categories are listed (LB/RB).
+  GuideSection _manageSection = GuideSection.live;
   bool _searchOpen = false;
 
   /// False while the query field should own the pad (Deck OSK). A/D-pad
@@ -147,14 +150,31 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   /// Name of the Live category ☰ → Hide would hide, or null when it can't.
-  String? get _hideableCategoryName {
-    if (!_isLive || session.isWatchingExternal) return null;
-    final cats = session.browseCategories;
+  String? get _hideableCategoryName => _focusedHideableCategory?.categoryName;
+
+  /// The category ☰ → Hide / X would hide in the current section (not ★).
+  MediaCategory? get _focusedHideableCategory {
+    if (session.isWatchingExternal) return null;
+    if (_vodDetailOpen || _seriesEpisodesOpen) return null;
+    final cats = _browseCategoriesOf(session.guideSection);
     if (cats.isEmpty) return null;
     final cat = cats[_catIndex.clamp(0, cats.length - 1)];
     if (cat.categoryId == kFavoritesCategoryId) return null;
-    return cat.categoryName;
+    return cat;
   }
+
+  static String _sectionLabel(GuideSection s) => switch (s) {
+    GuideSection.live => 'Live TV',
+    GuideSection.movies => 'Movies',
+    GuideSection.series => 'TV Shows',
+  };
+
+  List<MediaCategory> _browseCategoriesOf(GuideSection section) =>
+      switch (section) {
+        GuideSection.live => session.browseCategories,
+        GuideSection.movies => session.browseVodCategories,
+        GuideSection.series => session.browseSeriesCategories,
+      };
 
   List<MenuEntry> get _settingsEntries {
     final sources = session.savedSources;
@@ -183,7 +203,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         'Manage categories',
         section: 'Guide',
         subtitle: hidden == 0
-            ? 'Reorder or hide Live categories'
+            ? 'Reorder or hide Live, Movies and TV Shows categories'
             : 'Reorder or hide · $hidden hidden',
       ),
       MenuEntry(
@@ -770,12 +790,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
     }
     if (_manageCatsOpen) {
       if (!_acceptNav()) return;
-      final cats = session.orderedCategories;
+      final cats = session.orderedCategoriesFor(_manageSection);
       final n = cats.length;
       if (n == 0) return;
       if (_manageMoving) {
         final id = cats[_manageIndex.clamp(0, n - 1)].categoryId;
-        final to = session.moveCategory(id, delta);
+        final to = session.moveCategory(id, delta, section: _manageSection);
         if (to < 0) return;
         setState(() => _manageIndex = to);
         _scrollToManageIndex(to);
@@ -1060,6 +1080,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
               !_manageCatsOpen &&
               !_aboutOpen);
       if (menuOnTop) return;
+      if (_manageCatsOpen) {
+        if (!_manageMoving && _acceptNav()) {
+          _cycleManageSection(delta < 0 ? -1 : 1);
+        }
+        return;
+      }
       _moveVertical(delta < 0 ? -1 : 1);
       return;
     }
@@ -1177,7 +1203,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
 
     if (_manageCatsOpen) {
       // A picks the category up (↑↓ then move it) and drops it again.
-      if (session.orderedCategories.isNotEmpty) {
+      if (session.orderedCategoriesFor(_manageSection).isNotEmpty) {
         setState(() => _manageMoving = !_manageMoving);
       }
       return;
@@ -1891,6 +1917,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         setState(() {
           _manageCatsOpen = true;
           _manageMoving = false;
+          _manageSection = GuideSection.live;
           _manageIndex = 0;
         });
       case 'about':
@@ -1939,12 +1966,11 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   /// still live-only — don't hide poster-guide cats until that UI exists.
   Future<void> _hideFocusedCategory() async {
     if (session.isWatchingExternal) return;
-    if (_isPosterGuide) return;
-    final cats = session.browseCategories;
+    if (_vodDetailOpen || _seriesEpisodesOpen) return;
+    final cats = _browseCategoriesOf(session.guideSection);
     if (cats.isEmpty) return;
     // Prefer category column selection; if on channels, hide that category.
-    final idx = _catIndex.clamp(0, cats.length - 1);
-    final cat = cats[idx];
+    final cat = cats[_catIndex.clamp(0, cats.length - 1)];
     if (cat.categoryId == kFavoritesCategoryId) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1956,7 +1982,12 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       return;
     }
     final name = cat.categoryName;
-    await session.hideCategory(cat.categoryId);
+    final section = session.guideSection;
+    if (section == GuideSection.live) {
+      await session.hideCategory(cat.categoryId);
+    } else if (!session.isCategoryHiddenIn(section, cat.categoryId)) {
+      await session.toggleCategoryHiddenIn(section, cat.categoryId);
+    }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -1970,14 +2001,36 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
   }
 
   Future<void> _toggleManageRow() async {
-    final all = session.orderedCategories;
+    final all = session.orderedCategoriesFor(_manageSection);
     if (all.isEmpty) return;
     final i = _manageIndex.clamp(0, all.length - 1);
     final cat = all[i];
     // No SnackBar here — bulk hide would queue dozens of toasts.
     // Tile label/icon + header counts already update in place.
-    await session.toggleCategoryHidden(cat.categoryId);
+    await session.toggleCategoryHiddenIn(_manageSection, cat.categoryId);
     if (mounted) setState(() {});
+  }
+
+  /// Manage categories: LB/RB switch Live TV / Movies / TV Shows.
+  void _cycleManageSection(int delta) {
+    final order = _sectionOrder;
+    if (order.length < 2) return;
+    var i = order.indexOf(_manageSection);
+    if (i < 0) i = 0;
+    i = ((i + delta) % order.length + order.length) % order.length;
+    final next = order[i];
+    setState(() {
+      _manageSection = next;
+      _manageIndex = 0;
+      _manageMoving = false;
+    });
+    if (_manageScroll.hasClients) _manageScroll.jumpTo(0);
+    // Movies / TV Shows load the first time their tab is opened.
+    if (next == GuideSection.movies && !session.vodCatalogReady) {
+      unawaited(session.loadVodCatalog());
+    } else if (next == GuideSection.series && !session.seriesCatalogReady) {
+      unawaited(session.loadSeriesCatalog());
+    }
   }
 
   /// Y / F: star live from the guide; movies / TV shows only on the title page.
@@ -2875,7 +2928,7 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
       }
       return '↑↓ channels · A play · ←/B cats · LB/RB section';
     }
-    return '↑↓ cats · → guide · X hide · LB/RB section · ☰ menu';
+    return '↑↓ cats · A channels · LB/RB section · ☰ menu';
   }
 
   /// Quit the process so Game Mode returns to Steam (no STEAM → Exit game).
@@ -2922,10 +2975,10 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
         } else if (_searchOpen || _switchSourceOpen || _unfavOpen) {
           // Don't hide cats while searching / switching / confirming unfav.
         } else if (_manageCatsOpen) {
+          // Manage categories: X hides / shows the focused category. In the
+          // guide X does nothing (too easy to hit by accident); hide there
+          // with ☰ → Hide.
           unawaited(_toggleManageRow());
-        } else if (!_menuOpen && !_aboutOpen) {
-          // Guide: X hides the focused category (quick junk filter).
-          unawaited(_hideFocusedCategory());
         }
       },
       onPageUp: () => _onPage(-1),
@@ -3093,7 +3146,9 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                               itemCount: cats.length + 1,
                               itemBuilder: (context, index) {
                                 if (index == 0) {
-                                  final hiddenN = session.hiddenCategoryCount;
+                                  final hiddenN = session.hiddenCountFor(
+                                    session.guideSection,
+                                  );
                                   return SizedBox(
                                     height: _listHeaderExtent,
                                     child: Align(
@@ -3419,12 +3474,24 @@ class _LiveBrowsePageState extends State<LiveBrowsePage> {
                 Positioned.fill(
                   child: Builder(
                     builder: (context) {
-                      final cats = session.orderedCategories;
+                      final cats = session.orderedCategoriesFor(_manageSection);
+                      final tabs = _sectionOrder;
+                      final loading = switch (_manageSection) {
+                        GuideSection.live => false,
+                        GuideSection.movies => !session.vodCatalogReady,
+                        GuideSection.series => !session.seriesCatalogReady,
+                      };
                       return ManageCategoriesPage(
+                        tabs: [for (final t in tabs) _sectionLabel(t)],
+                        tab: tabs.indexOf(_manageSection).clamp(0, 2),
+                        loading: loading,
                         names: [for (final c in cats) c.categoryName],
                         hidden: [
                           for (final c in cats)
-                            session.isCategoryHidden(c.categoryId),
+                            session.isCategoryHiddenIn(
+                              _manageSection,
+                              c.categoryId,
+                            ),
                         ],
                         selected: cats.isEmpty
                             ? 0

@@ -5,6 +5,16 @@ import 'vod_item.dart';
 /// Which tab a search hit should open.
 enum GuideSearchSection { live, movies, series }
 
+/// The key a category is stored under in the hidden-categories set. Live
+/// ids are stored as-is (as they always were); Movies and TV Shows ids get
+/// a prefix, because a panel may reuse the same id across the three.
+String hiddenCategoryKey(GuideSearchSection section, String categoryId) =>
+    switch (section) {
+      GuideSearchSection.live => categoryId,
+      GuideSearchSection.movies => 'vod:$categoryId',
+      GuideSearchSection.series => 'series:$categoryId',
+    };
+
 /// What a guide search hit points at.
 ///
 /// [epg] is reserved for short/full EPG search later — same result list UI.
@@ -317,7 +327,10 @@ class GuideSearchIndex {
             kind: GuideSearchKind.category,
             section: GuideSearchSection.movies,
             title: c.name,
-            subtitle: hiddenCategoryIds.contains(c.id)
+            subtitle:
+                hiddenCategoryIds.contains(
+                  hiddenCategoryKey(GuideSearchSection.movies, c.id),
+                )
                 ? 'Movies · hidden'
                 : 'Movies',
             categoryId: c.id,
@@ -330,7 +343,10 @@ class GuideSearchIndex {
             kind: GuideSearchKind.category,
             section: GuideSearchSection.series,
             title: c.name,
-            subtitle: hiddenCategoryIds.contains(c.id)
+            subtitle:
+                hiddenCategoryIds.contains(
+                  hiddenCategoryKey(GuideSearchSection.series, c.id),
+                )
                 ? 'TV Shows · hidden'
                 : 'TV Shows',
             categoryId: c.id,
@@ -383,7 +399,13 @@ class GuideSearchIndex {
     Set<String> favoriteKeys,
   ) {
     final d = m.doc;
-    final hidden = hiddenCategoryIds.contains(d.categoryId);
+    final hidden = hiddenCategoryIds.contains(
+      hiddenCategoryKey(switch (d.kind) {
+        GuideSearchKind.channel => GuideSearchSection.live,
+        GuideSearchKind.vod => GuideSearchSection.movies,
+        _ => GuideSearchSection.series,
+      }, d.categoryId),
+    );
     final fav = favoriteKeys.contains(d.favoriteKey);
     switch (d.kind) {
       case GuideSearchKind.channel:
