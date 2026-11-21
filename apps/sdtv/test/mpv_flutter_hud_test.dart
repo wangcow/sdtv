@@ -179,7 +179,15 @@ void main() {
     expect(bottom.alphaAt(8, bottom.h - 1), greaterThan(150));
     expect(bottom.alphaAt(8, 0), lessThan(16));
 
+    // First B hides the HUD (and its layers on the video); the next B is
+    // left to the page, which leaves playback.
     expect(key.currentState!.handleBack(), isTrue);
+    await tester.pump();
+    expect(find.text('Prev ch'), findsNothing);
+    expect(
+      fake.bands.containsKey(ExternalMpvLauncher.bitmapOverlayId),
+      isFalse,
+    );
     expect(key.currentState!.handleBack(), isFalse);
 
     await tester.pumpWidget(const SizedBox.shrink());

@@ -501,7 +501,8 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
       _layerGen++;
       unawaited(_overlay.clear());
       unawaited(_syncPause());
-      _bumpHud();
+      // Leave the HUD hidden: B closed the menu, and the next B should
+      // leave playback rather than first dismiss a HUD that popped back.
       return;
     }
     if (_nowKey != _infoKey) unawaited(_refreshInfo()); // zapped
@@ -632,14 +633,22 @@ class MpvFlutterHudState extends State<MpvFlutterHud> {
     _activate(_focus);
   }
 
-  /// B while the HUD is up moves to Back. A second B (or B while hidden)
-  /// returns false so the page can leave playback.
+  /// B while the HUD is up hides it (the video keeps going, or stays
+  /// paused). B with the HUD hidden returns false so the page can leave
+  /// playback.
   bool handleBack() {
     if (!_showHud) return false;
-    if (_focus == PlayerChromeFocus.back) return false;
-    setState(() => _focus = PlayerChromeFocus.back);
-    _bumpHud();
+    _hideChrome();
     return true;
+  }
+
+  void _hideChrome() {
+    _hideHudTimer?.cancel();
+    setState(() => _showHud = false);
+    _syncTick();
+    // Only the chrome: a toast can outlive it.
+    unawaited(_overlay.removeBand(ExternalMpvLauncher.bitmapOverlayId));
+    unawaited(_overlay.removeBand(ExternalMpvLauncher.bitmapOverlayIdBottom));
   }
 
   void _moveFocus(int delta) {

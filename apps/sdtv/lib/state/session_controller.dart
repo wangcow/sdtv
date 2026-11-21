@@ -910,8 +910,8 @@ class SessionController extends ChangeNotifier {
         errorMessage: err.message,
         selected: watchMenuIndex.clamp(0, 1),
         hint: watchingVod
-            ? 'A select  ·  B back'
-            : 'A select  ·  B guide  ·  LB/RB channel',
+            ? 'A select  ·  B close'
+            : 'A select  ·  B close  ·  LB/RB channel',
         rows: const [
           WatchMenuRow('retry', 'Retry'),
           WatchMenuRow('guide', 'Back to guide'),
@@ -1157,6 +1157,11 @@ class SessionController extends ChangeNotifier {
     if (_seriesAdvanceInFlight) return;
     if (await _tryAdvanceSeriesEpisode()) return;
     if (watchStallOpen) {
+      if (await _playbackRecovered()) {
+        debugPrint('sdtv: playback recovered — closing the error card');
+        _closeStallCard();
+        return;
+      }
       // Keep the error OSD from timing out.
       if (_stallSince != null &&
           DateTime.now().difference(_stallSince!) >
@@ -1229,8 +1234,40 @@ class SessionController extends ChangeNotifier {
     return false;
   }
 
+  /// Close the error card and keep watching (B, or playback recovered).
+  void _closeStallCard() {
+    if (!watchStallOpen) return;
+    watchMenuOpen = false;
+    watchStallOpen = false;
+    watchMenuIndex = 0;
+    _stallSince = null;
+    _lastStallPos = null;
+    _recoverPos = null;
+    _recoverTicks = 0;
+    notifyListeners();
+  }
+
+  double? _recoverPos;
+  int _recoverTicks = 0;
+
+  /// The play position moved forward on two polls in a row (~2s): the
+  /// stream is playing again behind the error card.
+  Future<bool> _playbackRecovered() async {
+    final raw = await externalMpv.getProperty('time-pos');
+    final pos = raw is num ? raw.toDouble() : null;
+    final prev = _recoverPos;
+    _recoverPos = pos;
+    if (pos == null || prev == null || pos - prev < 0.35) {
+      _recoverTicks = 0;
+      return false;
+    }
+    return ++_recoverTicks >= 2;
+  }
+
   Future<void> _openStallMenu() async {
     if (!isWatchingExternal || watchMenuOpen) return;
+    _recoverPos = null;
+    _recoverTicks = 0;
     debugPrint('sdtv: stream stall ≥${_stallAfter.inSeconds}s — error menu');
     _miniGuideGen++;
     watchMenuOpen = true;
@@ -1272,11 +1309,13 @@ class SessionController extends ChangeNotifier {
     }
   }
 
-  /// B while watching: dismiss the pause list and keep playing; B again leaves.
+  /// B while watching: dismiss the pause list or the error card and keep
+  /// playing; B again leaves. A stream that is really stuck brings the
+  /// error card back through the stall watch.
   Future<void> watchBack() async {
     if (!isWatchingExternal) return;
     if (watchStallOpen) {
-      await watchQuit();
+      _closeStallCard();
       return;
     }
     if (watchMenuOpen) {
