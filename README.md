@@ -1,188 +1,144 @@
 # sdtv
 
-**Steam Deck–first IPTV player** with a TiviMate-like couch experience.
+**A controller-only IPTV player for the Steam Deck**, in the spirit of
+TiviMate: a TV guide, Movies and TV Shows, all driven from the gamepad in
+Steam's Game Mode. Video plays in [mpv](https://mpv.io) with hardware
+decoding.
 
-Import your Xtream Codes URL, username, and password → browse Live TV, Movies, and TV Shows (EPG later) → navigate entirely with a gamepad. No mouse or trackpad-as-pointer required.
+> **sdtv is a player only.** It does not provide, host or distribute any
+> channels, playlists or streams. You bring your own provider account.
 
-> **sdtv is a media player only.** It does not provide, host, or distribute any channels, playlists, or streams. You bring your own provider credentials.
+**Product of the Wangcow Corporation** · App ID `org.wangcow.SDTV` ·
+[Apache-2.0](LICENSE)
 
-**Product of the Wangcow Corporation**
+## Features
 
-| | |
-|---|---|
-| App ID | `org.wangcow.SDTV` |
-| License | Apache-2.0 (see [LICENSE](LICENSE) + [NOTICE](NOTICE)) |
-| Domain | [wangcow.com](https://wangcow.com) |
-| Platform | Linux (Steam Deck first); Android later via Flutter |
+- **Live TV guide:** channels down the side, programmes across a timeline,
+  channel logos, now / next for the focused channel.
+- **Movies and TV Shows:** poster grids, a title page (plot, cast, rating,
+  trailer), seasons and episodes, resume where you left off, watched marks,
+  and the next episode starts on its own.
+- **On-screen controls while watching:** previous / next / last channel,
+  next episode, seek, subtitles and audio tracks, drawn over the mpv video.
+- **Favorites** for live channels, movies and shows.
+- **Search** across live channels, movies and TV shows.
+- **Your guide, your order:** hide categories you never watch and move the
+  ones you do to the top.
+- **Several playlists:** Xtream Codes accounts and M3U playlists, with a
+  switcher in Settings.
+- **Deck-friendly:** keeps Steam's screensaver away during playback and
+  recovers from slow-starting or failed streams with a retry card.
+- **Demo mode:** a built-in sample catalog (playing a public test stream)
+  to try sdtv without an account.
 
-## Product pillars
+## Install on the Steam Deck
 
-1. **Controller-first UI** — D-pad / stick focus, A confirm, B back. Keyboard works for desktop dev.
-2. **Steam Game Mode** — release download → non-Steam game → Gamepad Steam Input template.
-3. **Hardware decode** — external mpv (`vo=gpu`), VAAPI on Deck.
-4. **Xtream Codes first** — URL + user + pass. M3U later.
-5. **Open source** — Apache-2.0 with Wangcow attribution in About. Releases on GitHub.
+1. In Desktop Mode, install **mpv** from **Discover**.
+2. Download `sdtv-deck.tar.gz` from the latest
+   [release](https://github.com/wangcow/sdtv/releases) and extract it to
+   `~/sdtv`.
+3. Add `~/sdtv/run-sdtv.sh` to Steam as a non-Steam game.
+4. In Game Mode, set the controller template to **Gamepad**.
 
-## Status
+Step-by-step instructions, updating, and troubleshooting are in
+[docs/STEAM_DECK.md](docs/STEAM_DECK.md).
 
-**Phase 3+.** Deck MVP + live Xtream + **M3U playlists** + **Movies (VOD)** + **TV Shows**.  
-- **Demo** — offline fixtures + public test HLS  
-- **M3U** — paste a public/legal playlist URL (`#EXTINF` catalog)  
-- **Connect** — real Xtream Codes panel (Live + Movies + TV Shows)  
+sdtv is released only as this tarball. There is no Flatpak and it is not on
+Flathub: Flathub's policy bars AI-written packaging, and sdtv is largely
+AI-written.
 
-### Run
+## Controls at a glance
 
-```bash
-source tool/bazzite-flutter-env.sh
-./tool/run.sh
-```
+| Button | In the guide | While watching |
+|--------|--------------|----------------|
+| D-pad / stick | Move | Move between on-screen buttons |
+| **A** | Select / play | Press the focused button |
+| **B** | Back | Hide the controls, then leave |
+| **LB / RB** | Switch Live ⇄ Movies ⇄ TV Shows | Channel − / + (live) · seek (movies, shows) |
+| **Y** | Favorite | Favorite (live) |
+| **X** | Hide the focused category | Mute |
+| **☰** | Menu: Search, Settings, Exit | Subtitles, audio, mute |
 
-1. **Continue with demo playlist** — offline mock catalog + bipbop HLS.  
-2. **Connect to provider** — real `player_api.php` + `/live/user/pass/id.ts` (try `.m3u8` on failure).  
-3. Gamepad: D-pad browse · A play/pause · B back · LB/RB channel.
+The full map is in [docs/CONTROLLER.md](docs/CONTROLLER.md). A keyboard
+works too (arrows, Enter, Esc).
 
-Optional env:
+## Development
 
-| Variable | Meaning |
-|----------|---------|
-| `SDTV_ENABLE_GAMEPAD=0` | Disable joystick reader |
-| `SDTV_FORCE_MOCK=1` | Connect uses mock catalog (CI / offline) |
-| `SDTV_ALLOW_LIVE=0` | Legacy alias for force-mock |
-| `SDTV_DEMO_STREAM=url` | Override demo HLS URL |
-
-On Deck, put env in `~/sdtv/sdtv.env` next to `run-sdtv.sh` (see [docs/STEAM_DECK.md](docs/STEAM_DECK.md)).
-
-## Repo layout
+sdtv is a Flutter Linux app in a pub workspace:
 
 ```text
-sdtv/
-  apps/sdtv/           # Flutter Linux app
-  packages/
-    sdtv_core/         # Xtream client, models, cache
-    sdtv_input/        # Gamepad → Flutter intents (critical)
-    sdtv_player/       # External mpv launcher, IPC, HUD bitmap overlay
-  branding/            # App icon (SVG + 256px PNG)
-  tool/mock_xtream/    # Fixture JSON for safe offline dev
-  docs/                # Controller map, Steam Deck setup
+apps/sdtv/              Flutter app: UI and session state
+packages/sdtv_core/     Xtream / M3U clients, models, EPG
+packages/sdtv_input/    Gamepad → focus and actions
+packages/sdtv_player/   External mpv: launch, JSON IPC, HUD bitmap overlay
+tool/                   run, package and deploy scripts; mock Xtream fixtures
+docs/                   Controller map, Steam Deck guide, library format
 ```
 
-## Prerequisites
-
-- [Flutter](https://docs.flutter.dev/get-started/install/linux) stable (Linux desktop)
-- Linux toolchain: `clang`, `cmake`, `ninja`, `pkg-config`, GTK 3 dev libs
-- For playback: an `mpv` binary + VAAPI stack
-
-### Bazzite / immutable Fedora (this machine)
-
-Host packages are locked; use **Homebrew** for the Flutter Linux toolchain (already proven on this project):
+**You need:** Flutter (stable) with Linux desktop support, the Linux
+toolchain (`clang`, `cmake`, `ninja`, `pkg-config`, GTK 3 headers) and an
+`mpv` binary.
 
 ```bash
-brew install cmake ninja llvm gtk+3 xorgproto mpv
-# Flutter SDK (if needed). ./tool/run.sh uses the first one that exists:
-#   ~/.sdk/flutter   ~/sdk/flutter   ~/sdk/flutter
-# git clone https://github.com/flutter/flutter.git -b stable ~/.sdk/flutter
+dart pub get                 # from the repo root
+./tool/run.sh                # or: cd apps/sdtv && flutter run -d linux
 ```
 
-Then **always** load the env (or use `./tool/run.sh`, which does it for you):
+On Bazzite or another immutable Fedora, install the toolchain with Homebrew
+and `source tool/bazzite-flutter-env.sh` first (it finds Flutter in
+`~/.sdk/flutter` or `~/sdk/flutter`).
 
-```bash
-source tool/bazzite-flutter-env.sh
-```
-
-You do **not** need a separate laptop just because Bazzite is immutable.
-
-`./tool/run.sh` adds that SDK to `PATH`. For a manual shell:
-
-```bash
-export PATH="$HOME/.sdk/flutter/bin:$PATH"
-```
-
-## Develop
-
-The Flutter **app** lives in `apps/sdtv` (not the repo root). Running `flutter run` from the monorepo root fails with `Target file "lib/main.dart" not found`.
-
-```bash
-cd ~/sdtv-src
-source tool/bazzite-flutter-env.sh
-
-# From repo root — resolve workspace
-dart pub get   # or: flutter pub get
-
-# Run the app (must be apps/sdtv)
-cd apps/sdtv
-flutter run -d linux
-```
-
-Or from anywhere in the repo (loads Bazzite/Homebrew env automatically):
-
-```bash
-./tool/run.sh
-```
-
-Run package tests (mock fixtures only — no live providers):
+**Tests** use mock fixtures only and never reach a real provider:
 
 ```bash
 cd packages/sdtv_core && dart test
-cd ../sdtv_input && flutter test
-cd ../sdtv_player && flutter test
-cd ../../apps/sdtv && flutter test
+cd packages/sdtv_input && flutter test
+cd packages/sdtv_player && flutter test
+cd apps/sdtv && flutter test
 ```
 
-CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs `flutter analyze`
-(any finding fails, infos included) and these four suites on every push to
-`main` and every pull request.
+[CI](.github/workflows/ci.yml) runs `flutter analyze` (any finding fails,
+infos included) and all four suites on pushes to `main` and on pull
+requests.
 
-### Controller playground
+**Trying a build on a Deck:** `./tool/deploy-deck.sh` packages the app and
+copies it to a Deck over SSH (see
+[docs/STEAM_DECK.md](docs/STEAM_DECK.md#fast-game-mode-test-loop-recommended)).
 
-The default screen is a **focus maze** (no network). Use:
+### Environment variables
 
-- Arrow keys / D-pad / left stick — move focus  
-- Enter / A — activate  
-- Escape / B — back (logs action)  
-- See [docs/CONTROLLER.md](docs/CONTROLLER.md)
+| Variable | Effect |
+|----------|--------|
+| `SDTV_FORCE_MOCK=1` | Connect uses the mock catalog instead of a real panel |
+| `SDTV_MPV_PATH` | mpv to use: a path, or `flatpak:io.mpv.Mpv` |
+| `SDTV_ENABLE_GAMEPAD=0` | Turn off the joystick reader |
+| `SDTV_DEMO_STREAM` | Stream URL for demo mode |
+| `SDTV_PLAY_LOG` | File for stream start diagnostics (`run-sdtv.sh` sets it) |
 
-### Xtream testing policy
+On the Deck, put these in `~/sdtv/sdtv.env`.
 
-**Mocks only in CI and early development.** Do not commit real provider URLs or passwords. A paid Xtream account can be banned if abused by automated clients — keep live credentials local and gitignored until you deliberately test playback on your machine.
+### Rules for contributors
 
-Fixtures live under `tool/mock_xtream/fixtures/`.
+- Every screen must work with a controller alone.
+- Never commit credentials, provider URLs or playlists. Use the fixtures in
+  `tool/mock_xtream/fixtures/`. Automated traffic can get a real account
+  banned.
+- Video always plays in mpv, never through a Flutter texture.
 
-## Releases
+More in [AGENTS.md](AGENTS.md).
 
-sdtv is distributed as `sdtv-deck.tar.gz` on
-[GitHub releases](https://github.com/wangcow/sdtv/releases). It is not on
-Flathub and there is no Flatpak: Flathub's policy bars AI-written packaging,
-and sdtv is largely AI-written.
+### Releasing
 
-To make a release: `bash tool/package-deck.sh`, then attach
-`dist/sdtv-deck.tar.gz` to a tagged GitHub release. Install steps for users
-are in [docs/STEAM_DECK.md](docs/STEAM_DECK.md#install-from-github-releases).
+```bash
+bash tool/package-deck.sh    # → dist/sdtv-deck.tar.gz
+```
 
-## Steam Deck (preview)
-
-See [docs/STEAM_DECK.md](docs/STEAM_DECK.md). Short version: install mpv from Discover → extract the release to `~/sdtv` → add `run-sdtv.sh` as a non-Steam game → set controller template to **Gamepad** (not Desktop/mouse).
-
-## MVP roadmap
-
-1. ~~Scaffold + controller playground~~  
-2. Xtream login (mock then optional live) + live categories/channels  
-3. libmpv playback + channel zap  
-4. ~~Favorites / short EPG (now·next mini guide)~~  
-5. ~~Movies + Series + full EPG grid~~  
-6. GitHub releases (Deck tarball)  
-7. *Future:* Flutter HUD over live mpv — not Flutter texture video. Gamescope Game Mode is the constraint. See [docs/STEAM_DECK.md](docs/STEAM_DECK.md).
-
-### Movies / TV art
-
-1. ~~Poster grid chrome (placeholders, pad 2D nav). Live stays a list.~~  
-2. ~~**Title landing page** (right pane). **A** on a poster opens it — does not start playback. Resume Playing + Start from Beginning when in progress, else Play Now. Watch trailer when the panel has one. **B** / **←** back to the grid.~~  
-3. ~~Provider `stream_icon` / `cover` + on-disk cache (visible tiles + lookahead; landing poster uses the same cache)~~  
-4. ~~TV Shows tab (same grid → landing → season/episode list)~~
+Attach `dist/sdtv-deck.tar.gz` to a tagged GitHub release.
 
 ## License
 
-Copyright 2026 Wangcow Corporation  
+Copyright 2026 Wangcow Corporation. Licensed under the Apache License 2.0;
+see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
-
-**Product of the Wangcow Corporation** — this attribution must be preserved in redistributions and shown in the application About footer.
+**Product of the Wangcow Corporation:** this attribution must be kept in
+redistributions and is shown in the app's About screen.
